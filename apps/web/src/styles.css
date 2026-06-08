@@ -394,6 +394,35 @@ button {
   overflow-wrap: anywhere;
 }
 
+.post-hook {
+  margin: 10px 0 0;
+  color: #1f2f3f;
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.post-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.post-meta span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 9px;
+  border: 1px solid #d8e2e8;
+  border-radius: 6px;
+  background: #f8fafb;
+  color: #4d5d69;
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .takeaway {
   display: flex;
   align-items: flex-start;
@@ -673,7 +702,10 @@ button {
 }
 
 .chunk-list,
-.chat-list {
+.chat-list,
+.thread-block-list,
+.edge-list,
+.review-prompt-list {
   display: grid;
   gap: 8px;
 }
@@ -692,6 +724,62 @@ button {
   color: var(--blue);
   font-size: 13px;
   font-weight: 800;
+}
+
+.thread-block,
+.edge-row,
+.review-prompt-row {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid #dce3e8;
+  border-radius: 8px;
+  background: #f8fafb;
+}
+
+.thread-block span,
+.edge-row span,
+.review-prompt-row span {
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.thread-block h4 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 15px;
+  letter-spacing: 0;
+}
+
+.edge-row strong {
+  color: var(--ink);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.review-prompt-row small {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.next-action-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.next-action-list span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 6px;
+  background: #edf3ff;
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 900;
 }
 
 .chat-message {

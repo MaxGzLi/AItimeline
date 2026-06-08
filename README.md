@@ -53,5 +53,6 @@ The current prototype also includes a mocked YouTube import flow: paste a YouTub
 
 - [docs/vision.md](./docs/vision.md): 更新后的产品愿景、主旨和防竞争定位。
 - [docs/competitor-landscape.md](./docs/competitor-landscape.md): 竞品研究、开源项目借鉴和复用判断。
+- [docs/agent-harness.md](./docs/agent-harness.md): Agent Harness v0，定义知识帖、thread、图谱、复习和反馈策略。
 - [docs/roadmap.md](./docs/roadmap.md): 前后端、agent、知识库、记忆和推荐系统的阶段路线。
 - [docs/knowledge-transformation.md](./docs/knowledge-transformation.md): YouTube、文章、论文等来源如何被 agent 转化成 timeline 知识卡。

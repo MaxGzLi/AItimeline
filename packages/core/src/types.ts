@@ -17,6 +17,37 @@ export type SourceAssetKind = "transcript" | "text" | "metadata";
 
 export type TransformationStatus = "queued" | "extracting" | "transforming" | "ready" | "failed";
 
+export type KnowledgeDifficulty = "beginner" | "intermediate" | "advanced";
+
+export type KnowledgeConfidence = "low" | "medium" | "high";
+
+export type ThreadBlockKind = "explain" | "example" | "contrast" | "extension" | "quiz";
+
+export type KnowledgeEdgeRelation =
+  | "requires"
+  | "extends"
+  | "contrasts"
+  | "applies"
+  | "evaluates"
+  | "summarizes";
+
+export type ReviewPromptKind = "recall" | "compare" | "apply" | "explain";
+
+export type NextActionPolicy =
+  | "continue_deeper"
+  | "expand_broader"
+  | "reframe_simpler"
+  | "cooldown_topic"
+  | "schedule_review"
+  | "ask_clarifying_question";
+
+export type InferredLearningState =
+  | "interested"
+  | "confused"
+  | "fatigued"
+  | "not_relevant"
+  | "needs_review";
+
 export interface Source {
   id: string;
   title: string;
@@ -55,6 +86,9 @@ export interface Citation {
 export interface KnowledgeCard {
   id: string;
   title: string;
+  hook?: string;
+  thesis?: string;
+  shortBody?: string;
   summary: string;
   keyTakeaway: string;
   concepts: string[];
@@ -64,6 +98,51 @@ export interface KnowledgeCard {
   trustState: TrustState;
   createdAt: string;
   estimatedReadMinutes: number;
+  difficulty?: KnowledgeDifficulty;
+  confidence?: KnowledgeConfidence;
+  thread?: KnowledgeThreadBlock[];
+  graphEdges?: KnowledgeGraphEdge[];
+  reviewPrompts?: KnowledgeReviewPrompt[];
+  nextActions?: NextActionPolicy[];
+  harnessVersion?: string;
+}
+
+export interface KnowledgePost extends KnowledgeCard {
+  hook: string;
+  thesis: string;
+  shortBody: string;
+  difficulty: KnowledgeDifficulty;
+  confidence: KnowledgeConfidence;
+  thread: KnowledgeThreadBlock[];
+  graphEdges: KnowledgeGraphEdge[];
+  reviewPrompts: KnowledgeReviewPrompt[];
+  nextActions: NextActionPolicy[];
+  harnessVersion: string;
+}
+
+export interface KnowledgeThreadBlock {
+  id: string;
+  kind: ThreadBlockKind;
+  title: string;
+  body: string;
+  prompt?: string;
+}
+
+export interface KnowledgeGraphEdge {
+  id: string;
+  sourceConcept: string;
+  relation: KnowledgeEdgeRelation;
+  targetConcept: string;
+  evidence: string;
+  weight: number;
+}
+
+export interface KnowledgeReviewPrompt {
+  id: string;
+  kind: ReviewPromptKind;
+  prompt: string;
+  answerHint: string;
+  dueInDays: number;
 }
 
 export interface UserProfile {
@@ -85,6 +164,39 @@ export interface UserSignal {
   createdAt: string;
   concept?: string;
   prompt?: string;
+}
+
+export interface InteractionSignal {
+  postId: string;
+  topicId: string;
+  conceptIds: string[];
+  impression: boolean;
+  dwellTimeMs: number;
+  openedThread: boolean;
+  liked: boolean;
+  saved: boolean;
+  askedQuestion: boolean;
+  reviewed: boolean;
+  skippedQuickly: boolean;
+  createdAt: string;
+}
+
+export interface TopicState {
+  topicId: string;
+  interestScore: number;
+  fatigueScore: number;
+  comprehensionScore: number;
+  cooldownUntil?: string;
+}
+
+export interface LearningFeedback {
+  postId: string;
+  topicId: string;
+  conceptIds: string[];
+  signalStrength: number;
+  inferredState: InferredLearningState;
+  nextAction: NextActionPolicy;
+  reason: string;
 }
 
 export interface ConceptNode {

@@ -30,11 +30,13 @@ import {
   Heart,
   Home,
   Link,
+  ListChecks,
   LoaderCircle,
   MessageCircle,
   MoreHorizontal,
   Quote,
   RefreshCw,
+  Route,
   Search,
   Send,
   Settings,
@@ -44,7 +46,7 @@ import {
 } from "lucide-react";
 
 const sampleYouTubeUrl = "https://www.youtube.com/watch?v=aitimeline-demo";
-const storageKey = "aitimeline.mvp.v1";
+const storageKey = "aitimeline.mvp.v2";
 
 const navItems = [
   { label: "Timeline", icon: Home, active: true },
@@ -434,7 +436,7 @@ function SourceImportPanel({
           </span>
         ) : (
           <span>
-            {latestImport ? formatStatus(latestImport.status) : "Ready"} · {cardCount} generated cards
+            {latestImport ? formatStatus(latestImport.status) : "Ready"} · {cardCount} generated posts
           </span>
         )}
       </div>
@@ -485,7 +487,14 @@ function KnowledgeCardView({
       </div>
 
       <h2>{card.title}</h2>
-      <p className="summary">{card.summary}</p>
+      {card.hook ? <p className="post-hook">{card.hook}</p> : null}
+      <p className="summary">{card.shortBody ?? card.summary}</p>
+
+      <div className="post-meta">
+        {card.difficulty ? <span>{formatDifficulty(card.difficulty)}</span> : null}
+        {card.confidence ? <span>{formatConfidence(card.confidence)}</span> : null}
+        {card.harnessVersion ? <span>{card.harnessVersion}</span> : null}
+      </div>
 
       <div className="takeaway">
         <Sparkles size={18} />
@@ -582,6 +591,24 @@ function SourceDetailDrawer({
         <p>{card.keyTakeaway}</p>
       </section>
 
+      {card.thread?.length ? (
+        <section className="drawer-section">
+          <div className="drawer-section-heading">
+            <MessageCircle size={18} />
+            <h3>Thread</h3>
+          </div>
+          <div className="thread-block-list">
+            {card.thread.map((block) => (
+              <div className="thread-block" key={block.id}>
+                <span>{formatThreadKind(block.kind)}</span>
+                <h4>{block.title}</h4>
+                <p>{block.body}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
       <section className="drawer-section">
         <div className="drawer-section-heading">
           <FileText size={18} />
@@ -600,6 +627,51 @@ function SourceDetailDrawer({
           )}
         </div>
       </section>
+
+      {card.graphEdges?.length ? (
+        <section className="drawer-section">
+          <div className="drawer-section-heading">
+            <Route size={18} />
+            <h3>Graph Edges</h3>
+          </div>
+          <div className="edge-list">
+            {card.graphEdges.map((edge) => (
+              <div className="edge-row" key={edge.id}>
+                <strong>
+                  {edge.sourceConcept} → {edge.targetConcept}
+                </strong>
+                <span>{edge.relation}</span>
+                <p>{edge.evidence}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {card.reviewPrompts?.length || card.nextActions?.length ? (
+        <section className="drawer-section">
+          <div className="drawer-section-heading">
+            <ListChecks size={18} />
+            <h3>Review & Next Actions</h3>
+          </div>
+          <div className="review-prompt-list">
+            {card.reviewPrompts?.map((prompt) => (
+              <div className="review-prompt-row" key={prompt.id}>
+                <span>{prompt.kind} · {prompt.dueInDays}d</span>
+                <p>{prompt.prompt}</p>
+                <small>{prompt.answerHint}</small>
+              </div>
+            ))}
+          </div>
+          {card.nextActions?.length ? (
+            <div className="next-action-list">
+              {card.nextActions.map((action) => (
+                <span key={action}>{formatNextAction(action)}</span>
+              ))}
+            </div>
+          ) : null}
+        </section>
+      ) : null}
 
       <section className="drawer-section">
         <div className="drawer-section-heading">
@@ -678,6 +750,51 @@ function formatStatus(status: TransformationStatus): string {
   return labels[status];
 }
 
+function formatDifficulty(value: NonNullable<KnowledgeCard["difficulty"]>): string {
+  const labels: Record<NonNullable<KnowledgeCard["difficulty"]>, string> = {
+    beginner: "Beginner",
+    intermediate: "Intermediate",
+    advanced: "Advanced"
+  };
+
+  return labels[value];
+}
+
+function formatConfidence(value: NonNullable<KnowledgeCard["confidence"]>): string {
+  const labels: Record<NonNullable<KnowledgeCard["confidence"]>, string> = {
+    low: "Low confidence",
+    medium: "Medium confidence",
+    high: "High confidence"
+  };
+
+  return labels[value];
+}
+
+function formatThreadKind(value: NonNullable<KnowledgeCard["thread"]>[number]["kind"]): string {
+  const labels: Record<NonNullable<KnowledgeCard["thread"]>[number]["kind"], string> = {
+    explain: "Explain",
+    example: "Example",
+    contrast: "Contrast",
+    extension: "Extend",
+    quiz: "Quiz"
+  };
+
+  return labels[value];
+}
+
+function formatNextAction(action: NonNullable<KnowledgeCard["nextActions"]>[number]): string {
+  const labels: Record<NonNullable<KnowledgeCard["nextActions"]>[number], string> = {
+    continue_deeper: "Go deeper",
+    expand_broader: "Go broader",
+    reframe_simpler: "Simplify",
+    cooldown_topic: "Cool down",
+    schedule_review: "Review",
+    ask_clarifying_question: "Ask user"
+  };
+
+  return labels[action];
+}
+
 function formatCardSource(card: KnowledgeCard): string {
   const source = card.sources[0];
   const citation = card.citations?.[0];
@@ -735,8 +852,11 @@ function buildGroundedAnswer(card: KnowledgeCard, chunks: KnowledgeChunk[], prom
   return [
     `Based on "${source?.title ?? "this source"}"${timestamp}, the card is saying: ${card.keyTakeaway}`,
     groundedChunk ? `Grounding: ${groundedChunk.content}` : `Grounding: ${card.summary}`,
+    card.nextActions?.length ? `Harness next action: ${card.nextActions.map(formatNextAction).join(", ")}.` : "",
     `${conceptLine} Your question was: "${prompt}".`
-  ].join("\n\n");
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function loadStoredState(): PersistedMvpState | null {
