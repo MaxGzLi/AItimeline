@@ -1,0 +1,22 @@
+{
+  "name": "aitimeline",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Open-core AI knowledge timeline with a commercial hosted app experience.",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w @aitimeline/web",
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "devDependencies": {
+    "typescript": "latest"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
+
