@@ -634,137 +634,132 @@ function KnowledgeCardView({
   const readBlock = getReadBlock(card);
   const learnPrompts = card.reviewPrompts?.slice(0, 2) ?? [];
   const exploreEdges = card.graphEdges?.slice(0, 2) ?? [];
+  const primaryConcept = card.concepts[0] ?? "Knowledge";
+  const source = card.sources[0];
 
   return (
     <article className="knowledge-card">
-      <div className="card-topline">
-        <span className={`trust-badge ${card.trustState}`}>{formatTrustState(card.trustState)}</span>
-        <span>{card.estimatedReadMinutes} min</span>
+      <div className="post-avatar" aria-hidden="true">
+        {getAgentInitials(primaryConcept)}
       </div>
 
-      <h2>{card.title}</h2>
-      {card.hook ? <p className="post-hook">{card.hook}</p> : null}
-      <p className="summary">{card.shortBody ?? card.summary}</p>
-
-      {card.thesis ? (
-        <div className="post-thesis">
-          <span>Thesis</span>
-          <p>{card.thesis}</p>
-        </div>
-      ) : null}
-
-      <div className="learning-lab">
-        <div className="learning-lab-section read">
-          <span>Read</span>
-          <strong>{readBlock.title}</strong>
-          <p>{readBlock.body}</p>
+      <div className="post-main">
+        <div className="social-post-header">
+          <div className="post-author-line">
+            <strong>{getAgentName(primaryConcept)}</strong>
+            <span>@{slugConcept(primaryConcept)}</span>
+            <span>{card.estimatedReadMinutes}m read</span>
+          </div>
+          <div className="post-header-badges">
+            <span className={`trust-badge ${card.trustState}`}>{formatTrustState(card.trustState)}</span>
+            {card.difficulty ? <span>{formatDifficulty(card.difficulty)}</span> : null}
+          </div>
         </div>
 
-        <div className="learning-lab-section learn">
-          <span>Learn</span>
-          {learnPrompts.length > 0 ? (
-            learnPrompts.map((prompt) => (
-              <div className="mini-review" key={prompt.id}>
-                <strong>{prompt.prompt}</strong>
-                <p>{prompt.answerHint}</p>
-              </div>
-            ))
-          ) : (
-            <p>Restate the takeaway in your own words, then connect it to one concept you already know.</p>
-          )}
-        </div>
+        <button className="post-open-button" onClick={() => onOpen(card)} type="button">
+          <h2>{card.title}</h2>
+          {card.hook ? <p className="post-hook">{card.hook}</p> : null}
+          <p className="summary">{card.shortBody ?? card.summary}</p>
+        </button>
 
-        <div className="learning-lab-section explore">
-          <span>Explore</span>
-          {exploreEdges.length > 0 ? (
-            exploreEdges.map((edge) => (
-              <div className="mini-edge" key={edge.id}>
-                <strong>
-                  {edge.sourceConcept} → {edge.targetConcept}
-                </strong>
-                <p>{edge.evidence}</p>
-              </div>
-            ))
-          ) : (
-            <p>Open the thread to generate adjacent concepts and the next learning path.</p>
-          )}
-          {card.nextActions?.length ? (
-            <div className="inline-next-actions">
-              {card.nextActions.map((action) => (
-                <strong key={action}>{formatNextAction(action)}</strong>
-              ))}
-            </div>
-          ) : null}
-        </div>
-      </div>
+        {card.thesis || readBlock.body ? (
+          <button className="post-claim-card" onClick={() => onOpen(card)} type="button">
+            <span>
+              <Sparkles size={15} />
+              Agent take
+            </span>
+            <p>{card.thesis ?? readBlock.body}</p>
+          </button>
+        ) : null}
 
-      <div className="post-meta">
-        {card.difficulty ? <span>{formatDifficulty(card.difficulty)}</span> : null}
-        {card.confidence ? <span>{formatConfidence(card.confidence)}</span> : null}
-        {card.harnessVersion ? <span>{card.harnessVersion}</span> : null}
-      </div>
-
-      <div className="takeaway">
-        <Sparkles size={18} />
-        <span>{card.keyTakeaway}</span>
-      </div>
-
-      {threadPreview.length > 0 ? (
-        <div className="timeline-thread-preview">
+        <div className="social-thread-preview">
           {threadPreview.map((block) => (
-            <div className="timeline-thread-block" key={block.id}>
-              <span>{formatThreadKind(block.kind)}</span>
-              <strong>{block.title}</strong>
-              <p>{block.body}</p>
-            </div>
+            <button className="social-thread-reply" key={block.id} onClick={() => onOpen(card)} type="button">
+              <div className="reply-avatar">{formatThreadKind(block.kind).slice(0, 2)}</div>
+              <div>
+                <span>{formatThreadKind(block.kind)}</span>
+                <strong>{block.title}</strong>
+                <p>{block.body}</p>
+              </div>
+            </button>
           ))}
+          <button className="thread-count-button" onClick={() => onOpen(card)} type="button">
+            <MessageCircle size={16} />
+            <span>
+              Open thread · {card.thread?.length ?? 0} replies · {card.reviewPrompts?.length ?? 0} checks ready
+            </span>
+          </button>
         </div>
-      ) : null}
 
-      <div className="post-reason">
-        <span>Why this is here</span>
-        <p>{card.recommendedBecause}</p>
-      </div>
+        {learnPrompts.length > 0 || exploreEdges.length > 0 ? (
+          <div className="feed-prompt-row">
+            {learnPrompts[0] ? (
+              <button className="feed-prompt" onClick={() => onSave(card)} type="button">
+                <Brain size={16} />
+                <span>Review</span>
+                <strong>{learnPrompts[0].prompt}</strong>
+              </button>
+            ) : null}
+            {exploreEdges[0] ? (
+              <button className="feed-prompt" onClick={() => onOpen(card)} type="button">
+                <Route size={16} />
+                <span>Related</span>
+                <strong>
+                  {exploreEdges[0].sourceConcept} → {exploreEdges[0].targetConcept}
+                </strong>
+              </button>
+            ) : null}
+          </div>
+        ) : null}
 
-      {feedback ? (
-        <div className={`feedback-strip ${feedback.inferredState}`}>
-          <span>{formatLearningState(feedback.inferredState)}</span>
-          <strong>{formatNextAction(feedback.nextAction)}</strong>
-        </div>
-      ) : null}
-
-      <div className="concept-list">
-        {card.concepts.map((concept) => (
-          <span key={concept}>{concept}</span>
-        ))}
-      </div>
-
-      <footer className="card-footer">
-        <div className="source-line">
+        <div className="post-social-context">
+          <span>For you: {card.recommendedBecause}</span>
           <span>{formatCardSource(card)}</span>
-          <span>Score {Math.round(card.score)}</span>
+          {source?.author ? <span>{source.author}</span> : null}
         </div>
-        <div className="card-actions">
-          <button className={`icon-button compact ${signal?.liked ? "selected" : ""}`} onClick={() => onLike(card)} title="Like">
-            <Heart size={18} />
-          </button>
-          <button className={`icon-button compact ${signal?.saved ? "selected" : ""}`} onClick={() => onSave(card)} title="Save">
-            <Bookmark size={18} />
-          </button>
-          <button className="icon-button compact" onClick={() => onOpen(card)} title="Ask AI">
-            <MessageCircle size={18} />
-          </button>
-          <button className="icon-button compact" onClick={() => onOpen(card)} title="View source">
-            <Quote size={18} />
-          </button>
-          <button className="icon-button compact" onClick={() => onOpen(card)} title="Explain">
-            <CircleHelp size={18} />
-          </button>
-          <button className={`icon-button compact ${signal?.skippedQuickly ? "negative" : ""}`} onClick={() => onSkip(card)} title="Skip post">
-            <XCircle size={18} />
-          </button>
+
+        {feedback ? (
+          <div className={`feedback-strip ${feedback.inferredState}`}>
+            <span>{formatLearningState(feedback.inferredState)}</span>
+            <strong>{formatNextAction(feedback.nextAction)}</strong>
+          </div>
+        ) : null}
+
+        <div className="concept-list">
+          {card.concepts.slice(0, 3).map((concept) => (
+            <span key={concept}>{concept}</span>
+          ))}
+          {card.concepts.length > 3 ? <span>+{card.concepts.length - 3}</span> : null}
         </div>
-      </footer>
+
+        <footer className="card-footer">
+          <div className="social-metrics">
+            <span>{Math.max(12, Math.round(card.score))} useful</span>
+            <span>{card.thread?.length ?? 0} replies</span>
+            <span>{card.reviewPrompts?.length ?? 0} checks</span>
+          </div>
+          <div className="card-actions">
+            <button className={`icon-button compact ${signal?.liked ? "selected" : ""}`} onClick={() => onLike(card)} title="Like">
+              <Heart size={18} />
+            </button>
+            <button className={`icon-button compact ${signal?.saved ? "selected" : ""}`} onClick={() => onSave(card)} title="Save">
+              <Bookmark size={18} />
+            </button>
+            <button className="icon-button compact" onClick={() => onOpen(card)} title="Ask AI">
+              <MessageCircle size={18} />
+            </button>
+            <button className="icon-button compact" onClick={() => onOpen(card)} title="View source">
+              <Quote size={18} />
+            </button>
+            <button className="icon-button compact" onClick={() => onOpen(card)} title="Explain">
+              <CircleHelp size={18} />
+            </button>
+            <button className={`icon-button compact ${signal?.skippedQuickly ? "negative" : ""}`} onClick={() => onSkip(card)} title="Skip post">
+              <XCircle size={18} />
+            </button>
+          </div>
+        </footer>
+      </div>
     </article>
   );
 }
@@ -998,8 +993,27 @@ function getTimelineThreadPreview(card: KnowledgeCard): NonNullable<KnowledgeCar
   return (
     card.thread
       ?.filter((block) => block.kind === "example" || block.kind === "contrast" || block.kind === "extension")
-      .slice(0, 2) ?? []
+      .slice(0, 1) ?? []
   );
+}
+
+function getAgentName(concept: string): string {
+  if (concept === "RAG") return "RAG Field Notes";
+  if (concept === "AI Agent") return "Agent Lab";
+  if (concept === "Product Strategy") return "Product Loop";
+  if (concept === "NotebookLM") return "Source Grounding";
+  if (concept === "Recommendation") return "Ranking Desk";
+
+  return `${concept} Scout`;
+}
+
+function getAgentInitials(concept: string): string {
+  return concept
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join("");
 }
 
 function getReadBlock(card: KnowledgeCard): { title: string; body: string } {
