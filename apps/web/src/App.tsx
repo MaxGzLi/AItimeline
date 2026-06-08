@@ -631,6 +631,9 @@ function KnowledgeCardView({
   signal?: InteractionSignal;
 }) {
   const threadPreview = getTimelineThreadPreview(card);
+  const readBlock = getReadBlock(card);
+  const learnPrompts = card.reviewPrompts?.slice(0, 2) ?? [];
+  const exploreEdges = card.graphEdges?.slice(0, 2) ?? [];
 
   return (
     <article className="knowledge-card">
@@ -649,6 +652,51 @@ function KnowledgeCardView({
           <p>{card.thesis}</p>
         </div>
       ) : null}
+
+      <div className="learning-lab">
+        <div className="learning-lab-section read">
+          <span>Read</span>
+          <strong>{readBlock.title}</strong>
+          <p>{readBlock.body}</p>
+        </div>
+
+        <div className="learning-lab-section learn">
+          <span>Learn</span>
+          {learnPrompts.length > 0 ? (
+            learnPrompts.map((prompt) => (
+              <div className="mini-review" key={prompt.id}>
+                <strong>{prompt.prompt}</strong>
+                <p>{prompt.answerHint}</p>
+              </div>
+            ))
+          ) : (
+            <p>Restate the takeaway in your own words, then connect it to one concept you already know.</p>
+          )}
+        </div>
+
+        <div className="learning-lab-section explore">
+          <span>Explore</span>
+          {exploreEdges.length > 0 ? (
+            exploreEdges.map((edge) => (
+              <div className="mini-edge" key={edge.id}>
+                <strong>
+                  {edge.sourceConcept} → {edge.targetConcept}
+                </strong>
+                <p>{edge.evidence}</p>
+              </div>
+            ))
+          ) : (
+            <p>Open the thread to generate adjacent concepts and the next learning path.</p>
+          )}
+          {card.nextActions?.length ? (
+            <div className="inline-next-actions">
+              {card.nextActions.map((action) => (
+                <strong key={action}>{formatNextAction(action)}</strong>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      </div>
 
       <div className="post-meta">
         {card.difficulty ? <span>{formatDifficulty(card.difficulty)}</span> : null}
@@ -676,13 +724,6 @@ function KnowledgeCardView({
       <div className="post-reason">
         <span>Why this is here</span>
         <p>{card.recommendedBecause}</p>
-        {card.nextActions?.length ? (
-          <div className="inline-next-actions">
-            {card.nextActions.map((action) => (
-              <strong key={action}>{formatNextAction(action)}</strong>
-            ))}
-          </div>
-        ) : null}
       </div>
 
       {feedback ? (
@@ -959,6 +1000,15 @@ function getTimelineThreadPreview(card: KnowledgeCard): NonNullable<KnowledgeCar
       ?.filter((block) => block.kind === "example" || block.kind === "contrast" || block.kind === "extension")
       .slice(0, 2) ?? []
   );
+}
+
+function getReadBlock(card: KnowledgeCard): { title: string; body: string } {
+  const explainBlock = card.thread?.find((block) => block.kind === "explain");
+
+  return {
+    title: explainBlock?.title ?? "Core idea",
+    body: explainBlock?.body ?? card.thesis ?? card.shortBody ?? card.summary
+  };
 }
 
 function createInteractionSignal(card: KnowledgeCard): InteractionSignal {
