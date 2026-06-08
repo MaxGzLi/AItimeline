@@ -41,6 +41,14 @@ export type NextActionPolicy =
   | "schedule_review"
   | "ask_clarifying_question";
 
+export type AgentHarnessRunnerKind = "deterministic" | "model";
+
+export type AgentHarnessObjective = "source_import" | "followup_generation" | "review_reinforcement";
+
+export type AgentHarnessRunStatus = "succeeded" | "failed";
+
+export type HarnessValidationSeverity = "error" | "warning";
+
 export type InferredLearningState =
   | "interested"
   | "confused"
@@ -197,6 +205,80 @@ export interface LearningFeedback {
   inferredState: InferredLearningState;
   nextAction: NextActionPolicy;
   reason: string;
+}
+
+export interface AgentHarnessConfig {
+  id: string;
+  version: string;
+  runnerKind: AgentHarnessRunnerKind;
+  objective: AgentHarnessObjective;
+  maxPostsPerRun: number;
+  threadPolicy: {
+    requiredKinds: ThreadBlockKind[];
+    maxBlocksPerPost: number;
+  };
+  graphPolicy: {
+    maxEdgesPerPost: number;
+    minEdgeWeight: number;
+  };
+  reviewPolicy: {
+    enabled: boolean;
+    dueInDays: number[];
+  };
+}
+
+export interface AgentHarnessUserContext {
+  memory?: UserMemory;
+  recentSignals?: InteractionSignal[];
+  topicStates?: TopicState[];
+}
+
+export interface AgentHarnessRunInput {
+  id?: string;
+  source: Source;
+  chunks: KnowledgeChunk[];
+  createdAt?: string;
+  recommendedBecause?: string;
+  config?: AgentHarnessConfig;
+  userContext?: AgentHarnessUserContext;
+}
+
+export interface HarnessValidationIssue {
+  path: string;
+  message: string;
+  severity: HarnessValidationSeverity;
+}
+
+export interface HarnessValidationResult {
+  postId?: string;
+  valid: boolean;
+  issues: HarnessValidationIssue[];
+}
+
+export interface AgentHarnessRun {
+  id: string;
+  sourceId: string;
+  harnessVersion: string;
+  runnerKind: AgentHarnessRunnerKind;
+  objective: AgentHarnessObjective;
+  status: AgentHarnessRunStatus;
+  createdAt: string;
+  completedAt: string;
+  inputChunkIds: string[];
+  outputPostIds: string[];
+  validation: HarnessValidationResult[];
+}
+
+export interface AgentHarnessRunResult {
+  run: AgentHarnessRun;
+  posts: KnowledgePost[];
+  validation: HarnessValidationResult[];
+}
+
+export interface KnowledgePostAgentRunner {
+  id: string;
+  kind: AgentHarnessRunnerKind;
+  run(input: AgentHarnessRunInput): AgentHarnessRunResult | Promise<AgentHarnessRunResult>;
 }
 
 export interface ConceptNode {

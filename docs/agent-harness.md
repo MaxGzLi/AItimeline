@@ -27,7 +27,40 @@ Code locations:
 - [packages/core/src/types.ts](../packages/core/src/types.ts)
 - [packages/core/src/harness/systemPrompt.ts](../packages/core/src/harness/systemPrompt.ts)
 - [packages/core/src/harness/postHarness.ts](../packages/core/src/harness/postHarness.ts)
+- [packages/core/src/harness/schema.ts](../packages/core/src/harness/schema.ts)
+- [packages/core/src/harness/runner.ts](../packages/core/src/harness/runner.ts)
 - [packages/core/src/harness/feedbackPolicy.ts](../packages/core/src/harness/feedbackPolicy.ts)
+
+## Harness Run Architecture
+
+The harness is now structured around a run contract instead of a single post factory.
+
+```mermaid
+flowchart TD
+  Source["Source"] --> Chunks["KnowledgeChunk[]"]
+  Chunks --> Runner["KnowledgePostAgentRunner"]
+  Runner --> Posts["KnowledgePost[]"]
+  Posts --> Validator["Schema + Policy Validation"]
+  Validator --> Run["AgentHarnessRun"]
+  Run --> Timeline["Timeline"]
+  Run --> Graph["Graph / Review / Feedback"]
+```
+
+Main contracts:
+
+- `AgentHarnessConfig`: version, objective, runner kind, and policy limits.
+- `AgentHarnessRunInput`: source, chunks, user context, and recommendation reason.
+- `KnowledgePostAgentRunner`: shared interface for deterministic and future model-backed runners.
+- `AgentHarnessRunResult`: generated posts plus validation metadata.
+- `HarnessValidationResult`: schema and policy issues before posts enter timeline, graph, or review.
+
+Current exported runners:
+
+- `deterministicKnowledgePostRunner`
+- `runDeterministicAgentHarness`
+- `runAgentHarness`
+
+This means future model-backed generation should implement `KnowledgePostAgentRunner` rather than bypassing the harness.
 
 ## Knowledge Post
 
@@ -117,22 +150,24 @@ Positive interaction decides expansion direction:
 
 ## Current Implementation
 
-The current MVP uses a deterministic mock harness:
+The current MVP uses a deterministic runner behind the same harness interface that a model runner will use:
 
 1. A YouTube URL creates a mocked source and transcript.
 2. Transcript segments become `KnowledgeChunk`s.
-3. Each chunk becomes a `KnowledgePost`.
-4. Each post includes hook, thread blocks, graph edges, review prompts, and next actions.
-5. The Web app displays those fields in the timeline and source detail drawer.
-6. The Web app records lightweight interaction signals: impression, thread open, like, save, ask, and skip.
-7. Signals are evaluated with `evaluateInteraction` and shown as feedback state plus next action.
+3. `runDeterministicAgentHarness` creates an `AgentHarnessRun`.
+4. Each chunk becomes a validated `KnowledgePost`.
+5. Each post includes hook, thread blocks, graph edges, review prompts, and next actions.
+6. The transform result returns `cards`, `harnessRun`, and `validation`.
+7. The Web app displays the post fields in the timeline and source detail drawer.
+8. The Web app records lightweight interaction signals: impression, thread open, like, save, ask, and skip.
+9. Signals are evaluated with `evaluateInteraction` and shown as feedback state plus next action.
 
-This is intentionally deterministic. The next step is to replace mock generation with model-backed generation while keeping the same schema.
+This is intentionally deterministic. The next step is to add a model-backed runner while keeping the same schema and validation gate.
 
 ## Build Next
 
 1. Add dwell-time and viewport-based impression tracking instead of only action-based signals.
-2. Add JSON schema validation for harness outputs.
-3. Add an agent prompt runner that takes source chunks and returns `KnowledgePost`.
+2. Add a model-backed `KnowledgePostAgentRunner` that takes source chunks and returns `KnowledgePost`.
+3. Use validation failures to ask the model for repair before accepting a post.
 4. Use the resulting `nextAction` to generate follow-up posts.
 5. Add a topic-level cooldown and expansion queue.

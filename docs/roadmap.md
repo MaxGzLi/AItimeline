@@ -156,10 +156,11 @@ Open-core boundary:
 ## Immediate Next Milestones
 
 1. Add dwell-time and viewport-based impression tracking.
-2. Add JSON schema validation for harness outputs.
-3. Use feedback `nextAction` to generate follow-up posts.
-4. Add real YouTube transcript extraction behind the existing mock interface.
-5. Add article URL import.
-6. Add better post clustering so one long source does not flood the feed.
-7. Add user-editable memory controls.
-8. Add a lightweight backend persistence layer.
+2. Add a model-backed `KnowledgePostAgentRunner` behind the harness interface.
+3. Use validation failures to repair model output before accepting posts.
+4. Use feedback `nextAction` to generate follow-up posts.
+5. Add real YouTube transcript extraction behind the existing mock interface.
+6. Add article URL import.
+7. Add better post clustering so one long source does not flood the feed.
+8. Add user-editable memory controls.
+9. Add a lightweight backend persistence layer.

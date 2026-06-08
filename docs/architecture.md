@@ -6,8 +6,9 @@
 flowchart LR
   Sources["Sources\nYouTube / Web / Paper / Blog / Manual"] --> Agent["Agent Runtime"]
   Agent --> Normalize["Normalize + Deduplicate"]
-  Normalize --> Extract["Chunk + Summarize + Concept Extract"]
-  Extract --> Rank["Personal Ranker"]
+  Normalize --> Extract["Chunk + Concept Extract"]
+  Extract --> Harness["Agent Harness\nRunner + Schema Validation"]
+  Harness --> Rank["Personal Ranker"]
   Rank --> Timeline["Knowledge Timeline"]
   Timeline --> Signals["Likes / Saves / Questions"]
   Signals --> Graph["Knowledge Graph"]
@@ -23,6 +24,7 @@ flowchart LR
 - content and knowledge card types
 - source, asset, chunk and citation types
 - source and agent interfaces
+- harness run, runner and validation contracts
 - ranking primitives
 - knowledge graph extraction
 - review scheduling
@@ -61,7 +63,8 @@ The first supported flow should be:
 1. User imports a YouTube URL.
 2. The system extracts metadata and transcript.
 3. The agent chunks the transcript into timestamped knowledge units.
-4. The agent creates timeline cards with citations.
-5. The cards enter ranking, graph and review systems.
+4. The harness runner creates timeline-native knowledge posts with citations.
+5. The harness validates post schema and policy before accepting output.
+6. The cards enter ranking, graph and review systems.
 
 The important product rule: transformed knowledge should not stay trapped in a source page. It should reappear in the user's timeline when it is useful.

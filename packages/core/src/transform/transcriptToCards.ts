@@ -1,5 +1,5 @@
-import { createKnowledgePost } from "../harness/postHarness";
-import type { KnowledgeChunk, KnowledgePost, Source } from "../types";
+import { runDeterministicAgentHarness } from "../harness/runner";
+import type { AgentHarnessRun, HarnessValidationResult, KnowledgeChunk, KnowledgePost, Source } from "../types";
 
 export interface TranscriptSegment {
   startTimeSeconds: number;
@@ -11,6 +11,8 @@ export interface TranscriptTransformResult {
   source: Source;
   chunks: KnowledgeChunk[];
   cards: KnowledgePost[];
+  harnessRun: AgentHarnessRun;
+  validation: HarnessValidationResult[];
 }
 
 export interface TranscriptTransformOptions {
@@ -34,18 +36,14 @@ export function transformTranscriptToCards(
     conceptHints: extractConcepts(segment.text)
   }));
 
-  const cards = chunks.map((chunk, index) =>
-    createKnowledgePost({
-      source,
-      chunk,
-      index,
-      createdAt,
-      recommendedBecause:
-        options.recommendedBecause ?? "This source was imported and converted into timeline-ready knowledge."
-    })
-  );
+  const harnessResult = runDeterministicAgentHarness({
+    source,
+    chunks,
+    createdAt,
+    recommendedBecause: options.recommendedBecause
+  });
 
-  return { source, chunks, cards };
+  return { source, chunks, cards: harnessResult.posts, harnessRun: harnessResult.run, validation: harnessResult.validation };
 }
 
 function extractConcepts(text: string): string[] {

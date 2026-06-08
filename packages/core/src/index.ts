@@ -3,6 +3,8 @@ export * from "./fixtures";
 export * from "./graph/knowledgeGraph";
 export * from "./harness/feedbackPolicy";
 export * from "./harness/postHarness";
+export * from "./harness/runner";
+export * from "./harness/schema";
 export * from "./harness/systemPrompt";
 export * from "./ranking/ranker";
 export * from "./review/spacedReview";
