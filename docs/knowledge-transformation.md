@@ -148,3 +148,9 @@ Start with a mocked pipeline before real YouTube API integration:
 7. Add a source detail drawer with citations.
 
 This lets us test the product loop before fighting API limits, transcript availability and auth.
+
+Current status:
+
+- Steps 1 to 6 are implemented as a mocked Web prototype.
+- Step 7 is the next UI milestone.
+- Real transcript extraction is intentionally deferred until the import loop feels useful.

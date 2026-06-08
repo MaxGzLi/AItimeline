@@ -12,7 +12,18 @@ export interface TranscriptTransformResult {
   cards: KnowledgeCard[];
 }
 
-export function transformTranscriptToCards(source: Source, segments: TranscriptSegment[]): TranscriptTransformResult {
+export interface TranscriptTransformOptions {
+  createdAt?: string;
+  recommendedBecause?: string;
+}
+
+export function transformTranscriptToCards(
+  source: Source,
+  segments: TranscriptSegment[],
+  options: TranscriptTransformOptions = {}
+): TranscriptTransformResult {
+  const createdAt = options.createdAt ?? new Date().toISOString();
+
   const chunks = segments.map((segment, index) => ({
     id: `${source.id}-chunk-${index + 1}`,
     sourceId: source.id,
@@ -41,9 +52,9 @@ export function transformTranscriptToCards(source: Source, segments: TranscriptS
           endTimeSeconds: chunk.endTimeSeconds
         }
       ],
-      recommendedBecause: "This source was imported and converted into timeline-ready knowledge.",
+      recommendedBecause: options.recommendedBecause ?? "This source was imported and converted into timeline-ready knowledge.",
       trustState: "emerging" as const,
-      createdAt: new Date().toISOString(),
+      createdAt,
       estimatedReadMinutes: Math.max(1, Math.ceil(chunk.content.length / 900))
     };
   });

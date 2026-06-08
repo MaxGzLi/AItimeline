@@ -47,6 +47,8 @@ Then open the local URL printed by Vite.
 3. 点赞内容是否能自然沉淀成知识图谱。
 4. 复习提醒是否让用户感到自己真的在变聪明。
 
+The current prototype also includes a mocked YouTube import flow: paste a YouTube URL, simulate transcript extraction, convert transcript segments into cited knowledge cards, and insert those cards into the ranked timeline.
+
 ## Next Planning Docs
 
 - [docs/roadmap.md](./docs/roadmap.md): 前后端、agent、知识库、记忆和推荐系统的阶段路线。

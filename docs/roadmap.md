@@ -155,11 +155,9 @@ Open-core boundary:
 
 ## Immediate Next Milestones
 
-1. Add source and transformation types to `packages/core`.
-2. Add an import-source UI in `apps/web`.
-3. Implement a mocked YouTube import flow with transcript fixture data.
-4. Convert transcript fixture into knowledge cards.
-5. Show generated cards in the timeline.
-6. Add source-grounded AI question UI.
-7. Add local persistence.
-
+1. Add a source detail drawer with transcript citations.
+2. Add source-grounded AI question UI.
+3. Add local persistence for imported sources and generated cards.
+4. Add real YouTube transcript extraction behind the existing mock interface.
+5. Add article URL import.
+6. Add better card clustering so one long source does not flood the feed.
