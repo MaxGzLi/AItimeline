@@ -4,13 +4,17 @@ import {
   demoCards,
   demoProfile,
   demoSignals,
+  evaluateInteraction,
   rankKnowledgeCards,
   transformMockYouTubeUrl,
+  type InteractionSignal,
   type KnowledgeCard,
   type KnowledgeChunk,
+  type LearningFeedback,
   type RankedKnowledgeCard,
   type SourceAsset,
   type SourceImport,
+  type TopicState,
   type TransformationStatus,
   type TrustState
 } from "@aitimeline/core";
@@ -46,7 +50,7 @@ import {
 } from "lucide-react";
 
 const sampleYouTubeUrl = "https://www.youtube.com/watch?v=aitimeline-demo";
-const storageKey = "aitimeline.mvp.v2";
+const storageKey = "aitimeline.mvp.v3";
 
 const navItems = [
   { label: "Timeline", icon: Home, active: true },
@@ -65,6 +69,8 @@ type AiMessage = {
 };
 
 type AiThreads = Record<string, AiMessage[]>;
+type InteractionSignals = Record<string, InteractionSignal>;
+type LearningFeedbackByPost = Record<string, LearningFeedback>;
 
 type PersistedMvpState = {
   sourceImports: SourceImport[];
@@ -72,6 +78,8 @@ type PersistedMvpState = {
   sourceAssets: SourceAsset[];
   sourceChunks: KnowledgeChunk[];
   aiThreads: AiThreads;
+  interactionSignals: InteractionSignals;
+  learningFeedback: LearningFeedbackByPost;
 };
 
 export function App() {
@@ -81,6 +89,8 @@ export function App() {
   const [sourceAssets, setSourceAssets] = useState<SourceAsset[]>([]);
   const [sourceChunks, setSourceChunks] = useState<KnowledgeChunk[]>([]);
   const [aiThreads, setAiThreads] = useState<AiThreads>({});
+  const [interactionSignals, setInteractionSignals] = useState<InteractionSignals>({});
+  const [learningFeedback, setLearningFeedback] = useState<LearningFeedbackByPost>({});
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
   const [aiPrompt, setAiPrompt] = useState("");
   const [isImporting, setIsImporting] = useState(false);
@@ -97,9 +107,49 @@ export function App() {
       })),
     [importedCards]
   );
+  const interactionUserSignals = useMemo(
+    () =>
+      Object.values(interactionSignals).flatMap((signal) => {
+        const createdAt = signal.createdAt;
+        const signals = [];
+
+        if (signal.liked) {
+          signals.push({
+            id: `interaction-like-${signal.postId}`,
+            cardId: signal.postId,
+            type: "like" as const,
+            createdAt
+          });
+        }
+
+        if (signal.saved) {
+          signals.push({
+            id: `interaction-save-${signal.postId}`,
+            cardId: signal.postId,
+            type: "save" as const,
+            createdAt
+          });
+        }
+
+        if (signal.askedQuestion) {
+          signals.push({
+            id: `interaction-ask-${signal.postId}`,
+            cardId: signal.postId,
+            type: "ask" as const,
+            createdAt
+          });
+        }
+
+        return signals;
+      }),
+    [interactionSignals]
+  );
 
   const allCards = useMemo(() => [...importedCards, ...demoCards], [importedCards]);
-  const allSignals = useMemo(() => [...demoSignals, ...importedSignals], [importedSignals]);
+  const allSignals = useMemo(
+    () => [...demoSignals, ...importedSignals, ...interactionUserSignals],
+    [importedSignals, interactionUserSignals]
+  );
   const rankedCards = useMemo(() => rankKnowledgeCards(allCards, demoProfile), [allCards]);
   const selectedCard = useMemo(
     () => (selectedCardId ? rankedCards.find((card) => card.id === selectedCardId) ?? null : null),
@@ -120,6 +170,8 @@ export function App() {
     [allCards, allSignals]
   );
   const selectedThread = selectedCard ? aiThreads[selectedCard.id] ?? [] : [];
+  const selectedFeedback = selectedCard ? learningFeedback[selectedCard.id] : undefined;
+  const selectedSignal = selectedCard ? interactionSignals[selectedCard.id] : undefined;
 
   useEffect(() => {
     const storedState = loadStoredState();
@@ -130,6 +182,8 @@ export function App() {
       setSourceAssets(storedState.sourceAssets);
       setSourceChunks(storedState.sourceChunks);
       setAiThreads(storedState.aiThreads);
+      setInteractionSignals(storedState.interactionSignals ?? {});
+      setLearningFeedback(storedState.learningFeedback ?? {});
     }
 
     setHasHydrated(true);
@@ -145,9 +199,40 @@ export function App() {
       importedCards,
       sourceAssets,
       sourceChunks,
-      aiThreads
+      aiThreads,
+      interactionSignals,
+      learningFeedback
     });
-  }, [aiThreads, hasHydrated, importedCards, sourceAssets, sourceChunks, sourceImports]);
+  }, [
+    aiThreads,
+    hasHydrated,
+    importedCards,
+    interactionSignals,
+    learningFeedback,
+    sourceAssets,
+    sourceChunks,
+    sourceImports
+  ]);
+
+  useEffect(() => {
+    if (!hasHydrated) {
+      return;
+    }
+
+    setInteractionSignals((signals) => {
+      let changed = false;
+      const nextSignals = { ...signals };
+
+      for (const card of rankedCards) {
+        if (!nextSignals[card.id]) {
+          nextSignals[card.id] = createInteractionSignal(card);
+          changed = true;
+        }
+      }
+
+      return changed ? nextSignals : signals;
+    });
+  }, [hasHydrated, rankedCards]);
 
   async function handleImport(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -178,6 +263,9 @@ export function App() {
       setSourceChunks((chunks) => upsertById(chunks, result.chunks));
       setSourceImports((imports) => updateImportStatus(imports, pendingImport.id, "ready"));
       setSelectedCardId(result.cards[0]?.id ?? null);
+      if (result.cards[0]) {
+        recordInteraction(result.cards[0], { openedThread: true, dwellTimeMs: 9000 });
+      }
     } catch (error) {
       setImportError(error instanceof Error ? error.message : "Import failed.");
     } finally {
@@ -210,7 +298,49 @@ export function App() {
       ...threads,
       [selectedCard.id]: [...(threads[selectedCard.id] ?? []), userMessage, assistantMessage]
     }));
+    recordInteraction(selectedCard, { askedQuestion: true, openedThread: true, dwellTimeMs: 12000 });
     setAiPrompt("");
+  }
+
+  function handleOpenCard(card: RankedKnowledgeCard) {
+    setSelectedCardId(card.id);
+    recordInteraction(card, { openedThread: true, dwellTimeMs: 9000, skippedQuickly: false });
+  }
+
+  function handleLike(card: RankedKnowledgeCard) {
+    recordInteraction(card, { liked: true, skippedQuickly: false });
+  }
+
+  function handleSave(card: RankedKnowledgeCard) {
+    recordInteraction(card, { saved: true, skippedQuickly: false });
+  }
+
+  function handleSkip(card: RankedKnowledgeCard) {
+    recordInteraction(card, { skippedQuickly: true, dwellTimeMs: 800, openedThread: false });
+  }
+
+  function recordInteraction(card: KnowledgeCard, patch: Partial<InteractionSignal>) {
+    setInteractionSignals((signals) => {
+      const currentSignal = signals[card.id] ?? createInteractionSignal(card);
+      const nextSignal = {
+        ...currentSignal,
+        ...patch,
+        impression: true,
+        conceptIds: card.concepts,
+        topicId: getTopicId(card)
+      };
+      const feedback = evaluateInteraction(nextSignal, deriveTopicState(nextSignal));
+
+      setLearningFeedback((feedbackByPost) => ({
+        ...feedbackByPost,
+        [card.id]: feedback
+      }));
+
+      return {
+        ...signals,
+        [card.id]: nextSignal
+      };
+    });
   }
 
   return (
@@ -277,7 +407,16 @@ export function App() {
 
         <section className="feed-list" aria-label="Knowledge cards">
           {rankedCards.map((card) => (
-            <KnowledgeCardView card={card} key={card.id} onSelect={setSelectedCardId} />
+            <KnowledgeCardView
+              card={card}
+              feedback={learningFeedback[card.id]}
+              key={card.id}
+              onLike={handleLike}
+              onOpen={handleOpenCard}
+              onSave={handleSave}
+              onSkip={handleSkip}
+              signal={interactionSignals[card.id]}
+            />
           ))}
         </section>
       </main>
@@ -371,11 +510,13 @@ export function App() {
           asset={selectedAsset}
           card={selectedCard}
           chunks={selectedChunks}
+          feedback={selectedFeedback}
           messages={selectedThread}
           onAsk={handleAskAi}
           onClose={() => setSelectedCardId(null)}
           onPromptChange={setAiPrompt}
           prompt={aiPrompt}
+          signal={selectedSignal}
         />
       ) : null}
     </div>
@@ -474,10 +615,20 @@ function StatusIcon({ status }: { status: TransformationStatus }) {
 
 function KnowledgeCardView({
   card,
-  onSelect
+  feedback,
+  onLike,
+  onOpen,
+  onSave,
+  onSkip,
+  signal
 }: {
   card: RankedKnowledgeCard;
-  onSelect: (cardId: string) => void;
+  feedback?: LearningFeedback;
+  onLike: (card: RankedKnowledgeCard) => void;
+  onOpen: (card: RankedKnowledgeCard) => void;
+  onSave: (card: RankedKnowledgeCard) => void;
+  onSkip: (card: RankedKnowledgeCard) => void;
+  signal?: InteractionSignal;
 }) {
   return (
     <article className="knowledge-card">
@@ -501,6 +652,13 @@ function KnowledgeCardView({
         <span>{card.keyTakeaway}</span>
       </div>
 
+      {feedback ? (
+        <div className={`feedback-strip ${feedback.inferredState}`}>
+          <span>{formatLearningState(feedback.inferredState)}</span>
+          <strong>{formatNextAction(feedback.nextAction)}</strong>
+        </div>
+      ) : null}
+
       <div className="concept-list">
         {card.concepts.map((concept) => (
           <span key={concept}>{concept}</span>
@@ -513,20 +671,23 @@ function KnowledgeCardView({
           <span>Score {Math.round(card.score)}</span>
         </div>
         <div className="card-actions">
-          <button className="icon-button compact" title="Like">
+          <button className={`icon-button compact ${signal?.liked ? "selected" : ""}`} onClick={() => onLike(card)} title="Like">
             <Heart size={18} />
           </button>
-          <button className="icon-button compact" title="Save">
+          <button className={`icon-button compact ${signal?.saved ? "selected" : ""}`} onClick={() => onSave(card)} title="Save">
             <Bookmark size={18} />
           </button>
-          <button className="icon-button compact" onClick={() => onSelect(card.id)} title="Ask AI">
+          <button className="icon-button compact" onClick={() => onOpen(card)} title="Ask AI">
             <MessageCircle size={18} />
           </button>
-          <button className="icon-button compact" onClick={() => onSelect(card.id)} title="View source">
+          <button className="icon-button compact" onClick={() => onOpen(card)} title="View source">
             <Quote size={18} />
           </button>
-          <button className="icon-button compact" onClick={() => onSelect(card.id)} title="Explain">
+          <button className="icon-button compact" onClick={() => onOpen(card)} title="Explain">
             <CircleHelp size={18} />
+          </button>
+          <button className={`icon-button compact ${signal?.skippedQuickly ? "negative" : ""}`} onClick={() => onSkip(card)} title="Skip post">
+            <XCircle size={18} />
           </button>
         </div>
       </footer>
@@ -538,20 +699,24 @@ function SourceDetailDrawer({
   asset,
   card,
   chunks,
+  feedback,
   messages,
   onAsk,
   onClose,
   onPromptChange,
-  prompt
+  prompt,
+  signal
 }: {
   asset?: SourceAsset;
   card: RankedKnowledgeCard;
   chunks: KnowledgeChunk[];
+  feedback?: LearningFeedback;
   messages: AiMessage[];
   onAsk: (event: FormEvent<HTMLFormElement>) => void;
   onClose: () => void;
   onPromptChange: (value: string) => void;
   prompt: string;
+  signal?: InteractionSignal;
 }) {
   const citation = card.citations?.[0];
   const source = card.sources[0];
@@ -675,6 +840,32 @@ function SourceDetailDrawer({
 
       <section className="drawer-section">
         <div className="drawer-section-heading">
+          <Brain size={18} />
+          <h3>Feedback Loop</h3>
+        </div>
+        {feedback ? (
+          <div className={`feedback-panel ${feedback.inferredState}`}>
+            <div className="feedback-panel-top">
+              <span>{formatLearningState(feedback.inferredState)}</span>
+              <strong>{formatNextAction(feedback.nextAction)}</strong>
+            </div>
+            <p>{feedback.reason}</p>
+            <small>Signal strength {feedback.signalStrength}</small>
+          </div>
+        ) : (
+          <p className="muted-copy">Open, like, save, ask, or skip this post to generate feedback.</p>
+        )}
+        {signal ? (
+          <div className="signal-chip-list">
+            {formatSignalChips(signal).map((chip) => (
+              <span key={chip}>{chip}</span>
+            ))}
+          </div>
+        ) : null}
+      </section>
+
+      <section className="drawer-section">
+        <div className="drawer-section-heading">
           <GraduationCap size={18} />
           <h3>Ask AI</h3>
         </div>
@@ -729,6 +920,44 @@ function updateImportStatus(
   return imports.map((item) => (item.id === importId ? { ...item, status } : item));
 }
 
+function createInteractionSignal(card: KnowledgeCard): InteractionSignal {
+  return {
+    postId: card.id,
+    topicId: getTopicId(card),
+    conceptIds: card.concepts,
+    impression: true,
+    dwellTimeMs: 0,
+    openedThread: false,
+    liked: false,
+    saved: false,
+    askedQuestion: false,
+    reviewed: false,
+    skippedQuickly: false,
+    createdAt: new Date().toISOString()
+  };
+}
+
+function deriveTopicState(signal: InteractionSignal): TopicState {
+  const positiveSignals = [signal.openedThread, signal.liked, signal.saved, signal.askedQuestion, signal.reviewed].filter(
+    Boolean
+  ).length;
+
+  return {
+    topicId: signal.topicId,
+    interestScore: Math.min(1, positiveSignals / 4),
+    fatigueScore: signal.skippedQuickly ? 0.85 : 0.15,
+    comprehensionScore: signal.askedQuestion ? 0.35 : signal.reviewed || signal.saved ? 0.78 : 0.55
+  };
+}
+
+function getTopicId(card: KnowledgeCard): string {
+  return slugConcept(card.concepts[0] ?? "general");
+}
+
+function slugConcept(concept: string): string {
+  return concept.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+}
+
 function formatTrustState(state: TrustState): string {
   const labels: Record<TrustState, string> = {
     emerging: "Emerging",
@@ -748,6 +977,32 @@ function formatStatus(status: TransformationStatus): string {
   };
 
   return labels[status];
+}
+
+function formatLearningState(state: LearningFeedback["inferredState"]): string {
+  const labels: Record<LearningFeedback["inferredState"], string> = {
+    interested: "Interested",
+    confused: "Confused",
+    fatigued: "Fatigued",
+    not_relevant: "Weak signal",
+    needs_review: "Needs review"
+  };
+
+  return labels[state];
+}
+
+function formatSignalChips(signal: InteractionSignal): string[] {
+  const chips = ["Impression"];
+
+  if (signal.dwellTimeMs > 0) chips.push(`${Math.round(signal.dwellTimeMs / 1000)}s dwell`);
+  if (signal.openedThread) chips.push("Thread opened");
+  if (signal.liked) chips.push("Liked");
+  if (signal.saved) chips.push("Saved");
+  if (signal.askedQuestion) chips.push("Asked");
+  if (signal.reviewed) chips.push("Reviewed");
+  if (signal.skippedQuickly) chips.push("Skipped");
+
+  return chips;
 }
 
 function formatDifficulty(value: NonNullable<KnowledgeCard["difficulty"]>): string {

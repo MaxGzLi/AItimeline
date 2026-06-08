@@ -155,9 +155,9 @@ Open-core boundary:
 
 ## Immediate Next Milestones
 
-1. Add JSON schema validation for harness outputs.
-2. Capture real interaction signals: impression, dwell, skip, thread open, like, save, ask, review.
-3. Feed captured signals through the feedback policy and show the inferred next action.
+1. Add dwell-time and viewport-based impression tracking.
+2. Add JSON schema validation for harness outputs.
+3. Use feedback `nextAction` to generate follow-up posts.
 4. Add real YouTube transcript extraction behind the existing mock interface.
 5. Add article URL import.
 6. Add better post clustering so one long source does not flood the feed.

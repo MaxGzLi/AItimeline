@@ -124,14 +124,15 @@ The current MVP uses a deterministic mock harness:
 3. Each chunk becomes a `KnowledgePost`.
 4. Each post includes hook, thread blocks, graph edges, review prompts, and next actions.
 5. The Web app displays those fields in the timeline and source detail drawer.
+6. The Web app records lightweight interaction signals: impression, thread open, like, save, ask, and skip.
+7. Signals are evaluated with `evaluateInteraction` and shown as feedback state plus next action.
 
 This is intentionally deterministic. The next step is to replace mock generation with model-backed generation while keeping the same schema.
 
 ## Build Next
 
-1. Add JSON schema validation for harness outputs.
-2. Add an agent prompt runner that takes source chunks and returns `KnowledgePost`.
-3. Add interaction event capture in the Web app.
-4. Feed captured signals through `evaluateInteraction`.
-5. Use the resulting `nextAction` to generate follow-up posts.
-
+1. Add dwell-time and viewport-based impression tracking instead of only action-based signals.
+2. Add JSON schema validation for harness outputs.
+3. Add an agent prompt runner that takes source chunks and returns `KnowledgePost`.
+4. Use the resulting `nextAction` to generate follow-up posts.
+5. Add a topic-level cooldown and expansion queue.

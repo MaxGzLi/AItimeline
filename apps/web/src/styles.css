@@ -209,6 +209,18 @@ button {
   background: #f3f7fa;
 }
 
+.icon-button.selected {
+  border-color: #a8c4ff;
+  background: #edf3ff;
+  color: var(--blue);
+}
+
+.icon-button.negative {
+  border-color: #f0c3c3;
+  background: #fdecec;
+  color: var(--red);
+}
+
 .icon-button.compact {
   width: 34px;
   height: 34px;
@@ -445,6 +457,55 @@ button {
 .takeaway span {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.feedback-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 36px;
+  margin-top: 14px;
+  padding: 0 10px;
+  border: 1px solid #dce3e8;
+  border-radius: 8px;
+  background: #f8fafb;
+}
+
+.feedback-strip span,
+.feedback-strip strong {
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.feedback-strip.interested,
+.feedback-panel.interested {
+  border-color: #cfe4d8;
+  background: #f0f9f4;
+}
+
+.feedback-strip.confused,
+.feedback-panel.confused {
+  border-color: #d7ddff;
+  background: #f0f3ff;
+}
+
+.feedback-strip.fatigued,
+.feedback-panel.fatigued {
+  border-color: #f0c3c3;
+  background: #fff2f2;
+}
+
+.feedback-strip.not_relevant,
+.feedback-panel.not_relevant {
+  border-color: #dce3e8;
+  background: #f8fafb;
+}
+
+.feedback-strip.needs_review,
+.feedback-panel.needs_review {
+  border-color: #f1d5a8;
+  background: #fff8ed;
 }
 
 .concept-list {
@@ -780,6 +841,51 @@ button {
   color: var(--blue);
   font-size: 12px;
   font-weight: 900;
+}
+
+.feedback-panel {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #dce3e8;
+  border-radius: 8px;
+}
+
+.feedback-panel-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.feedback-panel-top span,
+.feedback-panel-top strong {
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.feedback-panel small {
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.signal-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.signal-chip-list span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 9px;
+  border: 1px solid #d8e2e8;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #334454;
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .chat-message {
