@@ -2,11 +2,15 @@
 
 ## Positioning
 
-AITimeline 是一个由 AI Agent 驱动的个人知识 timeline。它借用用户熟悉的信息流交互，但核心不是社交发布，而是搜索、整合、理解、沉淀和复习。
+AITimeline 是一个由 AI Agent 驱动的知识型 timeline。它借用用户熟悉的信息流交互，但核心不是社交发布，也不是传统知识库，而是让 agent 把来源资料转化成能被刷、能被追问、能被复习、能连成图谱的知识帖子。
 
 一句话定位：
 
-> 像刷信息流一样积累自己的知识图谱。
+> 把来源资料变成让人上瘾的学习 feed。
+
+更准确的英文品类表达：
+
+> Open-core agentic knowledge media.
 
 ## Why Open-Core
 
@@ -17,7 +21,7 @@ AITimeline 是一个由 AI Agent 驱动的个人知识 timeline。它借用用�
 
 所以不要在“开源项目”和“商业 App”之间二选一。正确取舍是：
 
-- 用开源建立可信度、扩展性和早期社区。
+- 用开源建立可信度、扩展性和早期社区，尤其是 agent harness、post schema、thread policy、graph policy 和 recommendation feedback loop。
 - 用商业 App 卖省事、连续运行、同步、默认配置和 AI 互动额度。
 
 ## Product Principles
@@ -27,6 +31,8 @@ AITimeline 是一个由 AI Agent 驱动的个人知识 timeline。它借用用�
 - Source grounded: 知识卡片必须保留来源和不确定性。
 - Interaction deposits value: 点赞、收藏、评论和追问都要写回用户知识系统。
 - Review is part of the feed: 复习不应该像另一个学习软件，而是自然混入 timeline。
+- Feedback drives generation: 没互动的帖子要被降频、换表达或冷却；有互动的帖子要自动扩展深度或宽度。
+- Media-native, not clickbait: 标题和 hook 要有吸引力，但不能牺牲事实、来源和学习价值。
 
 ## First Target Users
 
@@ -41,4 +47,5 @@ AITimeline 是一个由 AI Agent 驱动的个人知识 timeline。它借用用�
 - 不做完整复刻 X 的视觉和品牌。
 - 不做一开始就很复杂的 3D 知识图谱。
 - 不把所有 agent 配置暴露给普通用户。
-
+- 不做另一个 NotebookLM clone。
+- 不做另一个 AI 稍后读或 generic RAG chat。
