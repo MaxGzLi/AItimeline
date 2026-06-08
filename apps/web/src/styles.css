@@ -435,6 +435,33 @@ button {
   font-weight: 800;
 }
 
+.post-thesis,
+.post-reason {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid #dce3e8;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.post-thesis span,
+.post-reason span {
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.post-thesis p,
+.post-reason p {
+  margin: 0;
+  color: #354656;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
 .takeaway {
   display: flex;
   align-items: flex-start;
@@ -457,6 +484,57 @@ button {
 .takeaway span {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.timeline-thread-preview {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.timeline-thread-block {
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+  border: 1px solid #dce3e8;
+  border-radius: 8px;
+  background: #f8fafb;
+}
+
+.timeline-thread-block span {
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.timeline-thread-block strong {
+  color: var(--ink);
+  font-size: 15px;
+}
+
+.timeline-thread-block p {
+  margin: 0;
+  color: #3f4f5d;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.inline-next-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.inline-next-actions strong {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 9px;
+  border-radius: 6px;
+  background: #edf3ff;
+  color: var(--blue);
+  font-size: 12px;
 }
 
 .feedback-strip {

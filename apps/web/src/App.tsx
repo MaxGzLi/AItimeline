@@ -630,6 +630,8 @@ function KnowledgeCardView({
   onSkip: (card: RankedKnowledgeCard) => void;
   signal?: InteractionSignal;
 }) {
+  const threadPreview = getTimelineThreadPreview(card);
+
   return (
     <article className="knowledge-card">
       <div className="card-topline">
@@ -641,6 +643,13 @@ function KnowledgeCardView({
       {card.hook ? <p className="post-hook">{card.hook}</p> : null}
       <p className="summary">{card.shortBody ?? card.summary}</p>
 
+      {card.thesis ? (
+        <div className="post-thesis">
+          <span>Thesis</span>
+          <p>{card.thesis}</p>
+        </div>
+      ) : null}
+
       <div className="post-meta">
         {card.difficulty ? <span>{formatDifficulty(card.difficulty)}</span> : null}
         {card.confidence ? <span>{formatConfidence(card.confidence)}</span> : null}
@@ -650,6 +659,30 @@ function KnowledgeCardView({
       <div className="takeaway">
         <Sparkles size={18} />
         <span>{card.keyTakeaway}</span>
+      </div>
+
+      {threadPreview.length > 0 ? (
+        <div className="timeline-thread-preview">
+          {threadPreview.map((block) => (
+            <div className="timeline-thread-block" key={block.id}>
+              <span>{formatThreadKind(block.kind)}</span>
+              <strong>{block.title}</strong>
+              <p>{block.body}</p>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      <div className="post-reason">
+        <span>Why this is here</span>
+        <p>{card.recommendedBecause}</p>
+        {card.nextActions?.length ? (
+          <div className="inline-next-actions">
+            {card.nextActions.map((action) => (
+              <strong key={action}>{formatNextAction(action)}</strong>
+            ))}
+          </div>
+        ) : null}
       </div>
 
       {feedback ? (
@@ -918,6 +951,14 @@ function updateImportStatus(
   status: TransformationStatus
 ): SourceImport[] {
   return imports.map((item) => (item.id === importId ? { ...item, status } : item));
+}
+
+function getTimelineThreadPreview(card: KnowledgeCard): NonNullable<KnowledgeCard["thread"]> {
+  return (
+    card.thread
+      ?.filter((block) => block.kind === "example" || block.kind === "contrast" || block.kind === "extension")
+      .slice(0, 2) ?? []
+  );
 }
 
 function createInteractionSignal(card: KnowledgeCard): InteractionSignal {
