@@ -7,12 +7,14 @@ import {
   rankKnowledgeCards,
   transformMockYouTubeUrl,
   type KnowledgeCard,
+  type KnowledgeChunk,
   type RankedKnowledgeCard,
+  type SourceAsset,
   type SourceImport,
   type TransformationStatus,
   type TrustState
 } from "@aitimeline/core";
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import {
   Bell,
   Bookmark,
@@ -23,6 +25,7 @@ import {
   Clock,
   Compass,
   FileText,
+  GraduationCap,
   GitBranch,
   Heart,
   Home,
@@ -30,6 +33,7 @@ import {
   LoaderCircle,
   MessageCircle,
   MoreHorizontal,
+  Quote,
   RefreshCw,
   Search,
   Send,
@@ -40,6 +44,7 @@ import {
 } from "lucide-react";
 
 const sampleYouTubeUrl = "https://www.youtube.com/watch?v=aitimeline-demo";
+const storageKey = "aitimeline.mvp.v1";
 
 const navItems = [
   { label: "Timeline", icon: Home, active: true },
@@ -50,12 +55,35 @@ const navItems = [
   { label: "Settings", icon: Settings }
 ];
 
+type AiMessage = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  createdAt: string;
+};
+
+type AiThreads = Record<string, AiMessage[]>;
+
+type PersistedMvpState = {
+  sourceImports: SourceImport[];
+  importedCards: KnowledgeCard[];
+  sourceAssets: SourceAsset[];
+  sourceChunks: KnowledgeChunk[];
+  aiThreads: AiThreads;
+};
+
 export function App() {
   const [sourceUrl, setSourceUrl] = useState(sampleYouTubeUrl);
   const [sourceImports, setSourceImports] = useState<SourceImport[]>([]);
   const [importedCards, setImportedCards] = useState<KnowledgeCard[]>([]);
+  const [sourceAssets, setSourceAssets] = useState<SourceAsset[]>([]);
+  const [sourceChunks, setSourceChunks] = useState<KnowledgeChunk[]>([]);
+  const [aiThreads, setAiThreads] = useState<AiThreads>({});
+  const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
+  const [aiPrompt, setAiPrompt] = useState("");
   const [isImporting, setIsImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
+  const [hasHydrated, setHasHydrated] = useState(false);
 
   const importedSignals = useMemo(
     () =>
@@ -71,11 +99,53 @@ export function App() {
   const allCards = useMemo(() => [...importedCards, ...demoCards], [importedCards]);
   const allSignals = useMemo(() => [...demoSignals, ...importedSignals], [importedSignals]);
   const rankedCards = useMemo(() => rankKnowledgeCards(allCards, demoProfile), [allCards]);
+  const selectedCard = useMemo(
+    () => (selectedCardId ? rankedCards.find((card) => card.id === selectedCardId) ?? null : null),
+    [rankedCards, selectedCardId]
+  );
+  const selectedSourceId = selectedCard?.sources[0]?.id;
+  const selectedChunks = useMemo(
+    () => sourceChunks.filter((chunk) => chunk.sourceId === selectedSourceId),
+    [selectedSourceId, sourceChunks]
+  );
+  const selectedAsset = useMemo(
+    () => sourceAssets.find((asset) => asset.sourceId === selectedSourceId),
+    [selectedSourceId, sourceAssets]
+  );
   const graph = useMemo(() => buildKnowledgeGraph(allCards, allSignals), [allCards, allSignals]);
   const reviewQueue = useMemo(
     () => createReviewQueue(allCards, allSignals, new Date("2026-06-08T08:00:00.000Z")),
     [allCards, allSignals]
   );
+  const selectedThread = selectedCard ? aiThreads[selectedCard.id] ?? [] : [];
+
+  useEffect(() => {
+    const storedState = loadStoredState();
+
+    if (storedState) {
+      setSourceImports(storedState.sourceImports);
+      setImportedCards(storedState.importedCards);
+      setSourceAssets(storedState.sourceAssets);
+      setSourceChunks(storedState.sourceChunks);
+      setAiThreads(storedState.aiThreads);
+    }
+
+    setHasHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!hasHydrated) {
+      return;
+    }
+
+    saveStoredState({
+      sourceImports,
+      importedCards,
+      sourceAssets,
+      sourceChunks,
+      aiThreads
+    });
+  }, [aiThreads, hasHydrated, importedCards, sourceAssets, sourceChunks, sourceImports]);
 
   async function handleImport(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -102,12 +172,43 @@ export function App() {
       await wait(520);
 
       setImportedCards((cards) => mergeCards(result.cards, cards));
+      setSourceAssets((assets) => upsertById(assets, [result.asset]));
+      setSourceChunks((chunks) => upsertById(chunks, result.chunks));
       setSourceImports((imports) => updateImportStatus(imports, pendingImport.id, "ready"));
+      setSelectedCardId(result.cards[0]?.id ?? null);
     } catch (error) {
       setImportError(error instanceof Error ? error.message : "Import failed.");
     } finally {
       setIsImporting(false);
     }
+  }
+
+  function handleAskAi(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!selectedCard || !aiPrompt.trim()) {
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const userMessage: AiMessage = {
+      id: `${selectedCard.id}-user-${now}`,
+      role: "user",
+      content: aiPrompt.trim(),
+      createdAt: now
+    };
+    const assistantMessage: AiMessage = {
+      id: `${selectedCard.id}-assistant-${now}`,
+      role: "assistant",
+      content: buildGroundedAnswer(selectedCard, selectedChunks, aiPrompt.trim()),
+      createdAt: now
+    };
+
+    setAiThreads((threads) => ({
+      ...threads,
+      [selectedCard.id]: [...(threads[selectedCard.id] ?? []), userMessage, assistantMessage]
+    }));
+    setAiPrompt("");
   }
 
   return (
@@ -174,7 +275,7 @@ export function App() {
 
         <section className="feed-list" aria-label="Knowledge cards">
           {rankedCards.map((card) => (
-            <KnowledgeCardView card={card} key={card.id} />
+            <KnowledgeCardView card={card} key={card.id} onSelect={setSelectedCardId} />
           ))}
         </section>
       </main>
@@ -262,6 +363,19 @@ export function App() {
           </div>
         </section>
       </aside>
+
+      {selectedCard ? (
+        <SourceDetailDrawer
+          asset={selectedAsset}
+          card={selectedCard}
+          chunks={selectedChunks}
+          messages={selectedThread}
+          onAsk={handleAskAi}
+          onClose={() => setSelectedCardId(null)}
+          onPromptChange={setAiPrompt}
+          prompt={aiPrompt}
+        />
+      ) : null}
     </div>
   );
 }
@@ -356,7 +470,13 @@ function StatusIcon({ status }: { status: TransformationStatus }) {
   return <LoaderCircle className="status-working spin" size={18} />;
 }
 
-function KnowledgeCardView({ card }: { card: RankedKnowledgeCard }) {
+function KnowledgeCardView({
+  card,
+  onSelect
+}: {
+  card: RankedKnowledgeCard;
+  onSelect: (cardId: string) => void;
+}) {
   return (
     <article className="knowledge-card">
       <div className="card-topline">
@@ -390,10 +510,13 @@ function KnowledgeCardView({ card }: { card: RankedKnowledgeCard }) {
           <button className="icon-button compact" title="Save">
             <Bookmark size={18} />
           </button>
-          <button className="icon-button compact" title="Ask AI">
+          <button className="icon-button compact" onClick={() => onSelect(card.id)} title="Ask AI">
             <MessageCircle size={18} />
           </button>
-          <button className="icon-button compact" title="Explain">
+          <button className="icon-button compact" onClick={() => onSelect(card.id)} title="View source">
+            <Quote size={18} />
+          </button>
+          <button className="icon-button compact" onClick={() => onSelect(card.id)} title="Explain">
             <CircleHelp size={18} />
           </button>
         </div>
@@ -402,9 +525,124 @@ function KnowledgeCardView({ card }: { card: RankedKnowledgeCard }) {
   );
 }
 
+function SourceDetailDrawer({
+  asset,
+  card,
+  chunks,
+  messages,
+  onAsk,
+  onClose,
+  onPromptChange,
+  prompt
+}: {
+  asset?: SourceAsset;
+  card: RankedKnowledgeCard;
+  chunks: KnowledgeChunk[];
+  messages: AiMessage[];
+  onAsk: (event: FormEvent<HTMLFormElement>) => void;
+  onClose: () => void;
+  onPromptChange: (value: string) => void;
+  prompt: string;
+}) {
+  const citation = card.citations?.[0];
+  const source = card.sources[0];
+
+  return (
+    <aside className="detail-drawer" aria-label="Source detail">
+      <div className="drawer-header">
+        <div>
+          <p className="section-label">Grounded Card</p>
+          <h2>{card.title}</h2>
+        </div>
+        <button className="icon-button compact" onClick={onClose} title="Close">
+          <XCircle size={18} />
+        </button>
+      </div>
+
+      <section className="drawer-section">
+        <div className="drawer-section-heading">
+          <Quote size={18} />
+          <h3>Citation</h3>
+        </div>
+        <p>{source?.title ?? "Unknown source"}</p>
+        {citation?.startTimeSeconds !== undefined ? (
+          <a className="timestamp-link" href={buildTimestampUrl(source?.url, citation.startTimeSeconds)}>
+            {formatTimestamp(citation.startTimeSeconds)}-{formatTimestamp(citation.endTimeSeconds ?? citation.startTimeSeconds)}
+          </a>
+        ) : (
+          <span className="muted-copy">No citation available</span>
+        )}
+      </section>
+
+      <section className="drawer-section">
+        <div className="drawer-section-heading">
+          <Sparkles size={18} />
+          <h3>Agent Takeaway</h3>
+        </div>
+        <p>{card.keyTakeaway}</p>
+      </section>
+
+      <section className="drawer-section">
+        <div className="drawer-section-heading">
+          <FileText size={18} />
+          <h3>Source Chunks</h3>
+        </div>
+        <div className="chunk-list">
+          {chunks.length > 0 ? (
+            chunks.map((chunk) => (
+              <div className="chunk-row" key={chunk.id}>
+                <span>{formatTimestamp(chunk.startTimeSeconds ?? 0)}</span>
+                <p>{chunk.content}</p>
+              </div>
+            ))
+          ) : (
+            <p className="muted-copy">{asset?.content ?? "This demo card has no imported transcript yet."}</p>
+          )}
+        </div>
+      </section>
+
+      <section className="drawer-section">
+        <div className="drawer-section-heading">
+          <GraduationCap size={18} />
+          <h3>Ask AI</h3>
+        </div>
+        <div className="chat-list">
+          {messages.length > 0 ? (
+            messages.map((message) => (
+              <div className={`chat-message ${message.role}`} key={message.id}>
+                <span>{message.role === "assistant" ? "AI" : "You"}</span>
+                <p>{message.content}</p>
+              </div>
+            ))
+          ) : (
+            <p className="muted-copy">Ask how this connects to your memory, graph, or review queue.</p>
+          )}
+        </div>
+
+        <form className="ask-form" onSubmit={onAsk}>
+          <input
+            aria-label="Ask AI about this card"
+            onChange={(event) => onPromptChange(event.target.value)}
+            placeholder="Ask about this source"
+            value={prompt}
+          />
+          <button className="icon-button" title="Send question" type="submit">
+            <Send size={18} />
+          </button>
+        </form>
+      </section>
+    </aside>
+  );
+}
+
 function mergeCards(newCards: KnowledgeCard[], currentCards: KnowledgeCard[]): KnowledgeCard[] {
   const newCardIds = new Set(newCards.map((card) => card.id));
   return [...newCards, ...currentCards.filter((card) => !newCardIds.has(card.id))];
+}
+
+function upsertById<T extends { id: string }>(currentItems: T[], newItems: T[]): T[] {
+  const newItemIds = new Set(newItems.map((item) => item.id));
+  return [...newItems, ...currentItems.filter((item) => !newItemIds.has(item.id))];
 }
 
 function upsertImport(imports: SourceImport[], nextImport: SourceImport): SourceImport[] {
@@ -462,6 +700,20 @@ function formatDueDate(value: string): string {
   }).format(new Date(value));
 }
 
+function buildTimestampUrl(url: string | undefined, seconds: number): string {
+  if (!url) {
+    return "#";
+  }
+
+  try {
+    const parsedUrl = new URL(url);
+    parsedUrl.searchParams.set("t", `${Math.floor(seconds)}s`);
+    return parsedUrl.toString();
+  } catch {
+    return url;
+  }
+}
+
 function formatTimestamp(seconds: number): string {
   const minutes = Math.floor(seconds / 60);
   const remainingSeconds = Math.floor(seconds % 60)
@@ -469,6 +721,35 @@ function formatTimestamp(seconds: number): string {
     .padStart(2, "0");
 
   return `${minutes}:${remainingSeconds}`;
+}
+
+function buildGroundedAnswer(card: KnowledgeCard, chunks: KnowledgeChunk[], prompt: string): string {
+  const citation = card.citations?.[0];
+  const source = card.sources[0];
+  const groundedChunk =
+    chunks.find((chunk) => chunk.id === citation?.chunkId) ?? chunks.find((chunk) => chunk.sourceId === source?.id);
+  const timestamp =
+    citation?.startTimeSeconds !== undefined ? ` at ${formatTimestamp(citation.startTimeSeconds)}` : "";
+  const conceptLine = card.concepts.length > 0 ? `Concepts: ${card.concepts.join(", ")}.` : "";
+
+  return [
+    `Based on "${source?.title ?? "this source"}"${timestamp}, the card is saying: ${card.keyTakeaway}`,
+    groundedChunk ? `Grounding: ${groundedChunk.content}` : `Grounding: ${card.summary}`,
+    `${conceptLine} Your question was: "${prompt}".`
+  ].join("\n\n");
+}
+
+function loadStoredState(): PersistedMvpState | null {
+  try {
+    const rawState = window.localStorage.getItem(storageKey);
+    return rawState ? (JSON.parse(rawState) as PersistedMvpState) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveStoredState(state: PersistedMvpState): void {
+  window.localStorage.setItem(storageKey, JSON.stringify(state));
 }
 
 function wait(ms: number): Promise<void> {

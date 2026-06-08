@@ -47,7 +47,7 @@ Then open the local URL printed by Vite.
 3. 点赞内容是否能自然沉淀成知识图谱。
 4. 复习提醒是否让用户感到自己真的在变聪明。
 
-The current prototype also includes a mocked YouTube import flow: paste a YouTube URL, simulate transcript extraction, convert transcript segments into cited knowledge cards, and insert those cards into the ranked timeline.
+The current prototype also includes a mocked YouTube import flow: paste a YouTube URL, simulate transcript extraction, convert transcript segments into cited knowledge cards, insert those cards into the ranked timeline, inspect source citations, ask source-grounded AI questions, and keep the imported state in local storage.
 
 ## Next Planning Docs
 

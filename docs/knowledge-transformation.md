@@ -151,6 +151,6 @@ This lets us test the product loop before fighting API limits, transcript availa
 
 Current status:
 
-- Steps 1 to 6 are implemented as a mocked Web prototype.
-- Step 7 is the next UI milestone.
+- Steps 1 to 7 are implemented as a mocked Web prototype.
+- The prototype persists imported cards, source records, transcript chunks and AI threads in local storage.
 - Real transcript extraction is intentionally deferred until the import loop feels useful.
