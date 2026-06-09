@@ -28,9 +28,11 @@ Code locations:
 - [packages/core/src/harness/systemPrompt.ts](../packages/core/src/harness/systemPrompt.ts)
 - [packages/core/src/harness/expansionPolicy.ts](../packages/core/src/harness/expansionPolicy.ts)
 - [packages/core/src/harness/postHarness.ts](../packages/core/src/harness/postHarness.ts)
+- [packages/core/src/harness/groundingGate.ts](../packages/core/src/harness/groundingGate.ts)
 - [packages/core/src/harness/schema.ts](../packages/core/src/harness/schema.ts)
 - [packages/core/src/harness/runner.ts](../packages/core/src/harness/runner.ts)
 - [packages/core/src/harness/feedbackPolicy.ts](../packages/core/src/harness/feedbackPolicy.ts)
+- [packages/core/src/source/sourceRegistry.ts](../packages/core/src/source/sourceRegistry.ts)
 
 ## Harness Run Architecture
 
@@ -38,11 +40,13 @@ The harness is now structured around a run contract instead of a single post fac
 
 ```mermaid
 flowchart TD
-  Source["Source"] --> Chunks["KnowledgeChunk[]"]
+  Source["Source"] --> Registry["SourceRegistry\nsnapshots + hashes"]
+  Registry --> Chunks["KnowledgeChunk[]"]
   Chunks --> Runner["KnowledgePostAgentRunner"]
   Runner --> Posts["KnowledgePost[]"]
   Posts --> Validator["Schema + Policy Validation"]
-  Validator --> Run["AgentHarnessRun"]
+  Validator --> Grounding["Grounding Gate"]
+  Grounding --> Run["AgentHarnessRun"]
   Run --> Timeline["Timeline"]
   Timeline --> Signals["InteractionSignal[]"]
   Signals --> Feedback["LearningFeedback[]"]
@@ -59,6 +63,8 @@ Main contracts:
 - `KnowledgePostAgentRunner`: shared interface for deterministic and future model-backed runners.
 - `AgentHarnessRunResult`: generated posts plus validation metadata.
 - `HarnessValidationResult`: schema and policy issues before posts enter timeline, graph, or review.
+- `SourceRegistry`: immutable-ish source snapshots, content hashes, chunks, and chunk versions.
+- `GroundingCheck`: citation and source-fact evidence checks before accepting a post.
 - `AgentExpansionPlan`: follow-up jobs, suppressions, and cooled topics after interaction feedback.
 
 Current exported runners:
@@ -88,6 +94,42 @@ Required fields:
 - `graphEdges`: concept relationships
 - `reviewPrompts`: recall prompts
 - `nextActions`: what the agent should do next
+
+## Source Registry
+
+Source management is separated from post generation.
+
+The registry stores:
+
+- `Source`: metadata such as URL, type, title, author, and publish time
+- `SourceAsset`: raw transcript, text, or metadata payload
+- `SourceSnapshot`: asset version, content hash, and content length
+- `KnowledgeChunk`: timestamped or ranged evidence units
+- `SourceChunkVersion`: chunk hash, source link, optional snapshot link, and version
+
+The product rule is that generated knowledge cannot be treated as durable unless it can trace back to this registry.
+
+## Grounding Gate
+
+The grounding gate does not make an LLM truthful. It prevents ungrounded output from being accepted.
+
+Current checks:
+
+- every post must include citations
+- citation `sourceId` must exist in `SourceRegistry`
+- citation `chunkId` must exist in `SourceRegistry`
+- source-fact fields must overlap with cited evidence
+- weakly grounded interpretations produce warnings
+- failed source facts make the harness validation fail
+
+Claim kinds:
+
+- `source_fact`: hard factual content that must pass evidence overlap
+- `interpretation`: source-backed interpretation; weak overlap is a warning
+- `example`: illustrative content
+- `question`: quiz or review prompt
+
+This is the first acceptance gate. The later model-backed runner should add claim extraction and repair: if a generated post fails grounding, ask the model to revise or reject the post.
 
 ## Thread Blocks
 
@@ -178,12 +220,14 @@ The current MVP uses a deterministic runner behind the same harness interface th
 2. Transcript segments become `KnowledgeChunk`s.
 3. `runDeterministicAgentHarness` creates an `AgentHarnessRun`.
 4. Each chunk becomes a validated `KnowledgePost`.
-5. Each post includes hook, thread blocks, graph edges, review prompts, and next actions.
-6. The transform result returns `cards`, `harnessRun`, and `validation`.
-7. The Web app displays the post fields in the timeline and source detail drawer.
-8. The Web app records lightweight interaction signals: impression, thread open, like, save, ask, and skip.
-9. Signals are evaluated with `evaluateInteraction` and shown as feedback state plus next action.
-10. `createExpansionPlan` turns recent signals and feedback into follow-up jobs, review jobs, suppressions, and topic cooldowns.
+5. The transform creates a `SourceRegistry` with source snapshots, hashes, chunks, and chunk versions.
+6. Each post includes hook, thread blocks, graph edges, review prompts, and next actions.
+7. Schema, policy, and grounding validation run before a post is accepted.
+8. The transform result returns `cards`, `sourceRegistry`, `harnessRun`, and `validation`.
+9. The Web app displays the post fields in the timeline and source detail drawer.
+10. The Web app records lightweight interaction signals: impression, thread open, like, save, ask, and skip.
+11. Signals are evaluated with `evaluateInteraction` and shown as feedback state plus next action.
+12. `createExpansionPlan` turns recent signals and feedback into follow-up jobs, review jobs, suppressions, and topic cooldowns.
 
 This is intentionally deterministic. The next step is to add a model-backed runner while keeping the same schema and validation gate.
 
@@ -191,6 +235,6 @@ This is intentionally deterministic. The next step is to add a model-backed runn
 
 1. Add dwell-time and viewport-based impression tracking instead of only action-based signals.
 2. Add a model-backed `KnowledgePostAgentRunner` that takes source chunks and returns `KnowledgePost`.
-3. Use validation failures to ask the model for repair before accepting a post.
+3. Use grounding failures to ask the model for repair before accepting a post.
 4. Use `AgentExpansionPlan` jobs to trigger follow-up generation.
-5. Persist topic cooldowns and expansion queue state.
+5. Persist source registries, topic cooldowns, and expansion queue state.

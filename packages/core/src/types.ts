@@ -17,6 +17,8 @@ export type SourceAssetKind = "transcript" | "text" | "metadata";
 
 export type TransformationStatus = "queued" | "extracting" | "transforming" | "ready" | "failed";
 
+export type SourceSnapshotKind = SourceAssetKind;
+
 export type KnowledgeDifficulty = "beginner" | "intermediate" | "advanced";
 
 export type KnowledgeConfidence = "low" | "medium" | "high";
@@ -51,6 +53,10 @@ export type HarnessValidationSeverity = "error" | "warning";
 
 export type ExpansionJobKind = "generate_followup" | "schedule_review" | "cooldown_topic" | "ask_clarifying_question";
 
+export type SourceClaimKind = "source_fact" | "interpretation" | "example" | "question";
+
+export type GroundingCheckStatus = "passed" | "warning" | "failed";
+
 export type InferredLearningState =
   | "interested"
   | "confused"
@@ -76,6 +82,17 @@ export interface SourceAsset {
   createdAt: string;
 }
 
+export interface SourceSnapshot {
+  id: string;
+  sourceId: string;
+  assetId?: string;
+  kind: SourceSnapshotKind;
+  version: number;
+  contentHash: string;
+  contentLength: number;
+  createdAt: string;
+}
+
 export interface KnowledgeChunk {
   id: string;
   sourceId: string;
@@ -85,12 +102,51 @@ export interface KnowledgeChunk {
   conceptHints?: string[];
 }
 
+export interface SourceChunkVersion {
+  id: string;
+  chunkId: string;
+  sourceId: string;
+  snapshotId?: string;
+  version: number;
+  contentHash: string;
+  contentLength: number;
+  createdAt: string;
+  startTimeSeconds?: number;
+  endTimeSeconds?: number;
+  conceptHints?: string[];
+}
+
+export interface SourceRegistry {
+  sources: Source[];
+  assets: SourceAsset[];
+  snapshots: SourceSnapshot[];
+  chunks: KnowledgeChunk[];
+  chunkVersions: SourceChunkVersion[];
+}
+
 export interface Citation {
   sourceId: string;
   chunkId?: string;
   url?: string;
   startTimeSeconds?: number;
   endTimeSeconds?: number;
+}
+
+export interface EvidenceSpan {
+  sourceId: string;
+  chunkId: string;
+  quote: string;
+  startTimeSeconds?: number;
+  endTimeSeconds?: number;
+}
+
+export interface SourceClaim {
+  id: string;
+  postId: string;
+  fieldPath: string;
+  kind: SourceClaimKind;
+  claim: string;
+  evidence: EvidenceSpan[];
 }
 
 export interface KnowledgeCard {
@@ -273,6 +329,7 @@ export interface AgentHarnessRunInput {
   id?: string;
   source: Source;
   chunks: KnowledgeChunk[];
+  sourceRegistry?: SourceRegistry;
   createdAt?: string;
   recommendedBecause?: string;
   config?: AgentHarnessConfig;
@@ -285,10 +342,28 @@ export interface HarnessValidationIssue {
   severity: HarnessValidationSeverity;
 }
 
+export interface GroundingClaimCheck {
+  claimId: string;
+  fieldPath: string;
+  kind: SourceClaimKind;
+  status: GroundingCheckStatus;
+  evidenceChunkIds: string[];
+  overlapScore: number;
+  reason: string;
+}
+
+export interface GroundingCheck {
+  postId: string;
+  valid: boolean;
+  checks: GroundingClaimCheck[];
+  issues: HarnessValidationIssue[];
+}
+
 export interface HarnessValidationResult {
   postId?: string;
   valid: boolean;
   issues: HarnessValidationIssue[];
+  grounding?: GroundingCheck;
 }
 
 export interface AgentHarnessRun {
@@ -300,6 +375,7 @@ export interface AgentHarnessRun {
   status: AgentHarnessRunStatus;
   createdAt: string;
   completedAt: string;
+  sourceSnapshotIds: string[];
   inputChunkIds: string[];
   outputPostIds: string[];
   validation: HarnessValidationResult[];
@@ -309,6 +385,7 @@ export interface AgentHarnessRunResult {
   run: AgentHarnessRun;
   posts: KnowledgePost[];
   validation: HarnessValidationResult[];
+  sourceRegistry?: SourceRegistry;
 }
 
 export interface KnowledgePostAgentRunner {

@@ -10,6 +10,8 @@ Core rules:
 5. Extract concepts and graph edges so the post can connect to memory.
 6. Generate review prompts so the post can return later.
 7. Recommend next actions based on whether the user should go deeper, broader, simpler, review, or cool down.
+8. Treat source facts, interpretations, examples, and questions differently.
+9. Do not present a source fact unless it can be supported by a cited chunk.
 
 Output contract:
 - title: concise and high-signal
@@ -31,6 +33,6 @@ Avoid:
 - empty hype
 - social-media outrage
 - unverifiable claims
+- unsupported source facts
 - overlong posts
 - hiding source provenance`;
-

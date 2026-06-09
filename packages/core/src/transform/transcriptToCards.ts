@@ -1,5 +1,14 @@
 import { runDeterministicAgentHarness } from "../harness/runner";
-import type { AgentHarnessRun, HarnessValidationResult, KnowledgeChunk, KnowledgePost, Source } from "../types";
+import { createSourceRegistry } from "../source/sourceRegistry";
+import type {
+  AgentHarnessRun,
+  HarnessValidationResult,
+  KnowledgeChunk,
+  KnowledgePost,
+  Source,
+  SourceAsset,
+  SourceRegistry
+} from "../types";
 
 export interface TranscriptSegment {
   startTimeSeconds: number;
@@ -11,6 +20,7 @@ export interface TranscriptTransformResult {
   source: Source;
   chunks: KnowledgeChunk[];
   cards: KnowledgePost[];
+  sourceRegistry: SourceRegistry;
   harnessRun: AgentHarnessRun;
   validation: HarnessValidationResult[];
 }
@@ -18,6 +28,7 @@ export interface TranscriptTransformResult {
 export interface TranscriptTransformOptions {
   createdAt?: string;
   recommendedBecause?: string;
+  asset?: SourceAsset;
 }
 
 export function transformTranscriptToCards(
@@ -36,14 +47,29 @@ export function transformTranscriptToCards(
     conceptHints: extractConcepts(segment.text)
   }));
 
+  const sourceRegistry = createSourceRegistry({
+    sources: [source],
+    assets: options.asset ? [options.asset] : [],
+    chunks,
+    createdAt
+  });
+
   const harnessResult = runDeterministicAgentHarness({
     source,
     chunks,
+    sourceRegistry,
     createdAt,
     recommendedBecause: options.recommendedBecause
   });
 
-  return { source, chunks, cards: harnessResult.posts, harnessRun: harnessResult.run, validation: harnessResult.validation };
+  return {
+    source,
+    chunks,
+    cards: harnessResult.posts,
+    sourceRegistry,
+    harnessRun: harnessResult.run,
+    validation: harnessResult.validation
+  };
 }
 
 function extractConcepts(text: string): string[] {

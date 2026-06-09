@@ -6,9 +6,11 @@
 flowchart LR
   Sources["Sources\nYouTube / Web / Paper / Blog / Manual"] --> Agent["Agent Runtime"]
   Agent --> Normalize["Normalize + Deduplicate"]
-  Normalize --> Extract["Chunk + Concept Extract"]
-  Extract --> Harness["Agent Harness\nRunner + Schema Validation"]
-  Harness --> Rank["Personal Ranker"]
+  Normalize --> Registry["Source Registry\nsnapshots + hashes"]
+  Registry --> Extract["Chunk + Concept Extract"]
+  Extract --> Harness["Agent Harness\nRunner + Validation"]
+  Harness --> Grounding["Grounding Gate"]
+  Grounding --> Rank["Personal Ranker"]
   Rank --> Timeline["Knowledge Timeline"]
   Timeline --> Signals["Likes / Saves / Questions"]
   Signals --> Feedback["Feedback Policy"]
@@ -26,8 +28,9 @@ flowchart LR
 
 - content and knowledge card types
 - source, asset, chunk and citation types
+- source registry, snapshots, hashes and chunk versions
 - source and agent interfaces
-- harness run, runner and validation contracts
+- harness run, runner, grounding and validation contracts
 - feedback expansion policy
 - ranking primitives
 - knowledge graph extraction
@@ -66,9 +69,10 @@ The first supported flow should be:
 
 1. User imports a YouTube URL.
 2. The system extracts metadata and transcript.
-3. The agent chunks the transcript into timestamped knowledge units.
-4. The harness runner creates timeline-native knowledge posts with citations.
-5. The harness validates post schema and policy before accepting output.
-6. The cards enter ranking, graph and review systems.
+3. The system registers source assets as snapshots with content hashes.
+4. The agent chunks the transcript into timestamped knowledge units.
+5. The harness runner creates timeline-native knowledge posts with citations.
+6. The harness validates post schema, policy and grounding before accepting output.
+7. The cards enter ranking, graph and review systems.
 
 The important product rule: transformed knowledge should not stay trapped in a source page. It should reappear in the user's timeline when it is useful.

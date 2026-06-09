@@ -157,10 +157,11 @@ Open-core boundary:
 
 1. Add dwell-time and viewport-based impression tracking.
 2. Add a model-backed `KnowledgePostAgentRunner` behind the harness interface.
-3. Use validation failures to repair model output before accepting posts.
+3. Use grounding failures to repair model output before accepting posts.
 4. Persist `AgentExpansionPlan` jobs and execute follow-up generation.
-5. Add real YouTube transcript extraction behind the existing mock interface.
-6. Add article URL import.
-7. Add better post clustering so one long source does not flood the feed.
-8. Add user-editable memory controls.
-9. Add a lightweight backend persistence layer.
+5. Persist `SourceRegistry` records outside local storage.
+6. Add real YouTube transcript extraction behind the existing mock interface.
+7. Add article URL import.
+8. Add better post clustering so one long source does not flood the feed.
+9. Add user-editable memory controls.
+10. Add a lightweight backend persistence layer.

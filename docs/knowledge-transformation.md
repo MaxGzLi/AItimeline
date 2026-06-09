@@ -16,9 +16,11 @@ AITimeline 应该做的不是简单总结视频，而是把它变成一组可以
 flowchart LR
   URL["User pastes URL"] --> Fetch["Fetch metadata + content"]
   Fetch --> Extract["Extract transcript / text / assets"]
-  Extract --> Chunk["Chunk into knowledge units"]
+  Extract --> Registry["Source registry\nsnapshot + hash"]
+  Registry --> Chunk["Chunk into knowledge units"]
   Chunk --> Analyze["Agent analysis"]
-  Analyze --> Cards["Knowledge cards"]
+  Analyze --> Grounding["Grounding gate"]
+  Grounding --> Cards["Knowledge cards"]
   Analyze --> Concepts["Concept nodes"]
   Analyze --> Questions["Suggested questions"]
   Cards --> Timeline["Timeline"]
@@ -85,6 +87,8 @@ So the product should support:
 - source-grounded answers
 - citations
 - timestamp backlinks
+- source snapshots and content hashes
+- claim-level grounding checks
 - "show me where this came from"
 - "turn this part into a review card"
 - "connect this to what I already know"
@@ -93,6 +97,7 @@ So the product should support:
 
 - Never hide the source.
 - Separate facts, interpretations and open questions.
+- Reject source facts that cannot be grounded in registered chunks.
 - Prefer multiple small cards over one huge summary.
 - Extract concepts with stable names.
 - Mark uncertain or contested claims.
@@ -118,6 +123,15 @@ type SourceAsset = {
   content: string;
 };
 
+type SourceSnapshot = {
+  id: string;
+  sourceId: string;
+  assetId?: string;
+  version: number;
+  contentHash: string;
+  contentLength: number;
+};
+
 type KnowledgeChunk = {
   id: string;
   sourceId: string;
@@ -132,6 +146,16 @@ type Citation = {
   startTimeSeconds?: number;
   endTimeSeconds?: number;
   url?: string;
+};
+
+type GroundingCheck = {
+  postId: string;
+  valid: boolean;
+  checks: Array<{
+    fieldPath: string;
+    status: "passed" | "warning" | "failed";
+    overlapScore: number;
+  }>;
 };
 ```
 
@@ -152,5 +176,7 @@ This lets us test the product loop before fighting API limits, transcript availa
 Current status:
 
 - Steps 1 to 7 are implemented as a mocked Web prototype.
+- The core now creates a source registry with source snapshots, content hashes, chunks and chunk versions.
+- Harness validation now includes schema checks, policy checks and a first grounding gate.
 - The prototype persists imported cards, source records, transcript chunks and AI threads in local storage.
 - Real transcript extraction is intentionally deferred until the import loop feels useful.

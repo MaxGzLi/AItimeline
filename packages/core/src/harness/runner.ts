@@ -1,5 +1,7 @@
 import { createKnowledgePost, harnessVersion } from "./postHarness";
+import { validateGrounding } from "./groundingGate";
 import { validateKnowledgePost, validateKnowledgePosts } from "./schema";
+import { createSourceRegistry } from "../source/sourceRegistry";
 import type {
   AgentHarnessConfig,
   AgentHarnessRunInput,
@@ -7,7 +9,8 @@ import type {
   HarnessValidationIssue,
   HarnessValidationResult,
   KnowledgePost,
-  KnowledgePostAgentRunner
+  KnowledgePostAgentRunner,
+  SourceRegistry
 } from "../types";
 
 export type AgentHarnessConfigOverrides = Partial<Omit<AgentHarnessConfig, "threadPolicy" | "graphPolicy" | "reviewPolicy">> & {
@@ -53,6 +56,13 @@ export function runDeterministicAgentHarness(input: AgentHarnessRunInput): Agent
   const createdAt = input.createdAt ?? new Date().toISOString();
   const config = input.config ?? defaultAgentHarnessConfig;
   const chunks = input.chunks.slice(0, config.maxPostsPerRun);
+  const sourceRegistry =
+    input.sourceRegistry ??
+    createSourceRegistry({
+      sources: [input.source],
+      chunks,
+      createdAt
+    });
   const recommendedBecause =
     input.recommendedBecause ?? "This source was imported and converted into timeline-ready knowledge.";
   const posts = chunks.map((chunk, index) =>
@@ -64,7 +74,7 @@ export function runDeterministicAgentHarness(input: AgentHarnessRunInput): Agent
       recommendedBecause
     })
   );
-  const validation = validateHarnessPosts(posts, config);
+  const validation = validateHarnessPosts(posts, config, sourceRegistry);
   const status = validation.some((result) => result.issues.some((issue) => issue.severity === "error"))
     ? "failed"
     : "succeeded";
@@ -79,12 +89,14 @@ export function runDeterministicAgentHarness(input: AgentHarnessRunInput): Agent
       status,
       createdAt,
       completedAt: new Date().toISOString(),
+      sourceSnapshotIds: sourceRegistry.snapshots.map((snapshot) => snapshot.id),
       inputChunkIds: chunks.map((chunk) => chunk.id),
       outputPostIds: posts.map((post) => post.id),
       validation
     },
     posts,
-    validation
+    validation,
+    sourceRegistry
   };
 }
 
@@ -109,7 +121,8 @@ export function createAgentHarnessConfig(overrides: AgentHarnessConfigOverrides 
 
 export function validateHarnessPosts(
   posts: readonly KnowledgePost[],
-  config: AgentHarnessConfig = defaultAgentHarnessConfig
+  config: AgentHarnessConfig = defaultAgentHarnessConfig,
+  sourceRegistry?: SourceRegistry
 ): HarnessValidationResult[] {
   return validateKnowledgePosts(posts).map((result, index) => {
     const post = posts[index];
@@ -119,11 +132,17 @@ export function validateHarnessPosts(
     }
 
     const policyIssues = validatePostPolicies(post, config);
+    const grounding = sourceRegistry ? validateGrounding(post, sourceRegistry) : undefined;
+    const groundingIssues = grounding?.issues ?? [];
 
     return {
       ...result,
-      valid: result.valid && !policyIssues.some((issue) => issue.severity === "error"),
-      issues: [...result.issues, ...policyIssues]
+      valid:
+        result.valid &&
+        !policyIssues.some((issue) => issue.severity === "error") &&
+        !groundingIssues.some((issue) => issue.severity === "error"),
+      issues: [...result.issues, ...policyIssues, ...groundingIssues],
+      grounding
     };
   });
 }
