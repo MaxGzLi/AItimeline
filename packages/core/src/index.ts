@@ -1,6 +1,7 @@
 export * from "./agents/researchAgent";
 export * from "./fixtures";
 export * from "./graph/knowledgeGraph";
+export * from "./harness/expansionPolicy";
 export * from "./harness/feedbackPolicy";
 export * from "./harness/postHarness";
 export * from "./harness/runner";

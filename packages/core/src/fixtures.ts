@@ -1,4 +1,6 @@
-import type { KnowledgeCard, UserProfile, UserSignal } from "./types";
+import { createExpansionPlan } from "./harness/expansionPolicy";
+import { evaluateInteraction } from "./harness/feedbackPolicy";
+import type { InteractionSignal, KnowledgeCard, TopicState, UserProfile, UserSignal } from "./types";
 
 export const demoProfile: UserProfile = {
   interests: ["AI Agent", "RAG", "Product Strategy"],
@@ -236,3 +238,88 @@ export const demoSignals: UserSignal[] = [
     createdAt: "2026-06-08T04:10:00.000Z"
   }
 ];
+
+export const demoInteractionSignals: InteractionSignal[] = [
+  {
+    postId: "agent-memory-layers",
+    topicId: "ai-agent",
+    conceptIds: ["AI Agent", "Memory", "Evaluation"],
+    impression: true,
+    dwellTimeMs: 11800,
+    openedThread: true,
+    liked: false,
+    saved: true,
+    askedQuestion: false,
+    reviewed: false,
+    skippedQuickly: false,
+    createdAt: "2026-06-08T05:00:00.000Z"
+  },
+  {
+    postId: "rag-evaluation-loop",
+    topicId: "rag",
+    conceptIds: ["RAG", "Evaluation", "Vector Search"],
+    impression: true,
+    dwellTimeMs: 14200,
+    openedThread: true,
+    liked: true,
+    saved: false,
+    askedQuestion: false,
+    reviewed: false,
+    skippedQuickly: false,
+    createdAt: "2026-06-08T05:05:00.000Z"
+  },
+  {
+    postId: "knowledge-feed-product-loop",
+    topicId: "product-strategy",
+    conceptIds: ["Product Strategy", "Knowledge Graph", "Personalization"],
+    impression: true,
+    dwellTimeMs: 700,
+    openedThread: false,
+    liked: false,
+    saved: false,
+    askedQuestion: false,
+    reviewed: false,
+    skippedQuickly: true,
+    createdAt: "2026-06-08T05:10:00.000Z"
+  }
+];
+
+export const demoTopicStates: TopicState[] = [
+  {
+    topicId: "ai-agent",
+    interestScore: 0.78,
+    fatigueScore: 0.08,
+    comprehensionScore: 0.58
+  },
+  {
+    topicId: "rag",
+    interestScore: 0.86,
+    fatigueScore: 0.05,
+    comprehensionScore: 0.76
+  },
+  {
+    topicId: "product-strategy",
+    interestScore: 0.42,
+    fatigueScore: 0.82,
+    comprehensionScore: 0.64
+  }
+];
+
+export const demoLearningFeedback = demoInteractionSignals.map((signal) =>
+  evaluateInteraction(
+    signal,
+    demoTopicStates.find((topicState) => topicState.topicId === signal.topicId) ?? {
+      topicId: signal.topicId,
+      interestScore: 0,
+      fatigueScore: 0,
+      comprehensionScore: 0
+    }
+  )
+);
+
+export const demoExpansionPlan = createExpansionPlan({
+  signals: demoInteractionSignals,
+  feedback: demoLearningFeedback,
+  topicStates: demoTopicStates,
+  generatedAt: "2026-06-08T06:00:00.000Z"
+});

@@ -49,6 +49,8 @@ export type AgentHarnessRunStatus = "succeeded" | "failed";
 
 export type HarnessValidationSeverity = "error" | "warning";
 
+export type ExpansionJobKind = "generate_followup" | "schedule_review" | "cooldown_topic" | "ask_clarifying_question";
+
 export type InferredLearningState =
   | "interested"
   | "confused"
@@ -205,6 +207,40 @@ export interface LearningFeedback {
   inferredState: InferredLearningState;
   nextAction: NextActionPolicy;
   reason: string;
+}
+
+export interface AgentExpansionPolicyConfig {
+  noInteractionDwellTimeMs: number;
+  softInterestDwellTimeMs: number;
+  cooldownHours: number;
+  maxJobsPerTopic: number;
+}
+
+export interface AgentExpansionJob {
+  id: string;
+  kind: ExpansionJobKind;
+  postId: string;
+  topicId: string;
+  conceptIds: string[];
+  nextAction: NextActionPolicy;
+  priority: number;
+  reason: string;
+  createdAt: string;
+  runAfter?: string;
+  cooldownUntil?: string;
+}
+
+export interface AgentExpansionSuppression {
+  postId: string;
+  topicId: string;
+  reason: string;
+}
+
+export interface AgentExpansionPlan {
+  generatedAt: string;
+  jobs: AgentExpansionJob[];
+  suppressions: AgentExpansionSuppression[];
+  cooledTopicIds: string[];
 }
 
 export interface AgentHarnessConfig {

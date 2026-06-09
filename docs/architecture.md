@@ -11,8 +11,11 @@ flowchart LR
   Harness --> Rank["Personal Ranker"]
   Rank --> Timeline["Knowledge Timeline"]
   Timeline --> Signals["Likes / Saves / Questions"]
+  Signals --> Feedback["Feedback Policy"]
+  Feedback --> Expansion["Expansion Queue"]
   Signals --> Graph["Knowledge Graph"]
   Signals --> Review["Review Queue"]
+  Expansion --> Harness
   Graph --> Rank
   Review --> Timeline
 ```
@@ -25,6 +28,7 @@ flowchart LR
 - source, asset, chunk and citation types
 - source and agent interfaces
 - harness run, runner and validation contracts
+- feedback expansion policy
 - ranking primitives
 - knowledge graph extraction
 - review scheduling

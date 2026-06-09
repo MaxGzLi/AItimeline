@@ -26,6 +26,7 @@ Code locations:
 
 - [packages/core/src/types.ts](../packages/core/src/types.ts)
 - [packages/core/src/harness/systemPrompt.ts](../packages/core/src/harness/systemPrompt.ts)
+- [packages/core/src/harness/expansionPolicy.ts](../packages/core/src/harness/expansionPolicy.ts)
 - [packages/core/src/harness/postHarness.ts](../packages/core/src/harness/postHarness.ts)
 - [packages/core/src/harness/schema.ts](../packages/core/src/harness/schema.ts)
 - [packages/core/src/harness/runner.ts](../packages/core/src/harness/runner.ts)
@@ -43,6 +44,11 @@ flowchart TD
   Posts --> Validator["Schema + Policy Validation"]
   Validator --> Run["AgentHarnessRun"]
   Run --> Timeline["Timeline"]
+  Timeline --> Signals["InteractionSignal[]"]
+  Signals --> Feedback["LearningFeedback[]"]
+  Feedback --> Expansion["Expansion Policy"]
+  Expansion --> Queue["AgentExpansionPlan"]
+  Queue --> Run
   Run --> Graph["Graph / Review / Feedback"]
 ```
 
@@ -53,6 +59,7 @@ Main contracts:
 - `KnowledgePostAgentRunner`: shared interface for deterministic and future model-backed runners.
 - `AgentHarnessRunResult`: generated posts plus validation metadata.
 - `HarnessValidationResult`: schema and policy issues before posts enter timeline, graph, or review.
+- `AgentExpansionPlan`: follow-up jobs, suppressions, and cooled topics after interaction feedback.
 
 Current exported runners:
 
@@ -138,6 +145,14 @@ The harness should distinguish:
 - repeated skip in same topic: cool down
 - prior interest in related concepts: reframe before dropping
 
+The current expansion policy makes this explicit:
+
+- cold impression with short dwell: suppress the series
+- passive dwell below the soft-interest threshold: suppress the series
+- long dwell without explicit action: queue a low-confidence deeper follow-up
+- quick skip or high fatigue: queue topic cooldown
+- topic already cooling down: suppress passive impressions
+
 ## Positive-Interaction Rule
 
 Positive interaction decides expansion direction:
@@ -147,6 +162,13 @@ Positive interaction decides expansion direction:
 - Ask: continue deeper or reframe simpler depending on the question.
 - Thread dwell: continue the series, but vary depth and examples.
 - Review completion: increase mastery and introduce the next concept.
+
+The expansion job kinds are:
+
+- `generate_followup`
+- `schedule_review`
+- `cooldown_topic`
+- `ask_clarifying_question`
 
 ## Current Implementation
 
@@ -161,6 +183,7 @@ The current MVP uses a deterministic runner behind the same harness interface th
 7. The Web app displays the post fields in the timeline and source detail drawer.
 8. The Web app records lightweight interaction signals: impression, thread open, like, save, ask, and skip.
 9. Signals are evaluated with `evaluateInteraction` and shown as feedback state plus next action.
+10. `createExpansionPlan` turns recent signals and feedback into follow-up jobs, review jobs, suppressions, and topic cooldowns.
 
 This is intentionally deterministic. The next step is to add a model-backed runner while keeping the same schema and validation gate.
 
@@ -169,5 +192,5 @@ This is intentionally deterministic. The next step is to add a model-backed runn
 1. Add dwell-time and viewport-based impression tracking instead of only action-based signals.
 2. Add a model-backed `KnowledgePostAgentRunner` that takes source chunks and returns `KnowledgePost`.
 3. Use validation failures to ask the model for repair before accepting a post.
-4. Use the resulting `nextAction` to generate follow-up posts.
-5. Add a topic-level cooldown and expansion queue.
+4. Use `AgentExpansionPlan` jobs to trigger follow-up generation.
+5. Persist topic cooldowns and expansion queue state.
