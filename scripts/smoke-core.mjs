@@ -6,6 +6,9 @@ const { createPersistentBackgroundCurationJobStore, runDueBackgroundCurationJobs
 );
 const { createModelKnowledgePostRunner } = await import("../packages/core/dist/harness/modelRunner.js");
 const { evaluateInteraction } = await import("../packages/core/dist/harness/feedbackPolicy.js");
+const { applyUserMemoryEdits, createEmptyUserMemory } = await import(
+  "../packages/core/dist/memory/userMemoryControls.js"
+);
 const { createOpenAICompatibleModelClient, createOpenAICompatibleModelClientFromEnv } = await import(
   "../packages/core/dist/model/openaiCompatibleClient.js"
 );
@@ -145,6 +148,37 @@ assert.equal(
   "2026-06-10T00:30:00.000Z",
   "release plan should stagger queued posts"
 );
+
+const memoryEditResult = applyUserMemoryEdits(
+  createEmptyUserMemory(),
+  [
+    { kind: "add", field: "profile.interests", value: "AI Agents" },
+    { kind: "add", field: "knowledge.weakConcepts", value: "RAG" },
+    { kind: "add", field: "knowledge.knownConcepts", value: "RAG" },
+    { kind: "set", field: "profile.explanationStyle", value: "example-first" },
+    { kind: "add", field: "agent.preferredSourceTypes", value: "article" }
+  ],
+  "2026-06-10T00:00:00.000Z"
+);
+
+assert.deepEqual(memoryEditResult.memory.profile.interests, ["AI Agents"], "memory edits should add interests");
+assert.deepEqual(memoryEditResult.memory.knowledge.knownConcepts, ["RAG"], "memory edits should add known concepts");
+assert.deepEqual(
+  memoryEditResult.memory.knowledge.weakConcepts,
+  [],
+  "known concepts should be removed from weak concepts"
+);
+assert.equal(
+  memoryEditResult.memory.profile.explanationStyle,
+  "example-first",
+  "memory edits should set explanation style"
+);
+assert.deepEqual(
+  memoryEditResult.memory.agent.preferredSourceTypes,
+  ["article"],
+  "memory edits should set preferred source types"
+);
+assert.equal(memoryEditResult.events.length, 5, "memory edits should produce audit events");
 
 for (const validation of result.validation) {
   assert.equal(validation.valid, true, `${validation.postId} should pass harness validation`);
@@ -583,6 +617,11 @@ console.log(
       releasePlan: {
         immediate: releasePlan.immediatePostIds.length,
         queued: releasePlan.queuedPostIds.length
+      },
+      memoryControls: {
+        interests: memoryEditResult.memory.profile.interests.length,
+        knownConcepts: memoryEditResult.memory.knowledge.knownConcepts.length,
+        events: memoryEditResult.events.length
       },
       backgroundCuration: {
         interestedJobs: backgroundPlan.jobs.map((job) => job.kind),

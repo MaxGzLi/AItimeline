@@ -11,6 +11,7 @@ export * from "./harness/postHarness.js";
 export * from "./harness/runner.js";
 export * from "./harness/schema.js";
 export * from "./harness/systemPrompt.js";
+export * from "./memory/userMemoryControls.js";
 export * from "./model/openaiCompatibleClient.js";
 export * from "./ranking/postReleasePlan.js";
 export * from "./ranking/ranker.js";

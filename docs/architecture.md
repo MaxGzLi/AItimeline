@@ -44,6 +44,7 @@ flowchart LR
 - background curation planning
 - background curation job queue and executor
 - source post release pacing
+- user-editable memory controls with audit events
 - ranking primitives
 - knowledge graph extraction
 - review scheduling
