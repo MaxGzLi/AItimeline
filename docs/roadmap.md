@@ -159,6 +159,5 @@ Open-core boundary:
 2. Persist `SourceImport`, `SourceRegistry`, `AgentHarnessRun` and validation records outside local storage.
 3. Use model repair outcomes to tune the source grounding prompts.
 4. Wire `createPersistentBackgroundCurationJobStore` to the hosted backend database or queue.
-5. Add better post clustering so one long source does not flood the feed.
-6. Add user-editable memory controls.
-7. Add a lightweight backend persistence layer.
+5. Add user-editable memory controls.
+6. Add a lightweight backend persistence layer.

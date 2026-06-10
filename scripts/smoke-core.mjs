@@ -9,6 +9,7 @@ const { evaluateInteraction } = await import("../packages/core/dist/harness/feed
 const { createOpenAICompatibleModelClient, createOpenAICompatibleModelClientFromEnv } = await import(
   "../packages/core/dist/model/openaiCompatibleClient.js"
 );
+const { createSourcePostReleasePlan } = await import("../packages/core/dist/ranking/postReleasePlan.js");
 const { createOpenAICompatibleSourceImportWorker, createSourceImportWorker } = await import(
   "../packages/core/dist/source/sourceImportWorker.js"
 );
@@ -127,6 +128,23 @@ assert.equal(articleImport.source.title, "Learning agents need a timeline surfac
 assert.equal(articleImport.chunks.length, 2, "article import should create chunks from paragraphs");
 assert.equal(articleImport.cards.length, 2, "article import should create cards from chunks");
 assert.equal(articleImport.importRecord.status, "ready", "article import should be ready");
+
+const releasePlan = createSourcePostReleasePlan({
+  posts: result.cards,
+  generatedAt: "2026-06-10T00:00:00.000Z",
+  policy: {
+    maxImmediatePostsPerSource: 2,
+    minutesBetweenQueuedPosts: 30
+  }
+});
+
+assert.equal(releasePlan.immediatePostIds.length, 2, "release plan should allow only two immediate posts");
+assert.equal(releasePlan.queuedPostIds.length, 2, "release plan should queue extra source posts");
+assert.equal(
+  releasePlan.items.find((item) => item.status === "queued")?.releaseAt,
+  "2026-06-10T00:30:00.000Z",
+  "release plan should stagger queued posts"
+);
 
 for (const validation of result.validation) {
   assert.equal(validation.valid, true, `${validation.postId} should pass harness validation`);
@@ -561,6 +579,10 @@ console.log(
         title: articleImport.source.title,
         chunks: articleImport.chunks.length,
         cards: articleImport.cards.length
+      },
+      releasePlan: {
+        immediate: releasePlan.immediatePostIds.length,
+        queued: releasePlan.queuedPostIds.length
       },
       backgroundCuration: {
         interestedJobs: backgroundPlan.jobs.map((job) => job.kind),

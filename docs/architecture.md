@@ -12,7 +12,8 @@ flowchart LR
   Extract --> Harness["Agent Harness\nRunner + Validation"]
   Model["Model Client\nOpenAI-compatible / local"] --> Harness
   Harness --> Grounding["Grounding Gate"]
-  Grounding --> Rank["Personal Ranker"]
+  Grounding --> Release["Source Release Plan\nanti-flood pacing"]
+  Release --> Rank["Personal Ranker"]
   Rank --> Timeline["Knowledge Timeline"]
   Timeline --> Signals["Likes / Saves / Questions"]
   Signals --> Feedback["Feedback Policy"]
@@ -42,6 +43,7 @@ flowchart LR
 - feedback expansion policy
 - background curation planning
 - background curation job queue and executor
+- source post release pacing
 - ranking primitives
 - knowledge graph extraction
 - review scheduling
