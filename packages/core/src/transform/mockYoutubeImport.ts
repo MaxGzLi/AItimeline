@@ -1,9 +1,9 @@
-import type { Source, SourceAsset, SourceImport } from "../types";
+import type { Source, SourceAsset, SourceImport } from "../types.js";
 import {
   transformTranscriptToCards,
   type TranscriptSegment,
   type TranscriptTransformResult
-} from "./transcriptToCards";
+} from "./transcriptToCards.js";
 
 export interface MockYouTubeImportResult extends TranscriptTransformResult {
   asset: SourceAsset;

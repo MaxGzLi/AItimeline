@@ -1,4 +1,4 @@
-import type { ConceptEdge, ConceptNode, KnowledgeCard, KnowledgeGraph, UserSignal } from "../types";
+import type { ConceptEdge, ConceptNode, KnowledgeCard, KnowledgeGraph, UserSignal } from "../types.js";
 
 export function buildKnowledgeGraph(cards: KnowledgeCard[], signals: UserSignal[]): KnowledgeGraph {
   const activeCardIds = new Set(

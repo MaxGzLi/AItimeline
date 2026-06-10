@@ -5,7 +5,7 @@ import type {
   SourceChunkVersion,
   SourceRegistry,
   SourceSnapshot
-} from "../types";
+} from "../types.js";
 
 export interface CreateSourceRegistryInput {
   sources: Source[];

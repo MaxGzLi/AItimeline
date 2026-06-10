@@ -1,5 +1,5 @@
-import { runDeterministicAgentHarness } from "../harness/runner";
-import { createSourceRegistry } from "../source/sourceRegistry";
+import { runDeterministicAgentHarness } from "../harness/runner.js";
+import { createSourceRegistry } from "../source/sourceRegistry.js";
 import type {
   AgentHarnessRun,
   HarnessValidationResult,
@@ -8,7 +8,7 @@ import type {
   Source,
   SourceAsset,
   SourceRegistry
-} from "../types";
+} from "../types.js";
 
 export interface TranscriptSegment {
   startTimeSeconds: number;

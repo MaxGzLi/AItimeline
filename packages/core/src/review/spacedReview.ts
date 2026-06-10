@@ -1,4 +1,4 @@
-import type { KnowledgeCard, ReviewItem, UserSignal } from "../types";
+import type { KnowledgeCard, ReviewItem, UserSignal } from "../types.js";
 
 export function createReviewQueue(cards: KnowledgeCard[], signals: UserSignal[], now = new Date()): ReviewItem[] {
   const savedCardIds = new Set(

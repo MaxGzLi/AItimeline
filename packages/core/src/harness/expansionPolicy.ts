@@ -1,4 +1,4 @@
-import { scoreInteraction } from "./feedbackPolicy";
+import { scoreInteraction } from "./feedbackPolicy.js";
 import type {
   AgentExpansionJob,
   AgentExpansionPlan,
@@ -9,7 +9,7 @@ import type {
   LearningFeedback,
   NextActionPolicy,
   TopicState
-} from "../types";
+} from "../types.js";
 
 export interface CreateExpansionPlanInput {
   signals: InteractionSignal[];

@@ -9,7 +9,7 @@ import type {
   KnowledgeThreadBlock,
   NextActionPolicy,
   Source
-} from "../types";
+} from "../types.js";
 
 export interface KnowledgePostHarnessInput {
   source: Source;

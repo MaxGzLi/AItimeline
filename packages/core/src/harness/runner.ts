@@ -1,7 +1,7 @@
-import { createKnowledgePost, harnessVersion } from "./postHarness";
-import { validateGrounding } from "./groundingGate";
-import { validateKnowledgePost, validateKnowledgePosts } from "./schema";
-import { createSourceRegistry } from "../source/sourceRegistry";
+import { createKnowledgePost, harnessVersion } from "./postHarness.js";
+import { validateGrounding } from "./groundingGate.js";
+import { validateKnowledgePost, validateKnowledgePosts } from "./schema.js";
+import { createSourceRegistry } from "../source/sourceRegistry.js";
 import type {
   AgentHarnessConfig,
   AgentHarnessRunInput,
@@ -11,7 +11,7 @@ import type {
   KnowledgePost,
   KnowledgePostAgentRunner,
   SourceRegistry
-} from "../types";
+} from "../types.js";
 
 export type AgentHarnessConfigOverrides = Partial<Omit<AgentHarnessConfig, "threadPolicy" | "graphPolicy" | "reviewPolicy">> & {
   threadPolicy?: Partial<AgentHarnessConfig["threadPolicy"]>;

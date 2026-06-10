@@ -1,4 +1,4 @@
-import type { KnowledgeCard, Source } from "../types";
+import type { KnowledgeCard, Source } from "../types.js";
 
 export interface ResearchAgentConfig {
   id: string;

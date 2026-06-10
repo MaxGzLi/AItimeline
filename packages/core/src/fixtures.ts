@@ -1,6 +1,6 @@
-import { createExpansionPlan } from "./harness/expansionPolicy";
-import { evaluateInteraction } from "./harness/feedbackPolicy";
-import type { InteractionSignal, KnowledgeCard, TopicState, UserProfile, UserSignal } from "./types";
+import { createExpansionPlan } from "./harness/expansionPolicy.js";
+import { evaluateInteraction } from "./harness/feedbackPolicy.js";
+import type { InteractionSignal, KnowledgeCard, TopicState, UserProfile, UserSignal } from "./types.js";
 
 export const demoProfile: UserProfile = {
   interests: ["AI Agent", "RAG", "Product Strategy"],

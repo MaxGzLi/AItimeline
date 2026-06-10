@@ -1,4 +1,4 @@
-import type { KnowledgeCard, RankedKnowledgeCard, UserProfile } from "../types";
+import type { KnowledgeCard, RankedKnowledgeCard, UserProfile } from "../types.js";
 
 export function rankKnowledgeCards(
   cards: KnowledgeCard[],

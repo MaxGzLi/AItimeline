@@ -10,7 +10,7 @@ import type {
   SourceType,
   ThreadBlockKind,
   TrustState
-} from "../types";
+} from "../types.js";
 
 const trustStates = ["emerging", "supported", "contested"] as const satisfies readonly TrustState[];
 const difficulties = ["beginner", "intermediate", "advanced"] as const satisfies readonly KnowledgeDifficulty[];

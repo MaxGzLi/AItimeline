@@ -38,6 +38,16 @@ npm run dev
 
 Then open the local URL printed by Vite.
 
+## Verification
+
+```bash
+npm run typecheck
+npm run build
+npm run smoke:core
+```
+
+`smoke:core` builds `@aitimeline/core`, imports the compiled `dist` output in Node, runs the mocked YouTube transformation, and checks that generated posts include source registry and grounding validation data.
+
 ## Current MVP
 
 第一版先验证四件事：

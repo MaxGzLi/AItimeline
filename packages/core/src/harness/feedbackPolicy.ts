@@ -4,7 +4,7 @@ import type {
   LearningFeedback,
   NextActionPolicy,
   TopicState
-} from "../types";
+} from "../types.js";
 
 export function evaluateInteraction(signal: InteractionSignal, topicState: TopicState): LearningFeedback {
   const signalStrength = scoreInteraction(signal);

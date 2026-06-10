@@ -1,4 +1,4 @@
-import { getRegistryChunk, getRegistrySource } from "../source/sourceRegistry";
+import { getRegistryChunk, getRegistrySource } from "../source/sourceRegistry.js";
 import type {
   Citation,
   EvidenceSpan,
@@ -9,7 +9,7 @@ import type {
   SourceClaim,
   SourceClaimKind,
   SourceRegistry
-} from "../types";
+} from "../types.js";
 
 export interface GroundingGateOptions {
   minSourceFactOverlap: number;
