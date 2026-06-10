@@ -103,7 +103,7 @@ Source transformation is the bridge between a NotebookLM-like source workspace a
 The first supported flow should be:
 
 1. User imports a YouTube URL.
-2. The system extracts metadata and transcript.
+2. The system extracts metadata and transcript from exposed caption tracks when available.
 3. The system registers source assets as snapshots with content hashes.
 4. The source import worker chunks the transcript into timestamped knowledge units.
 5. A deterministic runner or model-backed runner creates timeline-native knowledge posts with citations.
@@ -112,3 +112,5 @@ The first supported flow should be:
 8. The cards enter ranking, graph and review systems.
 
 The important product rule: transformed knowledge should not stay trapped in a source page. It should reappear in the user's timeline when it is useful.
+
+The current YouTube importer fetches the watch page, reads `ytInitialPlayerResponse`, selects a transcript track by language preference, fetches timedtext as JSON, then turns segments into source assets and timestamped chunks. Videos without exposed caption tracks should fail clearly and use a fallback transcript provider later.

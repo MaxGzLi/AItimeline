@@ -18,4 +18,5 @@ export * from "./source/sourceImportWorker.js";
 export * from "./source/sourceRegistry.js";
 export * from "./transform/mockYoutubeImport.js";
 export * from "./transform/transcriptToCards.js";
+export * from "./transform/youtubeImport.js";
 export * from "./types.js";

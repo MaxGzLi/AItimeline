@@ -161,7 +161,7 @@ type GroundingCheck = {
 
 ## MVP Implementation Plan
 
-Start with a mocked pipeline before real YouTube API integration:
+Start with a mocked pipeline before real source integrations:
 
 1. Add source object types in `packages/core`.
 2. Add a transcript fixture.
@@ -171,7 +171,7 @@ Start with a mocked pipeline before real YouTube API integration:
 6. Inject generated cards into timeline.
 7. Add a source detail drawer with citations.
 
-This lets us test the product loop before fighting API limits, transcript availability and auth.
+This lets us test the product loop before fighting source availability, API limits and auth.
 
 Current status:
 
@@ -180,5 +180,6 @@ Current status:
 - Harness validation now includes schema checks, policy checks and a first grounding gate.
 - The core now includes a model-backed runner plus an OpenAI-compatible model client adapter for server-side import workers.
 - The core now includes a source import worker that returns `SourceImport`, registry, posts, harness run and validation artifacts.
+- The core now includes a real YouTube transcript fetcher for videos that expose caption tracks, plus a deterministic mock path for UI development.
 - The prototype persists imported cards, source records, transcript chunks and AI threads in local storage.
-- Real transcript extraction is intentionally deferred until the import loop feels useful.
+- Videos without exposed transcripts still need a fallback path such as user-uploaded transcript text or a hosted extraction provider.

@@ -13,6 +13,7 @@ const { createOpenAICompatibleSourceImportWorker, createSourceImportWorker } = a
   "../packages/core/dist/source/sourceImportWorker.js"
 );
 const { transformMockYouTubeUrl } = await import("../packages/core/dist/transform/mockYoutubeImport.js");
+const { transformYouTubeUrl } = await import("../packages/core/dist/transform/youtubeImport.js");
 
 const result = transformMockYouTubeUrl(
   "https://www.youtube.com/watch?v=aitimeline-demo",
@@ -23,6 +24,75 @@ assert.equal(result.harnessRun.status, "succeeded", "harness run should succeed"
 assert.equal(result.cards.length, 4, "mock import should produce four cards");
 assert.equal(result.sourceRegistry.snapshots.length, 1, "transcript asset should produce one source snapshot");
 assert.equal(result.sourceRegistry.chunks.length, 4, "mock transcript should produce four registered chunks");
+
+const fakePlayerResponse = {
+  videoDetails: {
+    title: "Real transcript smoke video",
+    author: "AITimeline Test Channel",
+    lengthSeconds: "180"
+  },
+  captions: {
+    playerCaptionsTracklistRenderer: {
+      captionTracks: [
+        {
+          baseUrl: "https://youtube.test/api/timedtext?v=real-demo",
+          languageCode: "en",
+          name: { simpleText: "English" }
+        }
+      ]
+    }
+  }
+};
+const youtubeImport = await transformYouTubeUrl("https://www.youtube.com/watch?v=real-demo", {
+  createdAt: "2026-06-10T00:00:00.000Z",
+  fetch: async (url) => {
+    const requestedUrl = String(url);
+
+    if (requestedUrl.includes("/watch")) {
+      return new Response(`<script>var ytInitialPlayerResponse = ${JSON.stringify(fakePlayerResponse)};</script>`, {
+        status: 200,
+        headers: { "content-type": "text/html" }
+      });
+    }
+
+    if (requestedUrl.includes("/api/timedtext")) {
+      return new Response(
+        JSON.stringify({
+          events: [
+            {
+              tStartMs: 0,
+              dDurationMs: 4200,
+              segs: [{ utf8: "AI Agent systems turn source material into durable knowledge with citations." }]
+            },
+            {
+              tStartMs: 4300,
+              dDurationMs: 5000,
+              segs: [
+                {
+                  utf8:
+                    "The timeline can use Memory and Knowledge Graph signals to recommend review and related ideas."
+                }
+              ]
+            }
+          ]
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        }
+      );
+    }
+
+    return new Response("not found", { status: 404 });
+  },
+  recommendedBecause: "Smoke test real YouTube transcript extraction."
+});
+
+assert.equal(youtubeImport.source.title, "Real transcript smoke video", "real YouTube import should read title");
+assert.equal(youtubeImport.track.languageCode, "en", "real YouTube import should select transcript language");
+assert.equal(youtubeImport.chunks.length, 2, "real YouTube import should create transcript chunks");
+assert.equal(youtubeImport.cards.length, 2, "real YouTube import should produce cards from transcript segments");
+assert.equal(youtubeImport.importRecord.status, "ready", "real YouTube import should be ready");
 
 for (const validation of result.validation) {
   assert.equal(validation.valid, true, `${validation.postId} should pass harness validation`);
@@ -446,6 +516,12 @@ console.log(
         deterministicStatus: deterministicImport.importRecord.status,
         modelStatus: modelImport.importRecord.status,
         failureStatus: failedImport.importRecord.status
+      },
+      youtubeImport: {
+        title: youtubeImport.source.title,
+        chunks: youtubeImport.chunks.length,
+        cards: youtubeImport.cards.length,
+        track: youtubeImport.track.languageCode
       },
       backgroundCuration: {
         interestedJobs: backgroundPlan.jobs.map((job) => job.kind),
