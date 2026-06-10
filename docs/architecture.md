@@ -5,6 +5,10 @@
 ```mermaid
 flowchart LR
   Sources["Sources\nYouTube / Web / Paper / Blog / Manual"] --> Agent["Agent Runtime"]
+  API["Local API\nimports + signals + jobs"] --> Worker
+  Timeline --> API
+  API --> Signals
+  API --> JobStore
   Agent --> Worker["Source Import Worker"]
   Worker --> Normalize["Normalize + Deduplicate"]
   Normalize --> Registry["Source Registry\nsnapshots + hashes"]
@@ -61,6 +65,19 @@ The core should stay UI-agnostic and storage-agnostic so it can be reused by a C
 - card-level AI actions
 - graph and review side rail
 - pricing and entitlement hooks later
+
+## Local API
+
+`apps/api` is the MVP server surface that turns the portable core into a runnable local product loop:
+
+- `POST /api/import/article` and `POST /api/import/youtube` transform sources into timeline posts.
+- `GET /api/timeline` returns posts that are released now, while release plans keep long sources from flooding the feed.
+- `POST /api/signals` converts likes, saves, thread opens, questions and short dwell into feedback and background curation jobs.
+- `POST /api/curation/run` executes due jobs, including packaging related source candidates into new posts.
+- `POST /api/memory` applies user-visible memory edits with audit events.
+- `GET /api/snapshot` exposes the local JSON persistence snapshot for debugging.
+
+The API writes local JSON snapshots through storage adapters. This is intentionally small: it gives the Web app and future workers a contract without forcing the open-core package to depend on a hosted database.
 
 ## Future Services
 

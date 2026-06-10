@@ -15,6 +15,7 @@ AITimeline 是一个 open-core AI 知识流项目：开源部分负责 agent 工
 ## Repo Shape
 
 ```text
+apps/api          Local MVP API and background worker surface
 apps/web          Hosted App 的 Web 原型
 packages/core    可开源的知识流内核
 docs             产品、商业、架构和上线策略
@@ -38,6 +39,14 @@ npm run dev
 
 Then open the local URL printed by Vite.
 
+Run the local API/worker surface separately when testing source ingestion and background curation:
+
+```bash
+npm run dev:api
+```
+
+The API listens on `http://127.0.0.1:8787` by default and stores local JSON snapshots under `apps/api/data/` unless `AITIMELINE_DATA_PATH` or `AITIMELINE_CURATION_DATA_PATH` is set.
+
 ## Model Client
 
 The core package includes a server-side source import worker and an OpenAI-compatible model client adapter. The worker can run deterministic transforms or call any provider that exposes a compatible `/v1/chat/completions` endpoint, then feed the JSON response into the harness repair and grounding gates.
@@ -58,9 +67,12 @@ Do not call model providers directly from the browser with a user or product API
 npm run typecheck
 npm run build
 npm run smoke:core
+npm run smoke:api
 ```
 
 `smoke:core` builds `@aitimeline/core`, imports the compiled `dist` output in Node, and checks source import, YouTube transcript import, article import, model repair, grounding validation and background curation execution.
+
+`smoke:api` starts the local API on a temporary port and checks article import, timeline reads, memory edits, interaction signals, queued curation jobs and background source import persistence.
 
 ## Current MVP
 
@@ -72,6 +84,8 @@ npm run smoke:core
 4. 复习提醒是否让用户感到自己真的在变聪明。
 
 The current prototype also includes a mocked YouTube import flow: paste a YouTube URL, simulate transcript extraction, convert transcript segments into cited knowledge cards, insert those cards into the ranked timeline, inspect source citations, ask source-grounded AI questions, and keep the imported state in local storage.
+
+The local API now exposes the first backend loop: import article or YouTube sources, persist source artifacts and release plans, record interaction signals, update editable user memory, enqueue background curation jobs and run due source imports.
 
 ## Next Planning Docs
 
