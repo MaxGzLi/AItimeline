@@ -181,5 +181,6 @@ Current status:
 - The core now includes a model-backed runner plus an OpenAI-compatible model client adapter for server-side import workers.
 - The core now includes a source import worker that returns `SourceImport`, registry, posts, harness run and validation artifacts.
 - The core now includes a real YouTube transcript fetcher for videos that expose caption tracks, plus a deterministic mock path for UI development.
+- The core now includes an article URL importer that extracts metadata and readable paragraphs into text assets, chunks and cards.
 - The prototype persists imported cards, source records, transcript chunks and AI threads in local storage.
 - Videos without exposed transcripts still need a fallback path such as user-uploaded transcript text or a hosted extraction provider.

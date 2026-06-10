@@ -12,6 +12,7 @@ const { createOpenAICompatibleModelClient, createOpenAICompatibleModelClientFrom
 const { createOpenAICompatibleSourceImportWorker, createSourceImportWorker } = await import(
   "../packages/core/dist/source/sourceImportWorker.js"
 );
+const { transformArticleUrl } = await import("../packages/core/dist/transform/articleImport.js");
 const { transformMockYouTubeUrl } = await import("../packages/core/dist/transform/mockYoutubeImport.js");
 const { transformYouTubeUrl } = await import("../packages/core/dist/transform/youtubeImport.js");
 
@@ -93,6 +94,39 @@ assert.equal(youtubeImport.track.languageCode, "en", "real YouTube import should
 assert.equal(youtubeImport.chunks.length, 2, "real YouTube import should create transcript chunks");
 assert.equal(youtubeImport.cards.length, 2, "real YouTube import should produce cards from transcript segments");
 assert.equal(youtubeImport.importRecord.status, "ready", "real YouTube import should be ready");
+
+const articleImport = await transformArticleUrl("https://example.com/learning-agent-timeline", {
+  createdAt: "2026-06-10T00:00:00.000Z",
+  fetch: async () =>
+    new Response(
+      `
+        <html>
+          <head>
+            <meta property="og:title" content="Learning agents need a timeline surface" />
+            <meta name="author" content="AITimeline Research" />
+            <meta property="article:published_time" content="2026-06-09T00:00:00.000Z" />
+          </head>
+          <body>
+            <article>
+              <p>An AI Agent can turn source material into durable knowledge when it keeps citations, extracts concepts, and creates a learning surface that users can revisit.</p>
+              <p>A Knowledge Graph helps Memory become useful because saved concepts, weak concepts, and Recommendation signals can point the user toward review at the right time.</p>
+            </article>
+          </body>
+        </html>
+      `,
+      {
+        status: 200,
+        headers: { "content-type": "text/html" }
+      }
+    ),
+  recommendedBecause: "Smoke test article import."
+});
+
+assert.equal(articleImport.source.type, "article", "article import should create an article source");
+assert.equal(articleImport.source.title, "Learning agents need a timeline surface", "article import should read title");
+assert.equal(articleImport.chunks.length, 2, "article import should create chunks from paragraphs");
+assert.equal(articleImport.cards.length, 2, "article import should create cards from chunks");
+assert.equal(articleImport.importRecord.status, "ready", "article import should be ready");
 
 for (const validation of result.validation) {
   assert.equal(validation.valid, true, `${validation.postId} should pass harness validation`);
@@ -522,6 +556,11 @@ console.log(
         chunks: youtubeImport.chunks.length,
         cards: youtubeImport.cards.length,
         track: youtubeImport.track.languageCode
+      },
+      articleImport: {
+        title: articleImport.source.title,
+        chunks: articleImport.chunks.length,
+        cards: articleImport.cards.length
       },
       backgroundCuration: {
         interestedJobs: backgroundPlan.jobs.map((job) => job.kind),

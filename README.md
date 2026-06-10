@@ -60,7 +60,7 @@ npm run build
 npm run smoke:core
 ```
 
-`smoke:core` builds `@aitimeline/core`, imports the compiled `dist` output in Node, runs the mocked YouTube transformation, and checks that generated posts include source registry and grounding validation data.
+`smoke:core` builds `@aitimeline/core`, imports the compiled `dist` output in Node, and checks source import, YouTube transcript import, article import, model repair, grounding validation and background curation execution.
 
 ## Current MVP
 
