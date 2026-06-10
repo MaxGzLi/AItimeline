@@ -16,6 +16,7 @@ const { createSourcePostReleasePlan } = await import("../packages/core/dist/rank
 const { createOpenAICompatibleSourceImportWorker, createSourceImportWorker } = await import(
   "../packages/core/dist/source/sourceImportWorker.js"
 );
+const { createAITimelinePersistenceStore } = await import("../packages/core/dist/storage/persistenceStore.js");
 const { transformArticleUrl } = await import("../packages/core/dist/transform/articleImport.js");
 const { transformMockYouTubeUrl } = await import("../packages/core/dist/transform/mockYoutubeImport.js");
 const { transformYouTubeUrl } = await import("../packages/core/dist/transform/youtubeImport.js");
@@ -586,6 +587,41 @@ assert.equal(
   "discovery job should record discovered source candidates"
 );
 
+let persistedAppSnapshot = "";
+const appPersistence = createAITimelinePersistenceStore({
+  read: () => persistedAppSnapshot,
+  write: (serialized) => {
+    persistedAppSnapshot = serialized;
+  }
+});
+
+appPersistence.saveSourceImportResult(deterministicImport, "2026-06-10T00:00:00.000Z");
+appPersistence.saveCurationJobRecords([...importBatch.records, ...discoveryBatch.records], "2026-06-10T00:20:00.000Z");
+appPersistence.saveReleasePlan(releasePlan, "2026-06-10T00:20:00.000Z");
+appPersistence.saveUserMemory(
+  "user-smoke",
+  memoryEditResult.memory,
+  memoryEditResult.events,
+  "2026-06-10T00:20:00.000Z"
+);
+
+const rehydratedPersistence = createAITimelinePersistenceStore({
+  read: () => persistedAppSnapshot,
+  write: (serialized) => {
+    persistedAppSnapshot = serialized;
+  }
+});
+const appSnapshot = rehydratedPersistence.getSnapshot();
+
+assert.equal(appSnapshot.sourceImports.length, 1, "persistence should store source imports");
+assert.equal(appSnapshot.sourceRegistries.length, 1, "persistence should store source registries");
+assert.equal(appSnapshot.posts.length, 4, "persistence should store generated posts");
+assert.equal(appSnapshot.harnessRuns.length, 1, "persistence should store harness runs");
+assert.equal(appSnapshot.curationJobs.length, 2, "persistence should store curation job records");
+assert.equal(appSnapshot.releasePlans.length, 1, "persistence should store release plans");
+assert.equal(appSnapshot.userMemories[0]?.userId, "user-smoke", "persistence should store user memory");
+assert.equal(appSnapshot.memoryEvents.length, 5, "persistence should store memory edit events");
+
 console.log(
   JSON.stringify(
     {
@@ -622,6 +658,12 @@ console.log(
         interests: memoryEditResult.memory.profile.interests.length,
         knownConcepts: memoryEditResult.memory.knowledge.knownConcepts.length,
         events: memoryEditResult.events.length
+      },
+      persistence: {
+        imports: appSnapshot.sourceImports.length,
+        posts: appSnapshot.posts.length,
+        memories: appSnapshot.userMemories.length,
+        curationJobs: appSnapshot.curationJobs.length
       },
       backgroundCuration: {
         interestedJobs: backgroundPlan.jobs.map((job) => job.kind),

@@ -155,8 +155,8 @@ Open-core boundary:
 
 ## Immediate Next Milestones
 
-1. Add dwell-time and viewport-based impression tracking.
-2. Persist `SourceImport`, `SourceRegistry`, `AgentHarnessRun` and validation records outside local storage.
-3. Use model repair outcomes to tune the source grounding prompts.
-4. Wire `createPersistentBackgroundCurationJobStore` to the hosted backend database or queue.
-5. Add a lightweight backend persistence layer.
+1. Wire core importers, release plans, memory controls and persistence into the Web prototype.
+2. Add dwell-time and viewport-based impression tracking.
+3. Persist `SourceImport`, `SourceRegistry`, `AgentHarnessRun` and validation records outside local storage.
+4. Use model repair outcomes to tune the source grounding prompts.
+5. Wire persistent stores to the hosted backend database or queue.

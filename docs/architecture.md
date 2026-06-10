@@ -45,6 +45,7 @@ flowchart LR
 - background curation job queue and executor
 - source post release pacing
 - user-editable memory controls with audit events
+- lightweight JSON snapshot persistence adapters
 - ranking primitives
 - knowledge graph extraction
 - review scheduling
