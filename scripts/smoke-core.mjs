@@ -4,6 +4,9 @@ const { createModelKnowledgePostRunner } = await import("../packages/core/dist/h
 const { createOpenAICompatibleModelClient, createOpenAICompatibleModelClientFromEnv } = await import(
   "../packages/core/dist/model/openaiCompatibleClient.js"
 );
+const { createOpenAICompatibleSourceImportWorker, createSourceImportWorker } = await import(
+  "../packages/core/dist/source/sourceImportWorker.js"
+);
 const { transformMockYouTubeUrl } = await import("../packages/core/dist/transform/mockYoutubeImport.js");
 
 const result = transformMockYouTubeUrl(
@@ -136,6 +139,74 @@ await assert.rejects(
   "compatible client should surface provider error messages"
 );
 
+const deterministicWorker = createSourceImportWorker();
+const deterministicImport = await deterministicWorker.run({
+  source: result.source,
+  assets: [result.asset],
+  chunks: result.chunks,
+  createdAt: "2026-06-10T00:00:00.000Z",
+  recommendedBecause: "Smoke test deterministic source import worker."
+});
+
+assert.equal(deterministicImport.importRecord.status, "ready", "deterministic import should be ready");
+assert.equal(deterministicImport.posts.length, 4, "deterministic import should create posts");
+assert.equal(deterministicImport.sourceRegistry.assets.length, 1, "deterministic import should preserve assets");
+assert.equal(deterministicImport.harnessRun?.runnerKind, "deterministic");
+
+const modelWorker = createOpenAICompatibleSourceImportWorker(
+  {
+    AITIMELINE_MODEL_NAME: "test-model",
+    AITIMELINE_MODEL_BASE_URL: "https://models.example/v1",
+    AITIMELINE_MODEL_API_KEY: "test-key"
+  },
+  {
+    modelRunner: { maxRepairAttempts: 0 },
+    modelClient: {
+      fetch: async () =>
+        new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ posts: result.cards }) } }] }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        })
+    }
+  }
+);
+const modelImport = await modelWorker.run({
+  source: result.source,
+  assets: [result.asset],
+  chunks: result.chunks,
+  sourceRegistry: result.sourceRegistry,
+  createdAt: "2026-06-10T00:00:00.000Z",
+  recommendedBecause: "Smoke test model source import worker."
+});
+
+assert.equal(modelImport.importRecord.status, "ready", "model import should be ready");
+assert.equal(modelImport.posts.length, 4, "model import should accept grounded posts");
+assert.equal(modelImport.harnessRun?.runnerKind, "model");
+
+const failedWorker = createOpenAICompatibleSourceImportWorker(
+  {
+    AITIMELINE_MODEL_NAME: "test-model",
+    AITIMELINE_MODEL_BASE_URL: "https://models.example/v1"
+  },
+  {
+    modelClient: {
+      fetch: async () =>
+        new Response(JSON.stringify({ error: { message: "provider unavailable" } }), {
+          status: 503,
+          headers: { "content-type": "application/json" }
+        })
+    }
+  }
+);
+const failedImport = await failedWorker.run({
+  source: result.source,
+  chunks: result.chunks,
+  createdAt: "2026-06-10T00:00:00.000Z"
+});
+
+assert.equal(failedImport.importRecord.status, "failed", "worker should return failed import records");
+assert.match(failedImport.errorMessage, /provider unavailable/);
+
 console.log(
   JSON.stringify(
     {
@@ -147,6 +218,11 @@ console.log(
       compatibleModelClient: {
         url: capturedRequest.url,
         responseFormat: capturedRequest.body.response_format.type
+      },
+      sourceImportWorker: {
+        deterministicStatus: deterministicImport.importRecord.status,
+        modelStatus: modelImport.importRecord.status,
+        failureStatus: failedImport.importRecord.status
       },
       validation: result.validation.map((validation) => ({
         postId: validation.postId,

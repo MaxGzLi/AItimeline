@@ -34,6 +34,7 @@ Code locations:
 - [packages/core/src/harness/runner.ts](../packages/core/src/harness/runner.ts)
 - [packages/core/src/harness/feedbackPolicy.ts](../packages/core/src/harness/feedbackPolicy.ts)
 - [packages/core/src/model/openaiCompatibleClient.ts](../packages/core/src/model/openaiCompatibleClient.ts)
+- [packages/core/src/source/sourceImportWorker.ts](../packages/core/src/source/sourceImportWorker.ts)
 - [packages/core/src/source/sourceRegistry.ts](../packages/core/src/source/sourceRegistry.ts)
 
 ## Harness Run Architecture
@@ -68,6 +69,7 @@ Main contracts:
 - `SourceRegistry`: immutable-ish source snapshots, content hashes, chunks, and chunk versions.
 - `GroundingCheck`: citation and source-fact evidence checks before accepting a post.
 - `AgentExpansionPlan`: follow-up jobs, suppressions, and cooled topics after interaction feedback.
+- `SourceImportWorker`: server-side import orchestrator that creates source registries, runs the selected harness runner, and returns a `SourceImport` status artifact.
 
 Current exported runners:
 
@@ -236,12 +238,13 @@ The current MVP uses a deterministic runner and a provider-agnostic model runner
 12. `createExpansionPlan` turns recent signals and feedback into follow-up jobs, review jobs, suppressions, and topic cooldowns.
 13. `createModelKnowledgePostRunner` can call any `ModelClient` that returns JSON, then validates and repairs the output before accepting posts.
 14. `createOpenAICompatibleModelClient` provides a server-side adapter for OpenAI-compatible model providers.
+15. `createSourceImportWorker` and `createOpenAICompatibleSourceImportWorker` compose registry creation, runner execution, validation results, and import status.
 
 The deterministic path keeps the prototype stable. The model runner lets us connect real LLM providers without weakening the acceptance gate.
 
 ## Build Next
 
 1. Add dwell-time and viewport-based impression tracking instead of only action-based signals.
-2. Wire `createOpenAICompatibleModelClient` into a real server-side source import worker.
+2. Persist source registries and source import runs outside local storage.
 3. Use `AgentExpansionPlan` jobs to trigger follow-up generation.
-4. Persist source registries, topic cooldowns, and expansion queue state.
+4. Persist topic cooldowns and expansion queue state.

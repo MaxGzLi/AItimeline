@@ -12,6 +12,7 @@ export * from "./harness/systemPrompt.js";
 export * from "./model/openaiCompatibleClient.js";
 export * from "./ranking/ranker.js";
 export * from "./review/spacedReview.js";
+export * from "./source/sourceImportWorker.js";
 export * from "./source/sourceRegistry.js";
 export * from "./transform/mockYoutubeImport.js";
 export * from "./transform/transcriptToCards.js";

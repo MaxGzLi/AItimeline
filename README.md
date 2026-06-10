@@ -40,7 +40,7 @@ Then open the local URL printed by Vite.
 
 ## Model Client
 
-The core package includes a server-side OpenAI-compatible model client adapter. It can call OpenAI or any provider that exposes a compatible `/v1/chat/completions` endpoint, then feed the JSON response into the harness repair and grounding gates.
+The core package includes a server-side source import worker and an OpenAI-compatible model client adapter. The worker can run deterministic transforms or call any provider that exposes a compatible `/v1/chat/completions` endpoint, then feed the JSON response into the harness repair and grounding gates.
 
 Copy [.env.example](./.env.example) when wiring a backend or worker:
 

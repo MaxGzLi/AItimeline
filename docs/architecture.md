@@ -5,7 +5,8 @@
 ```mermaid
 flowchart LR
   Sources["Sources\nYouTube / Web / Paper / Blog / Manual"] --> Agent["Agent Runtime"]
-  Agent --> Normalize["Normalize + Deduplicate"]
+  Agent --> Worker["Source Import Worker"]
+  Worker --> Normalize["Normalize + Deduplicate"]
   Normalize --> Registry["Source Registry\nsnapshots + hashes"]
   Registry --> Extract["Chunk + Concept Extract"]
   Extract --> Harness["Agent Harness\nRunner + Validation"]
@@ -33,6 +34,7 @@ flowchart LR
 - source and agent interfaces
 - harness run, runner, grounding and validation contracts
 - server-side model client adapters
+- source import worker orchestration
 - feedback expansion policy
 - ranking primitives
 - knowledge graph extraction
@@ -72,9 +74,10 @@ The first supported flow should be:
 1. User imports a YouTube URL.
 2. The system extracts metadata and transcript.
 3. The system registers source assets as snapshots with content hashes.
-4. The agent chunks the transcript into timestamped knowledge units.
+4. The source import worker chunks the transcript into timestamped knowledge units.
 5. A deterministic runner or model-backed runner creates timeline-native knowledge posts with citations.
 6. The harness validates post schema, policy and grounding before accepting output.
-7. The cards enter ranking, graph and review systems.
+7. The worker returns a `SourceImport` status artifact plus posts, registry, run and validation records.
+8. The cards enter ranking, graph and review systems.
 
 The important product rule: transformed knowledge should not stay trapped in a source page. It should reappear in the user's timeline when it is useful.

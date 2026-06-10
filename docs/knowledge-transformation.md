@@ -179,5 +179,6 @@ Current status:
 - The core now creates a source registry with source snapshots, content hashes, chunks and chunk versions.
 - Harness validation now includes schema checks, policy checks and a first grounding gate.
 - The core now includes a model-backed runner plus an OpenAI-compatible model client adapter for server-side import workers.
+- The core now includes a source import worker that returns `SourceImport`, registry, posts, harness run and validation artifacts.
 - The prototype persists imported cards, source records, transcript chunks and AI threads in local storage.
 - Real transcript extraction is intentionally deferred until the import loop feels useful.
