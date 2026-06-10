@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 
+const { createBackgroundCurationPlan } = await import("../packages/core/dist/agents/backgroundCuration.js");
 const { createModelKnowledgePostRunner } = await import("../packages/core/dist/harness/modelRunner.js");
+const { evaluateInteraction } = await import("../packages/core/dist/harness/feedbackPolicy.js");
 const { createOpenAICompatibleModelClient, createOpenAICompatibleModelClientFromEnv } = await import(
   "../packages/core/dist/model/openaiCompatibleClient.js"
 );
@@ -207,6 +209,105 @@ const failedImport = await failedWorker.run({
 assert.equal(failedImport.importRecord.status, "failed", "worker should return failed import records");
 assert.match(failedImport.errorMessage, /provider unavailable/);
 
+const interestSignal = {
+  postId: result.cards[2].id,
+  topicId: "knowledge-graph",
+  conceptIds: ["Knowledge Graph", "Memory", "Recommendation"],
+  impression: true,
+  dwellTimeMs: 18000,
+  openedThread: true,
+  liked: true,
+  saved: false,
+  askedQuestion: false,
+  reviewed: false,
+  skippedQuickly: false,
+  createdAt: "2026-06-10T00:00:00.000Z"
+};
+const interestedTopicState = {
+  topicId: "knowledge-graph",
+  interestScore: 0.82,
+  fatigueScore: 0.08,
+  comprehensionScore: 0.74
+};
+const interestFeedback = evaluateInteraction(interestSignal, interestedTopicState);
+const backgroundPlan = createBackgroundCurationPlan({
+  signals: [interestSignal],
+  feedback: [interestFeedback],
+  topicStates: [interestedTopicState],
+  generatedAt: "2026-06-10T00:00:00.000Z",
+  sourceCandidates: [
+    {
+      id: "candidate-knowledge-graph-memory",
+      source: {
+        id: "article-knowledge-graph-memory",
+        title: "How knowledge graphs improve personal memory systems",
+        url: "https://example.com/knowledge-graph-memory",
+        type: "article",
+        author: "AITimeline Research"
+      },
+      topicId: "knowledge-graph",
+      conceptIds: ["Knowledge Graph", "Memory"],
+      relevanceScore: 0.92,
+      noveltyScore: 0.74,
+      qualityScore: 0.86,
+      reason: "It connects knowledge graph structure to memory and review.",
+      discoveredAt: "2026-06-10T00:00:00.000Z"
+    }
+  ]
+});
+
+assert.ok(
+  backgroundPlan.jobs.some((job) => job.kind === "generate_followup"),
+  "background curation should continue an interested series"
+);
+assert.ok(
+  backgroundPlan.jobs.some((job) => job.kind === "import_source"),
+  "background curation should package matching source candidates"
+);
+assert.deepEqual(
+  backgroundPlan.acceptedSourceCandidateIds,
+  ["candidate-knowledge-graph-memory"],
+  "background curation should track accepted external sources"
+);
+
+const skipSignal = {
+  postId: result.cards[0].id,
+  topicId: "rag-basics",
+  conceptIds: ["RAG"],
+  impression: true,
+  dwellTimeMs: 700,
+  openedThread: false,
+  liked: false,
+  saved: false,
+  askedQuestion: false,
+  reviewed: false,
+  skippedQuickly: true,
+  createdAt: "2026-06-10T00:00:00.000Z"
+};
+const fatiguedTopicState = {
+  topicId: "rag-basics",
+  interestScore: 0.2,
+  fatigueScore: 0.8,
+  comprehensionScore: 0.4
+};
+const skipFeedback = evaluateInteraction(skipSignal, fatiguedTopicState);
+const cooldownPlan = createBackgroundCurationPlan({
+  signals: [skipSignal],
+  feedback: [skipFeedback],
+  topicStates: [fatiguedTopicState],
+  generatedAt: "2026-06-10T00:00:00.000Z"
+});
+
+assert.ok(
+  cooldownPlan.jobs.some((job) => job.kind === "cooldown_topic"),
+  "background curation should cool down skipped topics"
+);
+assert.equal(
+  cooldownPlan.jobs.some((job) => job.kind === "import_source"),
+  false,
+  "background curation should not import sources for skipped topics"
+);
+
 console.log(
   JSON.stringify(
     {
@@ -223,6 +324,10 @@ console.log(
         deterministicStatus: deterministicImport.importRecord.status,
         modelStatus: modelImport.importRecord.status,
         failureStatus: failedImport.importRecord.status
+      },
+      backgroundCuration: {
+        interestedJobs: backgroundPlan.jobs.map((job) => job.kind),
+        cooldownJobs: cooldownPlan.jobs.map((job) => job.kind)
       },
       validation: result.validation.map((validation) => ({
         postId: validation.postId,

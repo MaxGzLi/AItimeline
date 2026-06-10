@@ -25,6 +25,7 @@ Every agent run should produce:
 Code locations:
 
 - [packages/core/src/types.ts](../packages/core/src/types.ts)
+- [packages/core/src/agents/backgroundCuration.ts](../packages/core/src/agents/backgroundCuration.ts)
 - [packages/core/src/harness/systemPrompt.ts](../packages/core/src/harness/systemPrompt.ts)
 - [packages/core/src/harness/expansionPolicy.ts](../packages/core/src/harness/expansionPolicy.ts)
 - [packages/core/src/harness/postHarness.ts](../packages/core/src/harness/postHarness.ts)
@@ -69,6 +70,7 @@ Main contracts:
 - `SourceRegistry`: immutable-ish source snapshots, content hashes, chunks, and chunk versions.
 - `GroundingCheck`: citation and source-fact evidence checks before accepting a post.
 - `AgentExpansionPlan`: follow-up jobs, suppressions, and cooled topics after interaction feedback.
+- `BackgroundCurationPlan`: background jobs that decide whether to generate follow-ups, discover sources, import source candidates, schedule review, or cool down.
 - `SourceImportWorker`: server-side import orchestrator that creates source registries, runs the selected harness runner, and returns a `SourceImport` status artifact.
 
 Current exported runners:
@@ -220,6 +222,20 @@ The expansion job kinds are:
 - `cooldown_topic`
 - `ask_clarifying_question`
 
+## Background Curation Rule
+
+When the user keeps browsing, the agent should prepare useful material in the background instead of waiting for manual imports.
+
+The background curation plan turns expansion jobs plus external source candidates into:
+
+- `generate_followup`: keep the current learning path moving.
+- `discover_sources`: ask a search/research agent to find sources for concepts the user is pulling on.
+- `import_source`: send a selected external source into the source import worker so it can be packaged into timeline posts.
+- `schedule_review`: convert saved/reviewed interest into retention.
+- `cooldown_topic`: stop producing when the user skips quickly or topic fatigue is high.
+
+Strong interest can produce both a follow-up and an external source import. Weak or negative signals suppress source imports.
+
 ## Current Implementation
 
 The current MVP uses a deterministic runner and a provider-agnostic model runner behind the same harness interface:
@@ -239,6 +255,7 @@ The current MVP uses a deterministic runner and a provider-agnostic model runner
 13. `createModelKnowledgePostRunner` can call any `ModelClient` that returns JSON, then validates and repairs the output before accepting posts.
 14. `createOpenAICompatibleModelClient` provides a server-side adapter for OpenAI-compatible model providers.
 15. `createSourceImportWorker` and `createOpenAICompatibleSourceImportWorker` compose registry creation, runner execution, validation results, and import status.
+16. `createBackgroundCurationPlan` decides which follow-up, source discovery, source import, review, and cooldown jobs should run while the user keeps browsing.
 
 The deterministic path keeps the prototype stable. The model runner lets us connect real LLM providers without weakening the acceptance gate.
 
@@ -246,5 +263,5 @@ The deterministic path keeps the prototype stable. The model runner lets us conn
 
 1. Add dwell-time and viewport-based impression tracking instead of only action-based signals.
 2. Persist source registries and source import runs outside local storage.
-3. Use `AgentExpansionPlan` jobs to trigger follow-up generation.
+3. Persist background curation jobs and execute source discovery/import jobs.
 4. Persist topic cooldowns and expansion queue state.

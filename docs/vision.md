@@ -28,7 +28,9 @@ flowchart LR
   Signals --> Memory["User Memory"]
   Signals --> Graph["Knowledge Graph"]
   Signals --> Policy["Next-Action Policy"]
+  Signals --> Curation["Background Curation"]
   Policy --> Harness
+  Curation --> Sources
   Graph --> Timeline
   Memory --> Timeline
 ```
@@ -117,6 +119,18 @@ Next actions:
 - cool down topic
 - ask clarifying question
 
+## Background Agent Philosophy
+
+The feed should feel continuously alive. When the user shows interest, the agent can work behind the scenes while the user keeps browsing:
+
+- generate the next post in the same learning path
+- look for external sources that match the concepts
+- accept sources sent into the app by other tools or agents
+- package those sources into grounded posts
+- hold back when the user skips, shows fatigue, or gives no meaningful signal
+
+This creates the feeling of a knowledge media system that is learning the user's curiosity in real time, without requiring the user to manage a library manually.
+
 ## Product Promise
 
 For users:
@@ -166,4 +180,3 @@ Possible category names:
 Recommended first public phrasing:
 
 > AITimeline turns sources into an addictive learning feed.
-
