@@ -38,6 +38,20 @@ npm run dev
 
 Then open the local URL printed by Vite.
 
+## Model Client
+
+The core package includes a server-side OpenAI-compatible model client adapter. It can call OpenAI or any provider that exposes a compatible `/v1/chat/completions` endpoint, then feed the JSON response into the harness repair and grounding gates.
+
+Copy [.env.example](./.env.example) when wiring a backend or worker:
+
+```bash
+AITIMELINE_MODEL_BASE_URL=https://api.openai.com/v1
+AITIMELINE_MODEL_NAME=your-model
+AITIMELINE_MODEL_API_KEY=your-api-key
+```
+
+Do not call model providers directly from the browser with a user or product API key. Use the adapter from a server, worker, CLI, or self-hosted runtime.
+
 ## Verification
 
 ```bash

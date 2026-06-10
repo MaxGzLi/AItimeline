@@ -9,6 +9,7 @@ export * from "./harness/postHarness.js";
 export * from "./harness/runner.js";
 export * from "./harness/schema.js";
 export * from "./harness/systemPrompt.js";
+export * from "./model/openaiCompatibleClient.js";
 export * from "./ranking/ranker.js";
 export * from "./review/spacedReview.js";
 export * from "./source/sourceRegistry.js";

@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 
 const { createModelKnowledgePostRunner } = await import("../packages/core/dist/harness/modelRunner.js");
+const { createOpenAICompatibleModelClient, createOpenAICompatibleModelClientFromEnv } = await import(
+  "../packages/core/dist/model/openaiCompatibleClient.js"
+);
 const { transformMockYouTubeUrl } = await import("../packages/core/dist/transform/mockYoutubeImport.js");
 
 const result = transformMockYouTubeUrl(
@@ -53,6 +56,86 @@ assert.equal(repairCalls, 2, "model runner should repair after invalid output");
 assert.equal(modelResult.run.status, "succeeded", "repaired model run should succeed");
 assert.equal(modelResult.posts.length, 4, "repaired model run should keep valid posts");
 
+let capturedRequest;
+const compatibleClient = createOpenAICompatibleModelClient({
+  model: "test-model",
+  apiKey: "test-key",
+  baseUrl: "https://models.example/v1/",
+  fetch: async (url, init) => {
+    capturedRequest = {
+      url: String(url),
+      headers: Object.fromEntries(new Headers(init.headers)),
+      body: JSON.parse(String(init.body))
+    };
+
+    return new Response(
+      JSON.stringify({
+        choices: [{ message: { content: JSON.stringify({ ok: true }) } }]
+      }),
+      {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      }
+    );
+  }
+});
+const compatibleCompletion = await compatibleClient.complete({
+  messages: [
+    { role: "system", content: "Return JSON." },
+    { role: "user", content: "Say ok." }
+  ],
+  responseFormat: "json_object",
+  temperature: 0
+});
+
+assert.equal(compatibleCompletion.content, JSON.stringify({ ok: true }), "compatible client should return assistant content");
+assert.equal(capturedRequest.url, "https://models.example/v1/chat/completions");
+assert.equal(capturedRequest.headers.authorization, "Bearer test-key");
+assert.equal(capturedRequest.body.model, "test-model");
+assert.deepEqual(capturedRequest.body.response_format, { type: "json_object" });
+assert.equal(capturedRequest.body.temperature, 0);
+
+const envClient = createOpenAICompatibleModelClientFromEnv(
+  {
+    AITIMELINE_MODEL_NAME: "env-model",
+    AITIMELINE_MODEL_BASE_URL: "https://env-models.example/v1",
+    AITIMELINE_MODEL_API_KEY: "env-key"
+  },
+  {
+    fetch: async () =>
+      new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ env: true }) } }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      })
+  }
+);
+const envCompletion = await envClient.complete({
+  messages: [{ role: "user", content: "Return JSON." }],
+  responseFormat: "json_object"
+});
+
+assert.equal(envCompletion.content, JSON.stringify({ env: true }), "env client should read model settings from env map");
+
+const failingClient = createOpenAICompatibleModelClient({
+  model: "test-model",
+  baseUrl: "https://models.example/v1",
+  fetch: async () =>
+    new Response(JSON.stringify({ error: { message: "quota exceeded" } }), {
+      status: 429,
+      headers: { "content-type": "application/json" }
+    })
+});
+
+await assert.rejects(
+  () =>
+    failingClient.complete({
+      messages: [{ role: "user", content: "Return JSON." }],
+      responseFormat: "json_object"
+    }),
+  /quota exceeded/,
+  "compatible client should surface provider error messages"
+);
+
 console.log(
   JSON.stringify(
     {
@@ -61,6 +144,10 @@ console.log(
       snapshots: result.sourceRegistry.snapshots.length,
       chunks: result.sourceRegistry.chunks.length,
       modelRunnerRepairCalls: repairCalls,
+      compatibleModelClient: {
+        url: capturedRequest.url,
+        responseFormat: capturedRequest.body.response_format.type
+      },
       validation: result.validation.map((validation) => ({
         postId: validation.postId,
         valid: validation.valid,

@@ -156,7 +156,7 @@ Open-core boundary:
 ## Immediate Next Milestones
 
 1. Add dwell-time and viewport-based impression tracking.
-2. Connect a hosted or local model client to `createModelKnowledgePostRunner`.
+2. Wire `createOpenAICompatibleModelClient` into a server-side source import worker.
 3. Use model repair outcomes to tune the source grounding prompts.
 4. Persist `AgentExpansionPlan` jobs and execute follow-up generation.
 5. Persist `SourceRegistry` records outside local storage.

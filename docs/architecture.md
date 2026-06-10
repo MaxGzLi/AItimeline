@@ -9,6 +9,7 @@ flowchart LR
   Normalize --> Registry["Source Registry\nsnapshots + hashes"]
   Registry --> Extract["Chunk + Concept Extract"]
   Extract --> Harness["Agent Harness\nRunner + Validation"]
+  Model["Model Client\nOpenAI-compatible / local"] --> Harness
   Harness --> Grounding["Grounding Gate"]
   Grounding --> Rank["Personal Ranker"]
   Rank --> Timeline["Knowledge Timeline"]
@@ -31,6 +32,7 @@ flowchart LR
 - source registry, snapshots, hashes and chunk versions
 - source and agent interfaces
 - harness run, runner, grounding and validation contracts
+- server-side model client adapters
 - feedback expansion policy
 - ranking primitives
 - knowledge graph extraction
@@ -71,7 +73,7 @@ The first supported flow should be:
 2. The system extracts metadata and transcript.
 3. The system registers source assets as snapshots with content hashes.
 4. The agent chunks the transcript into timestamped knowledge units.
-5. The harness runner creates timeline-native knowledge posts with citations.
+5. A deterministic runner or model-backed runner creates timeline-native knowledge posts with citations.
 6. The harness validates post schema, policy and grounding before accepting output.
 7. The cards enter ranking, graph and review systems.
 
