@@ -241,6 +241,7 @@ Strong interest can produce both a follow-up and an external source import. Weak
 The queue/executor layer makes that plan runnable:
 
 - `createInMemoryBackgroundCurationJobStore`: reference store for local and test runs.
+- `createPersistentBackgroundCurationJobStore`: storage-adapter-backed store that can persist queue snapshots to localStorage, a file wrapper, KV, Postgres, Redis, or another backend adapter.
 - `runDueBackgroundCurationJobs`: fetches due jobs and executes configured handlers.
 - `discover_sources`: calls a source discovery handler and stores returned candidates.
 - `import_source`: uses a source ingestion handler plus `SourceImportWorker` to package a candidate into accepted posts.
@@ -266,7 +267,7 @@ The current MVP uses a deterministic runner and a provider-agnostic model runner
 14. `createOpenAICompatibleModelClient` provides a server-side adapter for OpenAI-compatible model providers.
 15. `createSourceImportWorker` and `createOpenAICompatibleSourceImportWorker` compose registry creation, runner execution, validation results, and import status.
 16. `createBackgroundCurationPlan` decides which follow-up, source discovery, source import, review, and cooldown jobs should run while the user keeps browsing.
-17. `createInMemoryBackgroundCurationJobStore` and `runDueBackgroundCurationJobs` enqueue and execute due curation jobs.
+17. `createInMemoryBackgroundCurationJobStore`, `createPersistentBackgroundCurationJobStore`, and `runDueBackgroundCurationJobs` enqueue, persist, rehydrate, and execute due curation jobs.
 
 The deterministic path keeps the prototype stable. The model runner lets us connect real LLM providers without weakening the acceptance gate.
 
@@ -274,5 +275,5 @@ The deterministic path keeps the prototype stable. The model runner lets us conn
 
 1. Add dwell-time and viewport-based impression tracking instead of only action-based signals.
 2. Persist source registries and source import runs outside local storage.
-3. Replace the in-memory curation job store with a durable backend store.
+3. Wire the persistent curation job store to the hosted backend database or queue.
 4. Persist topic cooldowns and expansion queue state.

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 
 const { createBackgroundCurationPlan } = await import("../packages/core/dist/agents/backgroundCuration.js");
-const { createInMemoryBackgroundCurationJobStore, runDueBackgroundCurationJobs } = await import(
+const { createPersistentBackgroundCurationJobStore, runDueBackgroundCurationJobs } = await import(
   "../packages/core/dist/agents/backgroundCurationQueue.js"
 );
 const { createModelKnowledgePostRunner } = await import("../packages/core/dist/harness/modelRunner.js");
@@ -311,14 +311,23 @@ assert.equal(
   "background curation should not import sources for skipped topics"
 );
 
-const curationStore = createInMemoryBackgroundCurationJobStore();
+let persistedCurationJobs = "";
+const curationJobStorage = {
+  read: () => persistedCurationJobs,
+  write: (serialized) => {
+    persistedCurationJobs = serialized;
+  }
+};
+const curationStore = createPersistentBackgroundCurationJobStore(curationJobStorage);
 const enqueuedRecords = curationStore.enqueuePlan(backgroundPlan);
 
 assert.equal(enqueuedRecords.length, 2, "background curation store should enqueue plan jobs");
 assert.equal(curationStore.getDueJobs("2026-06-10T00:00:00.000Z").length, 2, "queued jobs should be due");
+assert.ok(persistedCurationJobs.includes("import_source"), "persistent curation store should serialize jobs");
 
+const rehydratedCurationStore = createPersistentBackgroundCurationJobStore(curationJobStorage);
 const importBatch = await runDueBackgroundCurationJobs(
-  curationStore,
+  rehydratedCurationStore,
   {
     sourceImportWorker: deterministicWorker,
     ingestSourceCandidate: (candidate) => ({
@@ -349,6 +358,7 @@ const importBatch = await runDueBackgroundCurationJobs(
   }
 );
 const importedJobRecord = importBatch.records[0];
+const finalCurationStore = createPersistentBackgroundCurationJobStore(curationJobStorage);
 
 assert.equal(importBatch.records.length, 1, "executor should run one import job");
 assert.equal(importedJobRecord.status, "succeeded", "import job should succeed");
@@ -358,9 +368,14 @@ assert.equal(
   "import job should produce a ready source import"
 );
 assert.equal(
-  curationStore.list("queued").some((record) => record.job.kind === "generate_followup"),
+  finalCurationStore.list("queued").some((record) => record.job.kind === "generate_followup"),
   true,
   "executor should leave unrelated job kinds queued when filtered"
+);
+assert.equal(
+  finalCurationStore.get(importedJobRecord.id)?.status,
+  "succeeded",
+  "persistent curation store should rehydrate executed job status"
 );
 
 const discoveryPlan = createBackgroundCurationPlan({
@@ -369,7 +384,13 @@ const discoveryPlan = createBackgroundCurationPlan({
   topicStates: [interestedTopicState],
   generatedAt: "2026-06-10T00:00:00.000Z"
 });
-const discoveryStore = createInMemoryBackgroundCurationJobStore();
+let persistedDiscoveryJobs = "";
+const discoveryStore = createPersistentBackgroundCurationJobStore({
+  read: () => persistedDiscoveryJobs,
+  write: (serialized) => {
+    persistedDiscoveryJobs = serialized;
+  }
+});
 
 discoveryStore.enqueuePlan(discoveryPlan);
 

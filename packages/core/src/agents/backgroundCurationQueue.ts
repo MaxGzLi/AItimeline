@@ -37,6 +37,16 @@ export interface BackgroundCurationJobStore {
   update(record: BackgroundCurationJobRecord): BackgroundCurationJobRecord;
 }
 
+export interface BackgroundCurationJobStoreSnapshot {
+  version: 1;
+  records: BackgroundCurationJobRecord[];
+}
+
+export interface BackgroundCurationJobStorageAdapter {
+  read(): string | null | undefined;
+  write(serialized: string): void;
+}
+
 export interface SourceCandidateIngestionResult {
   assets?: SourceAsset[];
   chunks: KnowledgeChunk[];
@@ -131,6 +141,34 @@ export function createInMemoryBackgroundCurationJobStore(
       recordsById.set(record.id, cloneRecord(record));
 
       return cloneRecord(record);
+    }
+  };
+}
+
+export function createPersistentBackgroundCurationJobStore(
+  storage: BackgroundCurationJobStorageAdapter,
+  initialRecords: BackgroundCurationJobRecord[] = []
+): BackgroundCurationJobStore {
+  const persistedRecords = readStoredRecords(storage);
+  const innerStore = createInMemoryBackgroundCurationJobStore([...persistedRecords, ...initialRecords]);
+
+  return {
+    enqueuePlan(plan, enqueuedAt) {
+      const records = innerStore.enqueuePlan(plan, enqueuedAt);
+
+      persistRecords(storage, innerStore.list());
+
+      return records;
+    },
+    list: (status) => innerStore.list(status),
+    get: (jobId) => innerStore.get(jobId),
+    getDueJobs: (now, options) => innerStore.getDueJobs(now, options),
+    update(record) {
+      const updatedRecord = innerStore.update(record);
+
+      persistRecords(storage, innerStore.list());
+
+      return updatedRecord;
     }
   };
 }
@@ -301,6 +339,34 @@ function normalizeDate(value: string | Date | undefined): Date {
   return value ? new Date(value) : new Date();
 }
 
+function readStoredRecords(storage: BackgroundCurationJobStorageAdapter): BackgroundCurationJobRecord[] {
+  const serialized = storage.read();
+
+  if (!serialized) {
+    return [];
+  }
+
+  const parsed = JSON.parse(serialized) as unknown;
+
+  if (!isRecord(parsed) || parsed.version !== 1 || !Array.isArray(parsed.records)) {
+    throw new Error("Background curation job store snapshot is invalid.");
+  }
+
+  return parsed.records.map(parseStoredRecord);
+}
+
+function persistRecords(
+  storage: BackgroundCurationJobStorageAdapter,
+  records: BackgroundCurationJobRecord[]
+): void {
+  const snapshot: BackgroundCurationJobStoreSnapshot = {
+    version: 1,
+    records
+  };
+
+  storage.write(JSON.stringify(snapshot));
+}
+
 function compareRecords(left: BackgroundCurationJobRecord, right: BackgroundCurationJobRecord): number {
   const leftRunAfter = left.job.runAfter ? new Date(left.job.runAfter).getTime() : 0;
   const rightRunAfter = right.job.runAfter ? new Date(right.job.runAfter).getTime() : 0;
@@ -310,6 +376,30 @@ function compareRecords(left: BackgroundCurationJobRecord, right: BackgroundCura
   }
 
   return right.job.priority - left.job.priority;
+}
+
+function parseStoredRecord(value: unknown): BackgroundCurationJobRecord {
+  if (!isRecord(value) || typeof value.id !== "string" || !isRecord(value.job)) {
+    throw new Error("Background curation job record is invalid.");
+  }
+
+  if (!isBackgroundCurationJobStatus(value.status)) {
+    throw new Error("Background curation job record has an invalid status.");
+  }
+
+  if (typeof value.attempts !== "number" || typeof value.createdAt !== "string" || typeof value.updatedAt !== "string") {
+    throw new Error("Background curation job record is missing required metadata.");
+  }
+
+  return cloneRecord(value as unknown as BackgroundCurationJobRecord);
+}
+
+function isBackgroundCurationJobStatus(value: unknown): value is BackgroundCurationJobStatus {
+  return value === "queued" || value === "running" || value === "succeeded" || value === "failed" || value === "skipped";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function cloneRecord(record: BackgroundCurationJobRecord): BackgroundCurationJobRecord {

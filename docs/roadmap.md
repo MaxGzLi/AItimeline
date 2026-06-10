@@ -158,7 +158,7 @@ Open-core boundary:
 1. Add dwell-time and viewport-based impression tracking.
 2. Persist `SourceImport`, `SourceRegistry`, `AgentHarnessRun` and validation records outside local storage.
 3. Use model repair outcomes to tune the source grounding prompts.
-4. Replace the in-memory `BackgroundCurationJobStore` with durable backend storage.
+4. Wire `createPersistentBackgroundCurationJobStore` to the hosted backend database or queue.
 5. Add real YouTube transcript extraction behind the existing mock interface.
 6. Add article URL import.
 7. Add better post clustering so one long source does not flood the feed.

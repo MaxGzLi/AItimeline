@@ -94,6 +94,8 @@ The background loop is:
 
 The product rule is that background generation should feel alive, but bounded. Strong interest earns more depth and breadth. Weak or negative signals suppress the series instead of flooding the feed.
 
+The core includes both an in-memory job store and a persistent store wrapper. The persistent wrapper stores a serialized queue snapshot through a small `read` / `write` adapter, so the hosted app can back it with a database or queue while local/self-hosted runtimes can use localStorage, a JSON file wrapper, or KV storage.
+
 ## Source Transformation
 
 Source transformation is the bridge between a NotebookLM-like source workspace and the timeline.
