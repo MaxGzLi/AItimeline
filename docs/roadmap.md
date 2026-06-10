@@ -156,8 +156,8 @@ Open-core boundary:
 ## Immediate Next Milestones
 
 1. Add dwell-time and viewport-based impression tracking.
-2. Add a model-backed `KnowledgePostAgentRunner` behind the harness interface.
-3. Use grounding failures to repair model output before accepting posts.
+2. Connect a hosted or local model client to `createModelKnowledgePostRunner`.
+3. Use model repair outcomes to tune the source grounding prompts.
 4. Persist `AgentExpansionPlan` jobs and execute follow-up generation.
 5. Persist `SourceRegistry` records outside local storage.
 6. Add real YouTube transcript extraction behind the existing mock interface.

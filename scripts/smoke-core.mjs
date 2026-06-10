@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 
+const { createModelKnowledgePostRunner } = await import("../packages/core/dist/harness/modelRunner.js");
 const { transformMockYouTubeUrl } = await import("../packages/core/dist/transform/mockYoutubeImport.js");
 
 const result = transformMockYouTubeUrl(
@@ -25,6 +26,33 @@ for (const validation of result.validation) {
   );
 }
 
+let repairCalls = 0;
+const repairRunner = createModelKnowledgePostRunner({
+  maxRepairAttempts: 1,
+  client: {
+    async complete() {
+      repairCalls += 1;
+
+      if (repairCalls === 1) {
+        return { content: JSON.stringify({ posts: [{ id: "broken-post" }] }) };
+      }
+
+      return { content: JSON.stringify({ posts: result.cards }) };
+    }
+  }
+});
+const modelResult = await repairRunner.run({
+  source: result.source,
+  chunks: result.chunks,
+  sourceRegistry: result.sourceRegistry,
+  createdAt: "2026-06-10T00:00:00.000Z",
+  recommendedBecause: "Smoke test repair output."
+});
+
+assert.equal(repairCalls, 2, "model runner should repair after invalid output");
+assert.equal(modelResult.run.status, "succeeded", "repaired model run should succeed");
+assert.equal(modelResult.posts.length, 4, "repaired model run should keep valid posts");
+
 console.log(
   JSON.stringify(
     {
@@ -32,6 +60,7 @@ console.log(
       cards: result.cards.length,
       snapshots: result.sourceRegistry.snapshots.length,
       chunks: result.sourceRegistry.chunks.length,
+      modelRunnerRepairCalls: repairCalls,
       validation: result.validation.map((validation) => ({
         postId: validation.postId,
         valid: validation.valid,

@@ -29,6 +29,7 @@ Code locations:
 - [packages/core/src/harness/expansionPolicy.ts](../packages/core/src/harness/expansionPolicy.ts)
 - [packages/core/src/harness/postHarness.ts](../packages/core/src/harness/postHarness.ts)
 - [packages/core/src/harness/groundingGate.ts](../packages/core/src/harness/groundingGate.ts)
+- [packages/core/src/harness/modelRunner.ts](../packages/core/src/harness/modelRunner.ts)
 - [packages/core/src/harness/schema.ts](../packages/core/src/harness/schema.ts)
 - [packages/core/src/harness/runner.ts](../packages/core/src/harness/runner.ts)
 - [packages/core/src/harness/feedbackPolicy.ts](../packages/core/src/harness/feedbackPolicy.ts)
@@ -70,10 +71,12 @@ Main contracts:
 Current exported runners:
 
 - `deterministicKnowledgePostRunner`
+- `createModelKnowledgePostRunner`
 - `runDeterministicAgentHarness`
+- `runModelAgentHarness`
 - `runAgentHarness`
 
-This means future model-backed generation should implement `KnowledgePostAgentRunner` rather than bypassing the harness.
+This means model-backed generation implements `KnowledgePostAgentRunner` rather than bypassing the harness. The model runner treats generated content as untrusted JSON until it passes schema, policy, citation, and grounding checks.
 
 ## Knowledge Post
 
@@ -129,7 +132,7 @@ Claim kinds:
 - `example`: illustrative content
 - `question`: quiz or review prompt
 
-This is the first acceptance gate. The later model-backed runner should add claim extraction and repair: if a generated post fails grounding, ask the model to revise or reject the post.
+This is the first acceptance gate. The model-backed runner now uses grounding failures as repair instructions: if a generated post fails grounding, the runner asks the model for a complete replacement JSON object before accepting any posts.
 
 ## Thread Blocks
 
@@ -214,7 +217,7 @@ The expansion job kinds are:
 
 ## Current Implementation
 
-The current MVP uses a deterministic runner behind the same harness interface that a model runner will use:
+The current MVP uses a deterministic runner and a provider-agnostic model runner behind the same harness interface:
 
 1. A YouTube URL creates a mocked source and transcript.
 2. Transcript segments become `KnowledgeChunk`s.
@@ -228,13 +231,13 @@ The current MVP uses a deterministic runner behind the same harness interface th
 10. The Web app records lightweight interaction signals: impression, thread open, like, save, ask, and skip.
 11. Signals are evaluated with `evaluateInteraction` and shown as feedback state plus next action.
 12. `createExpansionPlan` turns recent signals and feedback into follow-up jobs, review jobs, suppressions, and topic cooldowns.
+13. `createModelKnowledgePostRunner` can call any `ModelClient` that returns JSON, then validates and repairs the output before accepting posts.
 
-This is intentionally deterministic. The next step is to add a model-backed runner while keeping the same schema and validation gate.
+The deterministic path keeps the prototype stable. The model runner lets us connect real LLM providers without weakening the acceptance gate.
 
 ## Build Next
 
 1. Add dwell-time and viewport-based impression tracking instead of only action-based signals.
-2. Add a model-backed `KnowledgePostAgentRunner` that takes source chunks and returns `KnowledgePost`.
-3. Use grounding failures to ask the model for repair before accepting a post.
-4. Use `AgentExpansionPlan` jobs to trigger follow-up generation.
-5. Persist source registries, topic cooldowns, and expansion queue state.
+2. Connect a real hosted or local model client to `createModelKnowledgePostRunner`.
+3. Use `AgentExpansionPlan` jobs to trigger follow-up generation.
+4. Persist source registries, topic cooldowns, and expansion queue state.

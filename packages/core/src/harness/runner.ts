@@ -1,6 +1,6 @@
 import { createKnowledgePost, harnessVersion } from "./postHarness.js";
 import { validateGrounding } from "./groundingGate.js";
-import { validateKnowledgePost, validateKnowledgePosts } from "./schema.js";
+import { validateKnowledgePost } from "./schema.js";
 import { createSourceRegistry } from "../source/sourceRegistry.js";
 import type {
   AgentHarnessConfig,
@@ -120,17 +120,18 @@ export function createAgentHarnessConfig(overrides: AgentHarnessConfigOverrides 
 }
 
 export function validateHarnessPosts(
-  posts: readonly KnowledgePost[],
+  posts: readonly unknown[],
   config: AgentHarnessConfig = defaultAgentHarnessConfig,
   sourceRegistry?: SourceRegistry
 ): HarnessValidationResult[] {
-  return validateKnowledgePosts(posts).map((result, index) => {
-    const post = posts[index];
+  return posts.map((candidate) => {
+    const result = validateKnowledgePost(candidate);
 
-    if (!post) {
+    if (!result.valid || !isKnowledgePostLike(candidate)) {
       return result;
     }
 
+    const post = candidate;
     const policyIssues = validatePostPolicies(post, config);
     const grounding = sourceRegistry ? validateGrounding(post, sourceRegistry) : undefined;
     const groundingIssues = grounding?.issues ?? [];
