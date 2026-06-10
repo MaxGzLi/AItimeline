@@ -18,7 +18,9 @@ flowchart LR
   Signals --> Feedback["Feedback Policy"]
   Feedback --> Expansion["Expansion Queue"]
   Feedback --> Curation["Background Curation\nfollow-up + source discovery"]
-  Curation --> Worker
+  Curation --> JobStore["Curation Job Store"]
+  JobStore --> Executor["Curation Executor"]
+  Executor --> Worker
   Signals --> Graph["Knowledge Graph"]
   Signals --> Review["Review Queue"]
   Expansion --> Harness
@@ -39,6 +41,7 @@ flowchart LR
 - source import worker orchestration
 - feedback expansion policy
 - background curation planning
+- background curation job queue and executor
 - ranking primitives
 - knowledge graph extraction
 - review scheduling
@@ -82,8 +85,12 @@ The background loop is:
    - `import_source`: send a selected external source to the source import worker.
    - `schedule_review`: convert interest into durable recall.
    - `cooldown_topic`: stop feeding a topic after skips or fatigue.
-4. Source import worker packages accepted sources into grounded posts.
-5. Ranker decides when the packaged posts should re-enter the timeline.
+4. Curation job store persists queued jobs and exposes due jobs.
+5. Curation executor runs configured handlers:
+   - source discovery handler returns source candidates.
+   - source ingestion handler turns a candidate into assets and chunks.
+   - source import worker packages accepted sources into grounded posts.
+6. Ranker decides when the packaged posts should re-enter the timeline.
 
 The product rule is that background generation should feel alive, but bounded. Strong interest earns more depth and breadth. Weak or negative signals suppress the series instead of flooding the feed.
 

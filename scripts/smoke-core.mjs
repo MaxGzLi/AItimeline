@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 
 const { createBackgroundCurationPlan } = await import("../packages/core/dist/agents/backgroundCuration.js");
+const { createInMemoryBackgroundCurationJobStore, runDueBackgroundCurationJobs } = await import(
+  "../packages/core/dist/agents/backgroundCurationQueue.js"
+);
 const { createModelKnowledgePostRunner } = await import("../packages/core/dist/harness/modelRunner.js");
 const { evaluateInteraction } = await import("../packages/core/dist/harness/feedbackPolicy.js");
 const { createOpenAICompatibleModelClient, createOpenAICompatibleModelClientFromEnv } = await import(
@@ -308,6 +311,104 @@ assert.equal(
   "background curation should not import sources for skipped topics"
 );
 
+const curationStore = createInMemoryBackgroundCurationJobStore();
+const enqueuedRecords = curationStore.enqueuePlan(backgroundPlan);
+
+assert.equal(enqueuedRecords.length, 2, "background curation store should enqueue plan jobs");
+assert.equal(curationStore.getDueJobs("2026-06-10T00:00:00.000Z").length, 2, "queued jobs should be due");
+
+const importBatch = await runDueBackgroundCurationJobs(
+  curationStore,
+  {
+    sourceImportWorker: deterministicWorker,
+    ingestSourceCandidate: (candidate) => ({
+      assets: [
+        {
+          id: `${candidate.source.id}-text`,
+          sourceId: candidate.source.id,
+          kind: "text",
+          content:
+            "Knowledge graphs can connect concepts to memory. Memory systems use those links to support recommendation and review.",
+          createdAt: "2026-06-10T00:00:00.000Z"
+        }
+      ],
+      chunks: [
+        {
+          id: `${candidate.source.id}-chunk-1`,
+          sourceId: candidate.source.id,
+          content:
+            "Knowledge graphs can connect concepts to memory. Memory systems use those links to support recommendation and review.",
+          conceptHints: ["Knowledge Graph", "Memory", "Recommendation"]
+        }
+      ]
+    })
+  },
+  {
+    now: "2026-06-10T00:00:00.000Z",
+    kinds: ["import_source"]
+  }
+);
+const importedJobRecord = importBatch.records[0];
+
+assert.equal(importBatch.records.length, 1, "executor should run one import job");
+assert.equal(importedJobRecord.status, "succeeded", "import job should succeed");
+assert.equal(
+  importedJobRecord.result?.sourceImport?.importRecord.status,
+  "ready",
+  "import job should produce a ready source import"
+);
+assert.equal(
+  curationStore.list("queued").some((record) => record.job.kind === "generate_followup"),
+  true,
+  "executor should leave unrelated job kinds queued when filtered"
+);
+
+const discoveryPlan = createBackgroundCurationPlan({
+  signals: [interestSignal],
+  feedback: [interestFeedback],
+  topicStates: [interestedTopicState],
+  generatedAt: "2026-06-10T00:00:00.000Z"
+});
+const discoveryStore = createInMemoryBackgroundCurationJobStore();
+
+discoveryStore.enqueuePlan(discoveryPlan);
+
+const discoveryBatch = await runDueBackgroundCurationJobs(
+  discoveryStore,
+  {
+    discoverSources: (job) => [
+      {
+        id: `${job.topicId}-discovered-source`,
+        source: {
+          id: `${job.topicId}-article`,
+          title: "Discovered background source",
+          url: "https://example.com/discovered-background-source",
+          type: "article"
+        },
+        topicId: job.topicId,
+        conceptIds: job.conceptIds,
+        relevanceScore: 0.8,
+        noveltyScore: 0.7,
+        qualityScore: 0.9,
+        reason: "Discovery handler found a relevant article for the interested topic.",
+        discoveredAt: "2026-06-10T00:00:00.000Z"
+      }
+    ]
+  },
+  {
+    now: "2026-06-10T00:20:00.000Z",
+    kinds: ["discover_sources"]
+  }
+);
+const discoveryJobRecord = discoveryBatch.records[0];
+
+assert.equal(discoveryJobRecord.status, "succeeded", "discovery job should succeed");
+assert.equal(
+  discoveryJobRecord.result?.discoveredSourceCandidates?.length,
+  1,
+  "discovery job should record discovered source candidates"
+);
+
 console.log(
   JSON.stringify(
     {
@@ -327,7 +428,9 @@ console.log(
       },
       backgroundCuration: {
         interestedJobs: backgroundPlan.jobs.map((job) => job.kind),
-        cooldownJobs: cooldownPlan.jobs.map((job) => job.kind)
+        cooldownJobs: cooldownPlan.jobs.map((job) => job.kind),
+        executedImportStatus: importedJobRecord.status,
+        executedDiscoveryStatus: discoveryJobRecord.status
       },
       validation: result.validation.map((validation) => ({
         postId: validation.postId,

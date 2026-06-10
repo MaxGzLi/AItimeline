@@ -1,5 +1,6 @@
 export * from "./agents/researchAgent.js";
 export * from "./agents/backgroundCuration.js";
+export * from "./agents/backgroundCurationQueue.js";
 export * from "./fixtures.js";
 export * from "./graph/knowledgeGraph.js";
 export * from "./harness/expansionPolicy.js";

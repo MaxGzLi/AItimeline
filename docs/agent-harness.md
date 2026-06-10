@@ -26,6 +26,7 @@ Code locations:
 
 - [packages/core/src/types.ts](../packages/core/src/types.ts)
 - [packages/core/src/agents/backgroundCuration.ts](../packages/core/src/agents/backgroundCuration.ts)
+- [packages/core/src/agents/backgroundCurationQueue.ts](../packages/core/src/agents/backgroundCurationQueue.ts)
 - [packages/core/src/harness/systemPrompt.ts](../packages/core/src/harness/systemPrompt.ts)
 - [packages/core/src/harness/expansionPolicy.ts](../packages/core/src/harness/expansionPolicy.ts)
 - [packages/core/src/harness/postHarness.ts](../packages/core/src/harness/postHarness.ts)
@@ -71,6 +72,7 @@ Main contracts:
 - `GroundingCheck`: citation and source-fact evidence checks before accepting a post.
 - `AgentExpansionPlan`: follow-up jobs, suppressions, and cooled topics after interaction feedback.
 - `BackgroundCurationPlan`: background jobs that decide whether to generate follow-ups, discover sources, import source candidates, schedule review, or cool down.
+- `BackgroundCurationJobStore`: storage boundary for queued, running, succeeded, failed, and skipped curation jobs.
 - `SourceImportWorker`: server-side import orchestrator that creates source registries, runs the selected harness runner, and returns a `SourceImport` status artifact.
 
 Current exported runners:
@@ -236,6 +238,14 @@ The background curation plan turns expansion jobs plus external source candidate
 
 Strong interest can produce both a follow-up and an external source import. Weak or negative signals suppress source imports.
 
+The queue/executor layer makes that plan runnable:
+
+- `createInMemoryBackgroundCurationJobStore`: reference store for local and test runs.
+- `runDueBackgroundCurationJobs`: fetches due jobs and executes configured handlers.
+- `discover_sources`: calls a source discovery handler and stores returned candidates.
+- `import_source`: uses a source ingestion handler plus `SourceImportWorker` to package a candidate into accepted posts.
+- unsupported handlers are marked `skipped` instead of blocking the queue.
+
 ## Current Implementation
 
 The current MVP uses a deterministic runner and a provider-agnostic model runner behind the same harness interface:
@@ -256,6 +266,7 @@ The current MVP uses a deterministic runner and a provider-agnostic model runner
 14. `createOpenAICompatibleModelClient` provides a server-side adapter for OpenAI-compatible model providers.
 15. `createSourceImportWorker` and `createOpenAICompatibleSourceImportWorker` compose registry creation, runner execution, validation results, and import status.
 16. `createBackgroundCurationPlan` decides which follow-up, source discovery, source import, review, and cooldown jobs should run while the user keeps browsing.
+17. `createInMemoryBackgroundCurationJobStore` and `runDueBackgroundCurationJobs` enqueue and execute due curation jobs.
 
 The deterministic path keeps the prototype stable. The model runner lets us connect real LLM providers without weakening the acceptance gate.
 
@@ -263,5 +274,5 @@ The deterministic path keeps the prototype stable. The model runner lets us conn
 
 1. Add dwell-time and viewport-based impression tracking instead of only action-based signals.
 2. Persist source registries and source import runs outside local storage.
-3. Persist background curation jobs and execute source discovery/import jobs.
+3. Replace the in-memory curation job store with a durable backend store.
 4. Persist topic cooldowns and expansion queue state.
