@@ -7,6 +7,7 @@ import {
   evaluateInteraction,
   rankKnowledgeCards,
   transformMockYouTubeUrl,
+  type BackgroundSourceCandidate,
   type InteractionSignal,
   type KnowledgeCard,
   type KnowledgeChunk,
@@ -74,6 +75,7 @@ type AiThreads = Record<string, AiMessage[]>;
 type InteractionSignals = Record<string, InteractionSignal>;
 type LearningFeedbackByPost = Record<string, LearningFeedback>;
 type ApiStatus = "checking" | "connected" | "offline";
+type SourceCandidateStatus = "pending" | "queued" | "imported" | "dismissed";
 
 type PersistedMvpState = {
   sourceImports: SourceImport[];
@@ -101,6 +103,7 @@ type ApiSnapshot = {
     createdAt: string;
   }>;
   posts: KnowledgeCard[];
+  sourceCandidates: SourceCandidateRecord[];
 };
 
 type ApiTimelineResponse = {
@@ -120,12 +123,24 @@ type ApiCurationRunResponse = {
 
 type MemoryAction = "like" | "save" | "ask";
 
+type SourceCandidateRecord = {
+  id: string;
+  candidate: BackgroundSourceCandidate;
+  status: SourceCandidateStatus;
+  intakeKind: "user_paste" | "browser_share" | "agent_discovery" | "manual";
+  createdAt: string;
+  updatedAt: string;
+};
+
 export function App() {
   const [sourceUrl, setSourceUrl] = useState(sampleSourceUrl);
+  const [candidateUrl, setCandidateUrl] = useState(`${apiBaseUrl}/fixtures/article-background`);
+  const [candidateConcept, setCandidateConcept] = useState(demoProfile.interests[0] ?? "AI Agent");
   const [sourceImports, setSourceImports] = useState<SourceImport[]>([]);
   const [importedCards, setImportedCards] = useState<KnowledgeCard[]>([]);
   const [sourceAssets, setSourceAssets] = useState<SourceAsset[]>([]);
   const [sourceChunks, setSourceChunks] = useState<KnowledgeChunk[]>([]);
+  const [sourceCandidates, setSourceCandidates] = useState<SourceCandidateRecord[]>([]);
   const [aiThreads, setAiThreads] = useState<AiThreads>({});
   const [interactionSignals, setInteractionSignals] = useState<InteractionSignals>({});
   const [learningFeedback, setLearningFeedback] = useState<LearningFeedbackByPost>({});
@@ -133,9 +148,11 @@ export function App() {
   const [apiMessage, setApiMessage] = useState("Connecting to local API");
   const [curationMessage, setCurationMessage] = useState("No worker run yet");
   const [memoryMessage, setMemoryMessage] = useState("No memory edits yet");
+  const [candidateMessage, setCandidateMessage] = useState("No queued source candidates yet");
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
   const [aiPrompt, setAiPrompt] = useState("");
   const [isImporting, setIsImporting] = useState(false);
+  const [isSavingCandidate, setIsSavingCandidate] = useState(false);
   const [isRunningCuration, setIsRunningCuration] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [hasHydrated, setHasHydrated] = useState(false);
@@ -327,6 +344,7 @@ export function App() {
       setSourceImports(timeline.sourceImports);
       setSourceAssets(upsertById([], registryAssets));
       setSourceChunks(upsertById([], registryChunks));
+      setSourceCandidates(snapshot.sourceCandidates);
       setApiStatus("connected");
       setApiMessage("Connected to local API");
     } catch (error) {
@@ -353,7 +371,7 @@ export function App() {
   }
 
   async function syncInteractionSignal(signal: InteractionSignal): Promise<void> {
-    await apiRequest("/api/signals", {
+    const result = await apiRequest<{ plan?: { acceptedSourceCandidateIds?: string[] } }>("/api/signals", {
       method: "POST",
       body: {
         generatedAt: new Date().toISOString(),
@@ -362,6 +380,10 @@ export function App() {
         sourceCandidates: []
       }
     });
+
+    if (result.plan?.acceptedSourceCandidateIds?.length) {
+      await refreshFromApi({ silent: true });
+    }
   }
 
   async function syncMemoryForCard(card: KnowledgeCard, action: MemoryAction, question?: string): Promise<void> {
@@ -481,6 +503,47 @@ export function App() {
       }
     } finally {
       setIsImporting(false);
+    }
+  }
+
+  async function handleSaveCandidate(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const trimmedUrl = candidateUrl.trim();
+    const trimmedConcept = candidateConcept.trim();
+
+    if (!trimmedUrl || !trimmedConcept) {
+      setCandidateMessage("Add a URL and topic before queuing a candidate");
+      return;
+    }
+
+    setIsSavingCandidate(true);
+
+    try {
+      const result = await apiRequest<{ record: SourceCandidateRecord }>("/api/source-candidates", {
+        method: "POST",
+        body: {
+          url: trimmedUrl,
+          intakeKind: "user_paste",
+          topicId: slugConcept(trimmedConcept),
+          conceptIds: [trimmedConcept],
+          relevanceScore: 0.74,
+          noveltyScore: 0.66,
+          qualityScore: 0.72,
+          reason: `Queued from the Web timeline for ${trimmedConcept}.`,
+          discoveredAt: new Date().toISOString()
+        }
+      });
+
+      setSourceCandidates((records) => upsertById(records, [result.record]));
+      setCandidateMessage(`Queued ${result.record.candidate.source.title}`);
+      setApiStatus("connected");
+      setApiMessage("Connected to local API");
+    } catch (error) {
+      setApiStatus("offline");
+      setCandidateMessage(error instanceof Error ? error.message : "Could not queue source candidate");
+    } finally {
+      setIsSavingCandidate(false);
     }
   }
 
@@ -669,6 +732,20 @@ export function App() {
       </main>
 
       <aside className="right-rail" aria-label="Context">
+        <SourceCandidatePanel
+          candidateConcept={candidateConcept}
+          candidateUrl={candidateUrl}
+          curationMessage={curationMessage}
+          isSaving={isSavingCandidate}
+          isRunningCuration={isRunningCuration}
+          message={candidateMessage}
+          onConceptChange={setCandidateConcept}
+          onRunCuration={handleRunCuration}
+          onSubmit={handleSaveCandidate}
+          onUrlChange={setCandidateUrl}
+          records={sourceCandidates}
+        />
+
         <section className="context-section">
           <div className="rail-heading">
             <div>
@@ -781,6 +858,97 @@ export function App() {
         />
       ) : null}
     </div>
+  );
+}
+
+function SourceCandidatePanel({
+  candidateConcept,
+  candidateUrl,
+  curationMessage,
+  isSaving,
+  isRunningCuration,
+  message,
+  onConceptChange,
+  onRunCuration,
+  onSubmit,
+  onUrlChange,
+  records
+}: {
+  candidateConcept: string;
+  candidateUrl: string;
+  curationMessage: string;
+  isSaving: boolean;
+  isRunningCuration: boolean;
+  message: string;
+  onConceptChange: (value: string) => void;
+  onRunCuration: () => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onUrlChange: (value: string) => void;
+  records: SourceCandidateRecord[];
+}) {
+  return (
+    <section className="context-section candidate-section">
+      <div className="rail-heading">
+        <div>
+          <p className="section-label">Source Queue</p>
+          <h2>Candidates</h2>
+        </div>
+        <button className="icon-button compact" title="Candidate sources">
+          <Link size={18} />
+        </button>
+      </div>
+
+      <form className="candidate-form" onSubmit={onSubmit}>
+        <label className="candidate-input">
+          <Link size={16} />
+          <input
+            aria-label="Candidate source URL"
+            onChange={(event) => onUrlChange(event.target.value)}
+            placeholder="Source URL"
+            value={candidateUrl}
+          />
+        </label>
+        <label className="candidate-input">
+          <Sparkles size={16} />
+          <input
+            aria-label="Candidate topic"
+            onChange={(event) => onConceptChange(event.target.value)}
+            placeholder="Topic"
+            value={candidateConcept}
+          />
+        </label>
+        <button className="primary-action candidate-submit" disabled={isSaving} type="submit">
+          {isSaving ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}
+          <span>{isSaving ? "Queuing" : "Queue"}</span>
+        </button>
+      </form>
+
+      <div className="candidate-message">{message}</div>
+
+      <button className="secondary-action candidate-worker" disabled={isRunningCuration} onClick={onRunCuration} type="button">
+        {isRunningCuration ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}
+        <span>{isRunningCuration ? "Running" : "Run Scout"}</span>
+      </button>
+      <div className="candidate-message">{curationMessage}</div>
+
+      <div className="candidate-list">
+        {records.length > 0 ? (
+          records.slice(0, 4).map((record) => (
+            <div className={`candidate-row ${record.status}`} key={record.id}>
+              <div>
+                <span>{record.candidate.source.title}</span>
+                <small>
+                  {formatCandidateStatus(record.status)} · {record.candidate.conceptIds.slice(0, 2).join(", ") || "general"}
+                </small>
+              </div>
+              <strong>{Math.round(record.candidate.relevanceScore * 100)}</strong>
+            </div>
+          ))
+        ) : (
+          <div className="empty-state">No candidates yet</div>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -1395,6 +1563,17 @@ function formatStatus(status: TransformationStatus): string {
     transforming: "Transforming",
     ready: "Ready",
     failed: "Failed"
+  };
+
+  return labels[status];
+}
+
+function formatCandidateStatus(status: SourceCandidateStatus): string {
+  const labels: Record<SourceCandidateStatus, string> = {
+    pending: "Pending",
+    queued: "Queued",
+    imported: "Imported",
+    dismissed: "Dismissed"
   };
 
   return labels[status];

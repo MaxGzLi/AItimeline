@@ -598,6 +598,34 @@ const appPersistence = createAITimelinePersistenceStore({
 appPersistence.saveSourceImportResult(deterministicImport, "2026-06-10T00:00:00.000Z");
 appPersistence.saveCurationJobRecords([...importBatch.records, ...discoveryBatch.records], "2026-06-10T00:20:00.000Z");
 appPersistence.saveReleasePlan(releasePlan, "2026-06-10T00:20:00.000Z");
+appPersistence.saveSourceCandidateRecords(
+  [
+    {
+      id: "smoke-candidate",
+      candidate: {
+        id: "smoke-candidate",
+        source: {
+          id: "smoke-candidate-source",
+          title: "Source candidate persistence smoke",
+          url: "https://example.com/source-candidate",
+          type: "article"
+        },
+        topicId: "ai-agent",
+        conceptIds: ["AI Agent"],
+        relevanceScore: 0.8,
+        noveltyScore: 0.7,
+        qualityScore: 0.9,
+        reason: "Smoke test candidate persistence.",
+        discoveredAt: "2026-06-10T00:00:00.000Z"
+      },
+      status: "pending",
+      intakeKind: "agent_discovery",
+      createdAt: "2026-06-10T00:00:00.000Z",
+      updatedAt: "2026-06-10T00:00:00.000Z"
+    }
+  ],
+  "2026-06-10T00:20:00.000Z"
+);
 appPersistence.saveUserMemory(
   "user-smoke",
   memoryEditResult.memory,
@@ -621,6 +649,8 @@ assert.equal(appSnapshot.curationJobs.length, 2, "persistence should store curat
 assert.equal(appSnapshot.releasePlans.length, 1, "persistence should store release plans");
 assert.equal(appSnapshot.userMemories[0]?.userId, "user-smoke", "persistence should store user memory");
 assert.equal(appSnapshot.memoryEvents.length, 5, "persistence should store memory edit events");
+assert.equal(appSnapshot.sourceCandidates.length, 1, "persistence should store source candidates");
+assert.equal(appSnapshot.sourceCandidates[0]?.status, "pending", "source candidates should preserve status");
 
 console.log(
   JSON.stringify(
@@ -663,7 +693,8 @@ console.log(
         imports: appSnapshot.sourceImports.length,
         posts: appSnapshot.posts.length,
         memories: appSnapshot.userMemories.length,
-        curationJobs: appSnapshot.curationJobs.length
+        curationJobs: appSnapshot.curationJobs.length,
+        sourceCandidates: appSnapshot.sourceCandidates.length
       },
       backgroundCuration: {
         interestedJobs: backgroundPlan.jobs.map((job) => job.kind),

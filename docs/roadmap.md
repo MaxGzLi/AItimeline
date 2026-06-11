@@ -155,8 +155,8 @@ Open-core boundary:
 
 ## Immediate Next Milestones
 
-1. Add source candidate intake so browser shares, pasted URLs and agent discovery can feed the background curation queue.
-2. Turn `Run Scout` into an automatic background worker loop with bounded concurrency and cooldowns.
+1. Turn `Run Scout` into an automatic background worker loop with bounded concurrency and cooldowns.
+2. Add PWA/share-target plumbing for supported browsers while keeping URL paste as the universal fallback.
 3. Use model repair outcomes to tune the source grounding prompts.
 4. Replace local JSON adapters with hosted database and queue adapters when moving from local MVP to cloud app.
 5. Add a memory inspection/edit surface so users can see why the timeline recommends a topic.

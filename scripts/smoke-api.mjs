@@ -53,6 +53,28 @@ try {
   assert.deepEqual(memoryResult.memory.profile.interests, ["AI Agents"], "memory API should add interests");
   assert.equal(memoryResult.memory.profile.explanationStyle, "example-first", "memory API should set style");
 
+  const candidateResult = await requestJson("/api/source-candidates", {
+    method: "POST",
+    body: {
+      url: `${baseUrl}/fixtures/article-background`,
+      title: "Background curation can prepare related sources",
+      intakeKind: "agent_discovery",
+      topicId: firstTopic,
+      conceptIds: firstPost.concepts,
+      relevanceScore: 0.94,
+      noveltyScore: 0.72,
+      qualityScore: 0.88,
+      reason: "The user liked a related post and opened the thread.",
+      discoveredAt: "2026-06-10T00:00:00.000Z"
+    }
+  });
+
+  assert.equal(candidateResult.record.status, "pending", "source candidate should enter pending inbox");
+
+  const candidateInbox = await requestJson("/api/source-candidates?status=pending");
+
+  assert.equal(candidateInbox.records.length, 1, "candidate inbox should expose pending source candidates");
+
   const signalResult = await requestJson("/api/signals", {
     method: "POST",
     body: {
@@ -76,25 +98,7 @@ try {
         reviewed: false,
         skippedQuickly: false,
         createdAt: "2026-06-10T00:00:00.000Z"
-      },
-      sourceCandidates: [
-        {
-          id: "background-source-smoke",
-          source: {
-            id: "background-source-smoke",
-            title: "Background curation can prepare related sources",
-            url: `${baseUrl}/fixtures/article-background`,
-            type: "article"
-          },
-          topicId: firstTopic,
-          conceptIds: firstPost.concepts,
-          relevanceScore: 0.94,
-          noveltyScore: 0.72,
-          qualityScore: 0.88,
-          reason: "The user liked a related post and opened the thread.",
-          discoveredAt: "2026-06-10T00:00:00.000Z"
-        }
-      ]
+      }
     }
   });
 
@@ -124,6 +128,8 @@ try {
   assert.ok(snapshot.posts.length >= importResult.posts.length, "snapshot should persist posts");
   assert.ok(snapshot.curationJobs.length >= signalResult.records.length, "snapshot should persist curation records");
   assert.equal(snapshot.userMemories.length, 1, "snapshot should persist user memory");
+  assert.equal(snapshot.sourceCandidates.length, 1, "snapshot should persist source candidates");
+  assert.equal(snapshot.sourceCandidates[0].status, "imported", "imported source candidate should be marked imported");
 
   console.log("API smoke passed");
 } finally {

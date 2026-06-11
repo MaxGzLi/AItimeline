@@ -9,6 +9,8 @@ flowchart LR
   Timeline --> API
   API --> Signals
   API --> JobStore
+  API --> CandidateInbox["Source Candidate Inbox"]
+  CandidateInbox --> Curation
   Agent --> Worker["Source Import Worker"]
   Worker --> Normalize["Normalize + Deduplicate"]
   Normalize --> Registry["Source Registry\nsnapshots + hashes"]
@@ -73,11 +75,14 @@ The core should stay UI-agnostic and storage-agnostic so it can be reused by a C
 - `POST /api/import/article` and `POST /api/import/youtube` transform sources into timeline posts.
 - `GET /api/timeline` returns posts that are released now, while release plans keep long sources from flooding the feed.
 - `POST /api/signals` converts likes, saves, thread opens, questions and short dwell into feedback and background curation jobs.
+- `POST /api/source-candidates` saves source candidates from paste, browser share, or agent discovery without immediately flooding the feed.
 - `POST /api/curation/run` executes due jobs, including packaging related source candidates into new posts.
 - `POST /api/memory` applies user-visible memory edits with audit events.
 - `GET /api/snapshot` exposes the local JSON persistence snapshot for debugging.
 
 The API writes local JSON snapshots through storage adapters. This is intentionally small: it gives the Web app and future workers a contract without forcing the open-core package to depend on a hosted database.
+
+Source candidates are intentionally separate from source imports. A candidate is just a promising external URL with topic/concept hints and quality scores. It becomes a queued import only after the user shows enough interest in a matching topic. After the worker packages it into posts, the candidate is marked `imported`, so the system can avoid repeating the same source.
 
 ## Future Services
 

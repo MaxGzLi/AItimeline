@@ -89,6 +89,7 @@ button {
 
 .nav-item,
 .primary-action,
+.secondary-action,
 .topic-pill {
   display: inline-flex;
   align-items: center;
@@ -149,7 +150,24 @@ button {
   font-weight: 700;
 }
 
-.primary-action:disabled {
+.secondary-action {
+  width: 100%;
+  justify-content: center;
+  min-height: 38px;
+  padding: 0 12px;
+  border-color: #cbd7df;
+  background: #ffffff;
+  color: #334454;
+  font-weight: 800;
+}
+
+.secondary-action:hover {
+  border-color: #a8c4ff;
+  background: #f6f9ff;
+}
+
+.primary-action:disabled,
+.secondary-action:disabled {
   cursor: not-allowed;
   opacity: 0.72;
 }
@@ -1077,6 +1095,117 @@ button {
 
 .context-section:first-child {
   padding-top: 0;
+}
+
+.candidate-section {
+  display: grid;
+  gap: 12px;
+}
+
+.candidate-form {
+  display: grid;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.candidate-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  min-width: 0;
+  padding: 0 10px;
+  border: 1px solid #cbd7df;
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--muted);
+}
+
+.candidate-input input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+}
+
+.candidate-submit {
+  min-height: 38px;
+}
+
+.candidate-worker {
+  margin-top: 2px;
+}
+
+.candidate-message {
+  min-height: 20px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.candidate-list {
+  display: grid;
+  gap: 8px;
+}
+
+.candidate-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 32px;
+  align-items: center;
+  gap: 10px;
+  min-height: 54px;
+  padding: 8px 10px;
+  border: 1px solid #dce3e8;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.candidate-row.queued {
+  border-color: #cbd7df;
+  background: #f8fafb;
+}
+
+.candidate-row.imported {
+  border-color: #cfe4d8;
+  background: #f0f9f4;
+}
+
+.candidate-row.dismissed {
+  border-color: #f0c3c3;
+  background: #fff2f2;
+}
+
+.candidate-row div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.candidate-row span,
+.candidate-row small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.candidate-row small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.candidate-row strong {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 6px;
+  background: #edf3ff;
+  color: var(--blue);
+  font-size: 12px;
 }
 
 .import-list {

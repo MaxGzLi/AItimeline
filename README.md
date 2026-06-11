@@ -91,7 +91,7 @@ npm run smoke:api
 
 The current prototype also includes a mocked YouTube import flow: paste a YouTube URL, simulate transcript extraction, convert transcript segments into cited knowledge cards, insert those cards into the ranked timeline, inspect source citations, ask source-grounded AI questions, and keep the imported state in local storage.
 
-The local API now exposes the first backend loop: import article or YouTube sources, persist source artifacts and release plans, record interaction signals, update editable user memory, enqueue background curation jobs and run due source imports. The Web prototype reads timeline state from the API, imports URLs through the API, syncs likes/saves/questions into memory, and tracks viewport dwell to decide whether a knowledge series should continue or cool down.
+The local API now exposes the first backend loop: import article or YouTube sources, persist source artifacts and release plans, record interaction signals, update editable user memory, enqueue background curation jobs and run due source imports. The Web prototype reads timeline state from the API, imports URLs through the API, queues source candidates for later background packaging, syncs likes/saves/questions into memory, and tracks viewport dwell to decide whether a knowledge series should continue or cool down.
 
 ## Next Planning Docs
 

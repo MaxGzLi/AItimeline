@@ -1,3 +1,4 @@
+import type { BackgroundSourceCandidate } from "../agents/backgroundCuration.js";
 import type { BackgroundCurationJobRecord } from "../agents/backgroundCurationQueue.js";
 import type { SourcePostReleasePlan } from "../ranking/postReleasePlan.js";
 import type { SourceImportWorkerResult } from "../source/sourceImportWorker.js";
@@ -42,6 +43,24 @@ export interface UserMemoryEditEventRecord {
   event: UserMemoryEditEvent;
 }
 
+export type SourceCandidateRecordStatus = "pending" | "queued" | "imported" | "dismissed";
+
+export type SourceCandidateIntakeKind = "user_paste" | "browser_share" | "agent_discovery" | "manual";
+
+export interface SourceCandidateRecord {
+  id: string;
+  candidate: BackgroundSourceCandidate;
+  status: SourceCandidateRecordStatus;
+  intakeKind: SourceCandidateIntakeKind;
+  createdAt: string;
+  updatedAt: string;
+  userId?: string;
+  notes?: string;
+  lastQueuedAt?: string;
+  importedAt?: string;
+  dismissedAt?: string;
+}
+
 export interface AITimelinePersistenceSnapshot {
   version: 1;
   updatedAt: string;
@@ -54,6 +73,7 @@ export interface AITimelinePersistenceSnapshot {
   releasePlans: SourcePostReleasePlan[];
   userMemories: UserMemoryRecord[];
   memoryEvents: UserMemoryEditEventRecord[];
+  sourceCandidates: SourceCandidateRecord[];
 }
 
 export interface AITimelinePersistenceStore {
@@ -61,6 +81,10 @@ export interface AITimelinePersistenceStore {
   saveSourceImportResult(result: SourceImportWorkerResult, savedAt?: string | Date): AITimelinePersistenceSnapshot;
   saveCurationJobRecords(records: BackgroundCurationJobRecord[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
   saveReleasePlan(plan: SourcePostReleasePlan, savedAt?: string | Date): AITimelinePersistenceSnapshot;
+  saveSourceCandidateRecords(
+    records: SourceCandidateRecord[],
+    savedAt?: string | Date
+  ): AITimelinePersistenceSnapshot;
   saveUserMemory(
     userId: string,
     memory: UserMemory,
@@ -127,6 +151,16 @@ export function createAITimelinePersistenceStore(
 
       return cloneSnapshot(snapshot);
     },
+    saveSourceCandidateRecords(records, savedAt = new Date()) {
+      snapshot = {
+        ...snapshot,
+        updatedAt: normalizeDate(savedAt).toISOString(),
+        sourceCandidates: upsertManyById(snapshot.sourceCandidates, records)
+      };
+      persist(storage, snapshot);
+
+      return cloneSnapshot(snapshot);
+    },
     saveUserMemory(userId, memory, events = [], savedAt = new Date()) {
       const updatedAt = normalizeDate(savedAt).toISOString();
 
@@ -181,7 +215,8 @@ function createSnapshot(input: Partial<AITimelinePersistenceSnapshot> = {}): AIT
     curationJobs: input.curationJobs ?? [],
     releasePlans: input.releasePlans ?? [],
     userMemories: input.userMemories ?? [],
-    memoryEvents: input.memoryEvents ?? []
+    memoryEvents: input.memoryEvents ?? [],
+    sourceCandidates: input.sourceCandidates ?? []
   };
 }
 

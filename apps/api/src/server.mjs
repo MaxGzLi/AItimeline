@@ -71,9 +71,58 @@ export function createApiServer(options = {}) {
         return;
       }
 
+      if (request.method === "GET" && url.pathname === "/api/source-candidates") {
+        const status = url.searchParams.get("status") ?? undefined;
+        const records = persistenceStore
+          .getSnapshot()
+          .sourceCandidates.filter((record) => !status || record.status === status);
+
+        sendJson(response, 200, { records });
+        return;
+      }
+
       if (request.method === "GET" && url.pathname === "/api/curation/jobs") {
         const status = url.searchParams.get("status") ?? undefined;
         sendJson(response, 200, { jobs: curationStore.list(status) });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/source-candidates") {
+        const body = await readJsonBody(request);
+        const record = createSourceCandidateRecord(body);
+        const snapshot = persistenceStore.saveSourceCandidateRecords([record]);
+
+        sendJson(response, 200, {
+          record,
+          snapshotSummary: summarizeSnapshot(snapshot)
+        });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/source-candidates/dismiss") {
+        const body = await readJsonBody(request);
+        requireString(body.id, "id");
+        const record = persistenceStore.getSnapshot().sourceCandidates.find((item) => item.id === body.id);
+
+        if (!record) {
+          sendJson(response, 404, { error: "Source candidate not found." });
+          return;
+        }
+
+        const now = new Date().toISOString();
+        const snapshot = persistenceStore.saveSourceCandidateRecords([
+          {
+            ...record,
+            status: "dismissed",
+            updatedAt: now,
+            dismissedAt: now
+          }
+        ]);
+
+        sendJson(response, 200, {
+          record: snapshot.sourceCandidates.find((item) => item.id === body.id),
+          snapshotSummary: summarizeSnapshot(snapshot)
+        });
         return;
       }
 
@@ -105,16 +154,36 @@ export function createApiServer(options = {}) {
 
       if (request.method === "POST" && url.pathname === "/api/signals") {
         const body = await readJsonBody(request);
+        const persistedCandidates = findMatchingSourceCandidateRecords(persistenceStore.getSnapshot(), body.signal);
         const feedback = evaluateInteraction(body.signal, body.topicState ?? deriveTopicState(body.signal));
         const plan = createBackgroundCurationPlan({
           signals: [body.signal],
           feedback: [feedback],
           topicStates: [body.topicState ?? deriveTopicState(body.signal)],
-          sourceCandidates: body.sourceCandidates ?? [],
+          sourceCandidates: dedupeSourceCandidates([
+            ...(body.sourceCandidates ?? []),
+            ...persistedCandidates.map((record) => record.candidate)
+          ]),
           generatedAt: body.generatedAt ?? new Date().toISOString()
         });
         const records = curationStore.enqueuePlan(plan);
-        const snapshot = persistenceStore.saveCurationJobRecords(records);
+        let snapshot = persistenceStore.saveCurationJobRecords(records);
+
+        if (plan.acceptedSourceCandidateIds.length) {
+          const acceptedIds = new Set(plan.acceptedSourceCandidateIds);
+          const now = plan.generatedAt;
+
+          snapshot = persistenceStore.saveSourceCandidateRecords(
+            persistedCandidates
+              .filter((record) => acceptedIds.has(record.candidate.id))
+              .map((record) => ({
+                ...record,
+                status: "queued",
+                updatedAt: now,
+                lastQueuedAt: now
+              }))
+          );
+        }
 
         sendJson(response, 200, {
           feedback,
@@ -152,6 +221,23 @@ export function createApiServer(options = {}) {
             snapshot = persistenceStore.saveReleasePlan(
               createSourcePostReleasePlan({ posts: record.result.sourceImport.posts })
             );
+
+            if (record.job.sourceCandidate) {
+              const candidateRecord = snapshot.sourceCandidates.find(
+                (item) => item.candidate.id === record.job.sourceCandidate.id
+              );
+
+              if (candidateRecord) {
+                snapshot = persistenceStore.saveSourceCandidateRecords([
+                  {
+                    ...candidateRecord,
+                    status: "imported",
+                    updatedAt: record.completedAt ?? batch.completedAt,
+                    importedAt: record.completedAt ?? batch.completedAt
+                  }
+                ]);
+              }
+            }
           }
         }
 
@@ -226,6 +312,92 @@ function persistImportAndReleasePlan(persistenceStore, importResult) {
   const snapshot = persistenceStore.saveReleasePlan(releasePlan);
 
   return { snapshot, releasePlan };
+}
+
+function createSourceCandidateRecord(body) {
+  const now = body.createdAt ?? body.discoveredAt ?? new Date().toISOString();
+  const candidate = normalizeSourceCandidate(body.candidate ?? body, now);
+
+  return {
+    id: body.id ?? candidate.id,
+    candidate,
+    status: isSourceCandidateStatus(body.status) ? body.status : "pending",
+    intakeKind: isSourceCandidateIntakeKind(body.intakeKind) ? body.intakeKind : "user_paste",
+    createdAt: now,
+    updatedAt: now,
+    userId: typeof body.userId === "string" ? body.userId : undefined,
+    notes: typeof body.notes === "string" ? body.notes : undefined
+  };
+}
+
+function normalizeSourceCandidate(input, now) {
+  const sourceInput = input.source ?? {};
+  const url = sourceInput.url ?? input.url;
+
+  requireString(url, "url");
+
+  const parsedUrl = parseHttpUrl(url);
+  const type = isSourceType(sourceInput.type ?? input.type)
+    ? sourceInput.type ?? input.type
+    : inferSourceType(parsedUrl);
+  const title = sourceInput.title ?? input.title ?? parsedUrl.hostname;
+  const source = {
+    id: sourceInput.id ?? buildSourceId(type, parsedUrl),
+    title,
+    url: parsedUrl.toString(),
+    type,
+    author: sourceInput.author ?? input.author,
+    publishedAt: sourceInput.publishedAt ?? input.publishedAt,
+    durationSeconds: sourceInput.durationSeconds ?? input.durationSeconds
+  };
+  const conceptIds = normalizeStringArray(input.conceptIds);
+  const topicId = typeof input.topicId === "string" && input.topicId.trim() ? input.topicId.trim() : conceptIds[0];
+
+  return {
+    id: input.id ?? `candidate-${source.id}`,
+    source,
+    topicId,
+    conceptIds,
+    relevanceScore: normalizeScore(input.relevanceScore, 0.72),
+    noveltyScore: normalizeScore(input.noveltyScore, 0.62),
+    qualityScore: normalizeScore(input.qualityScore, 0.74),
+    reason: input.reason ?? "Source candidate was saved for future background curation.",
+    discoveredAt: input.discoveredAt ?? now
+  };
+}
+
+function findMatchingSourceCandidateRecords(snapshot, signal) {
+  const signalConcepts = new Set(signal.conceptIds ?? []);
+
+  return snapshot.sourceCandidates
+    .filter((record) => record.status === "pending")
+    .filter((record) => {
+      if (record.candidate.topicId && record.candidate.topicId === signal.topicId) {
+        return true;
+      }
+
+      return record.candidate.conceptIds.some((conceptId) => signalConcepts.has(conceptId));
+    })
+    .sort((left, right) => scoreCandidateRecord(right) - scoreCandidateRecord(left))
+    .slice(0, 8);
+}
+
+function dedupeSourceCandidates(candidates) {
+  const byId = new Map();
+
+  for (const candidate of candidates) {
+    byId.set(candidate.id, candidate);
+  }
+
+  return Array.from(byId.values());
+}
+
+function scoreCandidateRecord(record) {
+  return (
+    record.candidate.relevanceScore * 0.45 +
+    record.candidate.qualityScore * 0.35 +
+    record.candidate.noveltyScore * 0.2
+  );
 }
 
 async function ingestSourceCandidate(candidate) {
@@ -304,7 +476,8 @@ function summarizeSnapshot(snapshot) {
     posts: snapshot.posts.length,
     runs: snapshot.harnessRuns.length,
     curationJobs: snapshot.curationJobs.length,
-    memories: snapshot.userMemories.length
+    memories: snapshot.userMemories.length,
+    sourceCandidates: snapshot.sourceCandidates.length
   };
 }
 
@@ -349,6 +522,86 @@ function requireString(value, fieldName) {
   if (typeof value !== "string" || value.trim() === "") {
     throw new Error(`${fieldName} is required.`);
   }
+}
+
+function parseHttpUrl(url) {
+  try {
+    const parsedUrl = new URL(url);
+
+    if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+      throw new Error("URL must use http or https.");
+    }
+
+    return parsedUrl;
+  } catch (error) {
+    if (error instanceof Error && error.message === "URL must use http or https.") {
+      throw error;
+    }
+
+    throw new Error("Please enter a valid URL.");
+  }
+}
+
+function normalizeStringArray(value) {
+  return Array.isArray(value)
+    ? Array.from(new Set(value.filter((item) => typeof item === "string").map((item) => item.trim()).filter(Boolean)))
+    : [];
+}
+
+function normalizeScore(value, fallback) {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : fallback;
+}
+
+function inferSourceType(url) {
+  if (url.hostname.includes("youtube.com") || url.hostname.includes("youtu.be")) {
+    return "youtube";
+  }
+
+  if (url.hostname.includes("github.com")) {
+    return "repo";
+  }
+
+  return "article";
+}
+
+function buildSourceId(type, url) {
+  if (type === "youtube") {
+    const videoId = url.hostname.includes("youtu.be")
+      ? url.pathname.replace(/^\//, "")
+      : url.searchParams.get("v");
+
+    if (videoId) {
+      return `youtube-${sanitizeSlug(videoId)}`;
+    }
+  }
+
+  return `${type}-${sanitizeSlug(`${url.hostname}-${url.pathname}-${url.search}`)}`;
+}
+
+function sanitizeSlug(value) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "source";
+}
+
+function isSourceType(value) {
+  return (
+    value === "youtube" ||
+    value === "article" ||
+    value === "paper" ||
+    value === "blog" ||
+    value === "news" ||
+    value === "repo" ||
+    value === "pdf" ||
+    value === "audio" ||
+    value === "manual"
+  );
+}
+
+function isSourceCandidateStatus(value) {
+  return value === "pending" || value === "queued" || value === "imported" || value === "dismissed";
+}
+
+function isSourceCandidateIntakeKind(value) {
+  return value === "user_paste" || value === "browser_share" || value === "agent_discovery" || value === "manual";
 }
 
 function sendJson(response, status, payload) {
