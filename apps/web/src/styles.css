@@ -275,6 +275,24 @@ button {
   font-weight: 800;
 }
 
+.source-kind.connected {
+  border-color: #b9ddcb;
+  background: #f0f9f4;
+  color: var(--green);
+}
+
+.source-kind.checking {
+  border-color: #cbd7df;
+  background: #f8fafb;
+  color: var(--muted);
+}
+
+.source-kind.offline {
+  border-color: #f0c3c3;
+  background: #fff2f2;
+  color: var(--red);
+}
+
 .source-form {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 132px;
@@ -1104,6 +1122,19 @@ button {
   border-radius: 8px;
   color: var(--muted);
   font-size: 13px;
+}
+
+.memory-status {
+  min-height: 42px;
+  margin-top: 14px;
+  padding: 10px;
+  border: 1px solid #dce3e8;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #334454;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.35;
 }
 
 .status-ready {

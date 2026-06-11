@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "npm run build -w @aitimeline/core && node src/server.mjs",
+    "dev": "npm run build -w @aitimeline/core && AITIMELINE_ENABLE_FIXTURES=1 node src/server.mjs",
     "start": "npm run build -w @aitimeline/core && node src/server.mjs"
   }
 }

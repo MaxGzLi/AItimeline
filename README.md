@@ -34,12 +34,18 @@ docs             产品、商业、架构和上线策略
 
 ```bash
 npm install
+npm run dev:api
+```
+
+In another terminal:
+
+```bash
 npm run dev
 ```
 
 Then open the local URL printed by Vite.
 
-Run the local API/worker surface separately when testing source ingestion and background curation:
+Run the local API/worker surface in a separate terminal when testing source ingestion and background curation:
 
 ```bash
 npm run dev:api
@@ -85,7 +91,7 @@ npm run smoke:api
 
 The current prototype also includes a mocked YouTube import flow: paste a YouTube URL, simulate transcript extraction, convert transcript segments into cited knowledge cards, insert those cards into the ranked timeline, inspect source citations, ask source-grounded AI questions, and keep the imported state in local storage.
 
-The local API now exposes the first backend loop: import article or YouTube sources, persist source artifacts and release plans, record interaction signals, update editable user memory, enqueue background curation jobs and run due source imports.
+The local API now exposes the first backend loop: import article or YouTube sources, persist source artifacts and release plans, record interaction signals, update editable user memory, enqueue background curation jobs and run due source imports. The Web prototype reads timeline state from the API, imports URLs through the API, syncs likes/saves/questions into memory, and tracks viewport dwell to decide whether a knowledge series should continue or cool down.
 
 ## Next Planning Docs
 

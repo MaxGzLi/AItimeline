@@ -155,8 +155,8 @@ Open-core boundary:
 
 ## Immediate Next Milestones
 
-1. Connect the Web prototype to `apps/api` for imports, timeline reads, memory edits and interaction signals.
-2. Add dwell-time and viewport-based impression tracking in the Web feed.
-3. Add source candidate intake so browser shares, pasted URLs and agent discovery can feed the background curation queue.
-4. Use model repair outcomes to tune the source grounding prompts.
-5. Replace local JSON adapters with hosted database and queue adapters when moving from local MVP to cloud app.
+1. Add source candidate intake so browser shares, pasted URLs and agent discovery can feed the background curation queue.
+2. Turn `Run Scout` into an automatic background worker loop with bounded concurrency and cooldowns.
+3. Use model repair outcomes to tune the source grounding prompts.
+4. Replace local JSON adapters with hosted database and queue adapters when moving from local MVP to cloud app.
+5. Add a memory inspection/edit surface so users can see why the timeline recommends a topic.

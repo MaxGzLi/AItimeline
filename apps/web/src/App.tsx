@@ -14,11 +14,12 @@ import {
   type RankedKnowledgeCard,
   type SourceAsset,
   type SourceImport,
+  type SourceRegistry,
   type TopicState,
   type TransformationStatus,
   type TrustState
 } from "@aitimeline/core";
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   Bell,
   Bookmark,
@@ -49,7 +50,8 @@ import {
   XCircle
 } from "lucide-react";
 
-const sampleYouTubeUrl = "https://www.youtube.com/watch?v=aitimeline-demo";
+const apiBaseUrl = (import.meta.env.VITE_AITIMELINE_API_URL ?? "http://127.0.0.1:8787").replace(/\/$/, "");
+const sampleSourceUrl = `${apiBaseUrl}/fixtures/article`;
 const storageKey = "aitimeline.mvp.v3";
 
 const navItems = [
@@ -71,6 +73,7 @@ type AiMessage = {
 type AiThreads = Record<string, AiMessage[]>;
 type InteractionSignals = Record<string, InteractionSignal>;
 type LearningFeedbackByPost = Record<string, LearningFeedback>;
+type ApiStatus = "checking" | "connected" | "offline";
 
 type PersistedMvpState = {
   sourceImports: SourceImport[];
@@ -82,8 +85,43 @@ type PersistedMvpState = {
   learningFeedback: LearningFeedbackByPost;
 };
 
+type ApiImportResponse = {
+  importRecord: SourceImport;
+  assets?: SourceAsset[];
+  chunks?: KnowledgeChunk[];
+  posts?: KnowledgeCard[];
+};
+
+type ApiSnapshot = {
+  sourceImports: SourceImport[];
+  sourceRegistries: Array<{
+    id: string;
+    sourceId: string;
+    registry: SourceRegistry;
+    createdAt: string;
+  }>;
+  posts: KnowledgeCard[];
+};
+
+type ApiTimelineResponse = {
+  posts: KnowledgeCard[];
+  sourceImports: SourceImport[];
+};
+
+type ApiCurationRunResponse = {
+  records: Array<{
+    id: string;
+    status: string;
+    result?: {
+      sourceImport?: ApiImportResponse;
+    };
+  }>;
+};
+
+type MemoryAction = "like" | "save" | "ask";
+
 export function App() {
-  const [sourceUrl, setSourceUrl] = useState(sampleYouTubeUrl);
+  const [sourceUrl, setSourceUrl] = useState(sampleSourceUrl);
   const [sourceImports, setSourceImports] = useState<SourceImport[]>([]);
   const [importedCards, setImportedCards] = useState<KnowledgeCard[]>([]);
   const [sourceAssets, setSourceAssets] = useState<SourceAsset[]>([]);
@@ -91,11 +129,17 @@ export function App() {
   const [aiThreads, setAiThreads] = useState<AiThreads>({});
   const [interactionSignals, setInteractionSignals] = useState<InteractionSignals>({});
   const [learningFeedback, setLearningFeedback] = useState<LearningFeedbackByPost>({});
+  const [apiStatus, setApiStatus] = useState<ApiStatus>("checking");
+  const [apiMessage, setApiMessage] = useState("Connecting to local API");
+  const [curationMessage, setCurationMessage] = useState("No worker run yet");
+  const [memoryMessage, setMemoryMessage] = useState("No memory edits yet");
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
   const [aiPrompt, setAiPrompt] = useState("");
   const [isImporting, setIsImporting] = useState(false);
+  const [isRunningCuration, setIsRunningCuration] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [hasHydrated, setHasHydrated] = useState(false);
+  const syncedSignalSignatures = useRef<Record<string, string>>({});
 
   const importedSignals = useMemo(
     () =>
@@ -190,6 +234,10 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    void refreshFromApi({ silent: true });
+  }, []);
+
+  useEffect(() => {
     if (!hasHydrated) {
       return;
     }
@@ -234,13 +282,171 @@ export function App() {
     });
   }, [hasHydrated, rankedCards]);
 
+  useEffect(() => {
+    if (!hasHydrated || apiStatus !== "connected") {
+      return;
+    }
+
+    for (const signal of Object.values(interactionSignals)) {
+      if (!shouldSyncSignal(signal)) {
+        continue;
+      }
+
+      const signature = createSignalSignature(signal);
+
+      if (syncedSignalSignatures.current[signal.postId] === signature) {
+        continue;
+      }
+
+      syncedSignalSignatures.current[signal.postId] = signature;
+      void syncInteractionSignal(signal).catch(() => {
+        setApiMessage("Signal sync failed; local feedback is still available");
+      });
+    }
+  }, [apiStatus, hasHydrated, interactionSignals]);
+
+  const handleDwell = useCallback((card: KnowledgeCard, dwellTimeMs: number) => {
+    recordInteraction(card, { dwellTimeMs, skippedQuickly: false });
+  }, []);
+
+  async function refreshFromApi(options: { silent?: boolean } = {}) {
+    if (!options.silent) {
+      setApiStatus("checking");
+      setApiMessage("Refreshing local API state");
+    }
+
+    try {
+      const [timeline, snapshot] = await Promise.all([
+        apiRequest<ApiTimelineResponse>(`/api/timeline?now=${encodeURIComponent(new Date().toISOString())}`),
+        apiRequest<ApiSnapshot>("/api/snapshot")
+      ]);
+      const registryAssets = snapshot.sourceRegistries.flatMap((record) => record.registry.assets);
+      const registryChunks = snapshot.sourceRegistries.flatMap((record) => record.registry.chunks);
+
+      setImportedCards(timeline.posts);
+      setSourceImports(timeline.sourceImports);
+      setSourceAssets(upsertById([], registryAssets));
+      setSourceChunks(upsertById([], registryChunks));
+      setApiStatus("connected");
+      setApiMessage("Connected to local API");
+    } catch (error) {
+      setApiStatus("offline");
+      setApiMessage(error instanceof Error ? error.message : "Start npm run dev:api to use source imports");
+    }
+  }
+
+  async function importSourceThroughApi(url: string): Promise<ApiImportResponse> {
+    const endpoint = isYouTubeUrl(url) ? "/api/import/youtube" : "/api/import/article";
+    const result = await apiRequest<ApiImportResponse>(endpoint, {
+      method: "POST",
+      body: {
+        url,
+        createdAt: new Date().toISOString(),
+        recommendedBecause: "You imported this source from the Web timeline."
+      }
+    });
+
+    setApiStatus("connected");
+    setApiMessage("Connected to local API");
+
+    return result;
+  }
+
+  async function syncInteractionSignal(signal: InteractionSignal): Promise<void> {
+    await apiRequest("/api/signals", {
+      method: "POST",
+      body: {
+        generatedAt: new Date().toISOString(),
+        signal,
+        topicState: deriveTopicState(signal),
+        sourceCandidates: []
+      }
+    });
+  }
+
+  async function syncMemoryForCard(card: KnowledgeCard, action: MemoryAction, question?: string): Promise<void> {
+    const sourceType = card.sources[0]?.type;
+    const primaryConcept = card.concepts[0];
+    const edits = [
+      {
+        kind: "add",
+        field: "interaction.recentCardIds",
+        value: card.id,
+        reason: `User ${action} interaction on timeline.`
+      }
+    ];
+
+    if (action === "like" && primaryConcept) {
+      edits.push({
+        kind: "add",
+        field: "profile.interests",
+        value: primaryConcept,
+        reason: "Liked cards should raise interest memory."
+      });
+    }
+
+    if (action === "save") {
+      for (const concept of card.concepts.slice(0, 4)) {
+        edits.push({
+          kind: "add",
+          field: "knowledge.savedConcepts",
+          value: concept,
+          reason: "Saved cards become reviewable knowledge concepts."
+        });
+      }
+    }
+
+    if (action === "ask" && question) {
+      edits.push({
+        kind: "add",
+        field: "interaction.recentQuestions",
+        value: question,
+        reason: "Questions reveal confusing or high-pull knowledge gaps."
+      });
+    }
+
+    if (sourceType) {
+      edits.push({
+        kind: "add",
+        field: "agent.preferredSourceTypes",
+        value: sourceType,
+        reason: "Interacted sources tune future source selection."
+      });
+    }
+
+    try {
+      const result = await apiRequest<{ events: unknown[] }>("/api/memory", {
+        method: "POST",
+        body: {
+          userId: "local-user",
+          edits
+        }
+      });
+
+      setMemoryMessage(`${result.events.length} memory edits from ${action}`);
+    } catch {
+      setMemoryMessage("Memory API unavailable; kept local feedback");
+    }
+  }
+
+  function applyImportResult(result: ApiImportResponse) {
+    const posts = result.posts ?? [];
+    const assets = result.assets ?? [];
+    const chunks = result.chunks ?? [];
+
+    setSourceImports((imports) => upsertImport(imports, result.importRecord));
+    setImportedCards((cards) => mergeCards(posts, cards));
+    setSourceAssets((assetsState) => upsertById(assetsState, assets));
+    setSourceChunks((chunksState) => upsertById(chunksState, chunks));
+  }
+
   async function handleImport(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     const trimmedUrl = sourceUrl.trim();
 
     if (!trimmedUrl) {
-      setImportError("Paste a YouTube URL first.");
+      setImportError("Paste an article or YouTube URL first.");
       return;
     }
 
@@ -248,28 +454,60 @@ export function App() {
     setImportError(null);
 
     try {
-      const result = transformMockYouTubeUrl(trimmedUrl, new Date().toISOString());
-      const pendingImport = { ...result.importRecord, status: "queued" as const };
+      const result = await importSourceThroughApi(trimmedUrl);
 
-      setSourceImports((imports) => upsertImport(imports, pendingImport));
-      await wait(320);
-      setSourceImports((imports) => updateImportStatus(imports, pendingImport.id, "extracting"));
-      await wait(420);
-      setSourceImports((imports) => updateImportStatus(imports, pendingImport.id, "transforming"));
-      await wait(520);
+      applyImportResult(result);
+      await refreshFromApi({ silent: true });
 
-      setImportedCards((cards) => mergeCards(result.cards, cards));
-      setSourceAssets((assets) => upsertById(assets, [result.asset]));
-      setSourceChunks((chunks) => upsertById(chunks, result.chunks));
-      setSourceImports((imports) => updateImportStatus(imports, pendingImport.id, "ready"));
-      setSelectedCardId(result.cards[0]?.id ?? null);
-      if (result.cards[0]) {
-        recordInteraction(result.cards[0], { openedThread: true, dwellTimeMs: 9000 });
+      if (result.posts?.[0]) {
+        setSelectedCardId(result.posts[0].id);
+        recordInteraction(result.posts[0], { openedThread: true, dwellTimeMs: 9000 });
       }
     } catch (error) {
-      setImportError(error instanceof Error ? error.message : "Import failed.");
+      if (isYouTubeUrl(trimmedUrl)) {
+        const result = transformMockYouTubeUrl(trimmedUrl, new Date().toISOString());
+
+        applyImportResult({
+          importRecord: result.importRecord,
+          assets: [result.asset],
+          chunks: result.chunks,
+          posts: result.cards
+        });
+        setSelectedCardId(result.cards[0]?.id ?? null);
+        setApiStatus("offline");
+        setApiMessage("API unavailable; showing mock YouTube import locally");
+      } else {
+        setImportError(error instanceof Error ? error.message : "Import failed.");
+      }
     } finally {
       setIsImporting(false);
+    }
+  }
+
+  async function handleRunCuration() {
+    setIsRunningCuration(true);
+    setCurationMessage("Running due jobs");
+
+    try {
+      const result = await apiRequest<ApiCurationRunResponse>("/api/curation/run", {
+        method: "POST",
+        body: {
+          now: new Date().toISOString(),
+          kinds: ["import_source", "discover_sources", "generate_followup", "schedule_review", "cooldown_topic"]
+        }
+      });
+      const importedCount = result.records.filter((record) => record.result?.sourceImport).length;
+
+      setApiStatus("connected");
+      setApiMessage("Connected to local API");
+      setCurationMessage(`${result.records.length} jobs processed · ${importedCount} source imports`);
+      await refreshFromApi({ silent: true });
+    } catch (error) {
+      setApiStatus("offline");
+      setApiMessage(error instanceof Error ? error.message : "API unavailable");
+      setCurationMessage("Worker could not run");
+    } finally {
+      setIsRunningCuration(false);
     }
   }
 
@@ -299,6 +537,7 @@ export function App() {
       [selectedCard.id]: [...(threads[selectedCard.id] ?? []), userMessage, assistantMessage]
     }));
     recordInteraction(selectedCard, { askedQuestion: true, openedThread: true, dwellTimeMs: 12000 });
+    void syncMemoryForCard(selectedCard, "ask", aiPrompt.trim());
     setAiPrompt("");
   }
 
@@ -309,10 +548,12 @@ export function App() {
 
   function handleLike(card: RankedKnowledgeCard) {
     recordInteraction(card, { liked: true, skippedQuickly: false });
+    void syncMemoryForCard(card, "like");
   }
 
   function handleSave(card: RankedKnowledgeCard) {
     recordInteraction(card, { saved: true, skippedQuickly: false });
+    void syncMemoryForCard(card, "save");
   }
 
   function handleSkip(card: RankedKnowledgeCard) {
@@ -322,12 +563,15 @@ export function App() {
   function recordInteraction(card: KnowledgeCard, patch: Partial<InteractionSignal>) {
     setInteractionSignals((signals) => {
       const currentSignal = signals[card.id] ?? createInteractionSignal(card);
+      const dwellTimeMs = Math.max(currentSignal.dwellTimeMs, patch.dwellTimeMs ?? 0);
       const nextSignal = {
         ...currentSignal,
         ...patch,
         impression: true,
         conceptIds: card.concepts,
-        topicId: getTopicId(card)
+        topicId: getTopicId(card),
+        dwellTimeMs,
+        createdAt: new Date().toISOString()
       };
       const feedback = evaluateInteraction(nextSignal, deriveTopicState(nextSignal));
 
@@ -363,10 +607,10 @@ export function App() {
         <section className="agent-brief">
           <div className="section-label">Active Agent</div>
           <h2>AI Knowledge Scout</h2>
-          <p>AI Agent, RAG, Product Strategy</p>
-          <button className="primary-action">
-            <RefreshCw size={18} />
-            <span>Run Scout</span>
+          <p>{curationMessage}</p>
+          <button className="primary-action" disabled={isRunningCuration} onClick={handleRunCuration} type="button">
+            {isRunningCuration ? <LoaderCircle className="spin" size={18} /> : <RefreshCw size={18} />}
+            <span>{isRunningCuration ? "Running" : "Run Scout"}</span>
           </button>
         </section>
       </aside>
@@ -396,6 +640,8 @@ export function App() {
         </div>
 
         <SourceImportPanel
+          apiMessage={apiMessage}
+          apiStatus={apiStatus}
           cardCount={importedCards.length}
           error={importError}
           isImporting={isImporting}
@@ -411,6 +657,7 @@ export function App() {
               card={card}
               feedback={learningFeedback[card.id]}
               key={card.id}
+              onDwell={handleDwell}
               onLike={handleLike}
               onOpen={handleOpenCard}
               onSave={handleSave}
@@ -461,6 +708,20 @@ export function App() {
               </div>
             ))}
           </div>
+        </section>
+
+        <section className="context-section">
+          <div className="rail-heading">
+            <div>
+              <p className="section-label">Memory</p>
+              <h2>User Signals</h2>
+            </div>
+            <button className="icon-button compact" title="Memory">
+              <Brain size={18} />
+            </button>
+          </div>
+
+          <div className="memory-status">{memoryMessage}</div>
         </section>
 
         <section className="context-section">
@@ -524,6 +785,8 @@ export function App() {
 }
 
 function SourceImportPanel({
+  apiMessage,
+  apiStatus,
   cardCount,
   error,
   isImporting,
@@ -532,6 +795,8 @@ function SourceImportPanel({
   onUrlChange,
   url
 }: {
+  apiMessage: string;
+  apiStatus: ApiStatus;
   cardCount: number;
   error: string | null;
   isImporting: boolean;
@@ -545,11 +810,11 @@ function SourceImportPanel({
       <div className="source-import-heading">
         <div>
           <p className="section-label">Source Agent</p>
-          <h2>YouTube Import</h2>
+          <h2>URL Import</h2>
         </div>
-        <div className="source-kind">
-          <Video size={17} />
-          <span>Mocked</span>
+        <div className={`source-kind ${apiStatus}`}>
+          {apiStatus === "connected" ? <CheckCircle2 size={17} /> : <Video size={17} />}
+          <span>{apiStatus === "connected" ? "API" : apiStatus === "checking" ? "Checking" : "Offline"}</span>
         </div>
       </div>
 
@@ -557,9 +822,9 @@ function SourceImportPanel({
         <label className="source-input-shell">
           <Link size={18} />
           <input
-            aria-label="YouTube URL"
+            aria-label="Source URL"
             onChange={(event) => onUrlChange(event.target.value)}
-            placeholder="Paste YouTube URL"
+            placeholder="Paste article or YouTube URL"
             value={url}
           />
         </label>
@@ -577,7 +842,7 @@ function SourceImportPanel({
           </span>
         ) : (
           <span>
-            {latestImport ? formatStatus(latestImport.status) : "Ready"} · {cardCount} generated posts
+            {latestImport ? formatStatus(latestImport.status) : "Ready"} · {cardCount} generated posts · {apiMessage}
           </span>
         )}
       </div>
@@ -616,6 +881,7 @@ function StatusIcon({ status }: { status: TransformationStatus }) {
 function KnowledgeCardView({
   card,
   feedback,
+  onDwell,
   onLike,
   onOpen,
   onSave,
@@ -624,12 +890,16 @@ function KnowledgeCardView({
 }: {
   card: RankedKnowledgeCard;
   feedback?: LearningFeedback;
+  onDwell: (card: RankedKnowledgeCard, dwellTimeMs: number) => void;
   onLike: (card: RankedKnowledgeCard) => void;
   onOpen: (card: RankedKnowledgeCard) => void;
   onSave: (card: RankedKnowledgeCard) => void;
   onSkip: (card: RankedKnowledgeCard) => void;
   signal?: InteractionSignal;
 }) {
+  const cardRef = useRef<HTMLElement | null>(null);
+  const visibleSince = useRef<number | null>(null);
+  const reportedDwellMs = useRef(0);
   const threadPreview = getTimelineThreadPreview(card);
   const readBlock = getReadBlock(card);
   const learnPrompts = card.reviewPrompts?.slice(0, 2) ?? [];
@@ -637,8 +907,62 @@ function KnowledgeCardView({
   const primaryConcept = card.concepts[0] ?? "Knowledge";
   const source = card.sources[0];
 
+  useEffect(() => {
+    const node = cardRef.current;
+
+    if (!node || !("IntersectionObserver" in window)) {
+      return;
+    }
+
+    const flushDwell = () => {
+      if (visibleSince.current === null) {
+        return;
+      }
+
+      const dwellTimeMs = Math.round(performance.now() - visibleSince.current);
+      visibleSince.current = null;
+
+      if (dwellTimeMs >= 1200 && dwellTimeMs > reportedDwellMs.current + 800) {
+        reportedDwellMs.current = dwellTimeMs;
+        onDwell(card, dwellTimeMs);
+      }
+    };
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry?.isIntersecting && entry.intersectionRatio >= 0.6) {
+          visibleSince.current ??= performance.now();
+          return;
+        }
+
+        flushDwell();
+      },
+      { threshold: [0, 0.6, 1] }
+    );
+    const interval = window.setInterval(() => {
+      if (visibleSince.current === null) {
+        return;
+      }
+
+      const dwellTimeMs = Math.round(performance.now() - visibleSince.current);
+
+      if (dwellTimeMs >= 9000 && dwellTimeMs > reportedDwellMs.current + 3500) {
+        reportedDwellMs.current = dwellTimeMs;
+        onDwell(card, dwellTimeMs);
+      }
+    }, 3000);
+
+    observer.observe(node);
+
+    return () => {
+      window.clearInterval(interval);
+      flushDwell();
+      observer.disconnect();
+    };
+  }, [card, onDwell]);
+
   return (
-    <article className="knowledge-card">
+    <article className="knowledge-card" ref={cardRef}>
       <div className="post-avatar" aria-hidden="true">
         {getAgentInitials(primaryConcept)}
       </div>
@@ -981,14 +1305,6 @@ function upsertImport(imports: SourceImport[], nextImport: SourceImport): Source
   return [nextImport, ...imports.filter((item) => item.id !== nextImport.id)];
 }
 
-function updateImportStatus(
-  imports: SourceImport[],
-  importId: string,
-  status: TransformationStatus
-): SourceImport[] {
-  return imports.map((item) => (item.id === importId ? { ...item, status } : item));
-}
-
 function getTimelineThreadPreview(card: KnowledgeCard): NonNullable<KnowledgeCard["thread"]> {
   return (
     card.thread
@@ -1219,6 +1535,69 @@ function buildGroundedAnswer(card: KnowledgeCard, chunks: KnowledgeChunk[], prom
     .join("\n\n");
 }
 
+async function apiRequest<T>(path: string, options: { method?: "GET" | "POST"; body?: unknown } = {}): Promise<T> {
+  const response = await fetch(`${apiBaseUrl}${path}`, {
+    method: options.method ?? "GET",
+    headers: {
+      "content-type": "application/json"
+    },
+    body: options.body ? JSON.stringify(options.body) : undefined
+  });
+  const payload = (await response.json()) as unknown;
+
+  if (!response.ok) {
+    const message =
+      isRecord(payload) && typeof payload.error === "string"
+        ? payload.error
+        : `AITimeline API request failed with ${response.status}.`;
+
+    throw new Error(message);
+  }
+
+  return payload as T;
+}
+
+function isYouTubeUrl(url: string): boolean {
+  try {
+    const parsedUrl = new URL(url);
+
+    return parsedUrl.hostname.includes("youtube.com") || parsedUrl.hostname.includes("youtu.be");
+  } catch {
+    return false;
+  }
+}
+
+function shouldSyncSignal(signal: InteractionSignal): boolean {
+  return (
+    signal.impression &&
+    (signal.dwellTimeMs > 0 ||
+      signal.openedThread ||
+      signal.liked ||
+      signal.saved ||
+      signal.askedQuestion ||
+      signal.reviewed ||
+      signal.skippedQuickly)
+  );
+}
+
+function createSignalSignature(signal: InteractionSignal): string {
+  return [
+    signal.postId,
+    signal.topicId,
+    Math.round(signal.dwellTimeMs / 1000),
+    signal.openedThread,
+    signal.liked,
+    signal.saved,
+    signal.askedQuestion,
+    signal.reviewed,
+    signal.skippedQuickly
+  ].join(":");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function loadStoredState(): PersistedMvpState | null {
   try {
     const rawState = window.localStorage.getItem(storageKey);
@@ -1230,10 +1609,4 @@ function loadStoredState(): PersistedMvpState | null {
 
 function saveStoredState(state: PersistedMvpState): void {
   window.localStorage.setItem(storageKey, JSON.stringify(state));
-}
-
-function wait(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    window.setTimeout(resolve, ms);
-  });
 }
