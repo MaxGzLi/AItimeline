@@ -54,6 +54,7 @@ import {
 const apiBaseUrl = (import.meta.env.VITE_AITIMELINE_API_URL ?? "http://127.0.0.1:8787").replace(/\/$/, "");
 const sampleSourceUrl = `${apiBaseUrl}/fixtures/article`;
 const storageKey = "aitimeline.mvp.v3";
+const syncedSignalsStorageKey = "aitimeline.synced-signals.v1";
 
 const navItems = [
   { label: "Timeline", icon: Home, active: true },
@@ -121,6 +122,13 @@ type ApiCurationRunResponse = {
   }>;
 };
 
+type ApiCurationJobsResponse = {
+  jobs: Array<{
+    id: string;
+    status: string;
+  }>;
+};
+
 type MemoryAction = "like" | "save" | "ask";
 
 type SourceCandidateRecord = {
@@ -147,6 +155,9 @@ export function App() {
   const [apiStatus, setApiStatus] = useState<ApiStatus>("checking");
   const [apiMessage, setApiMessage] = useState("Connecting to local API");
   const [curationMessage, setCurationMessage] = useState("No worker run yet");
+  const [autoScoutEnabled, setAutoScoutEnabled] = useState(true);
+  const [lastScoutAt, setLastScoutAt] = useState<string | null>(null);
+  const [queuedJobCount, setQueuedJobCount] = useState(0);
   const [memoryMessage, setMemoryMessage] = useState("No memory edits yet");
   const [candidateMessage, setCandidateMessage] = useState("No queued source candidates yet");
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
@@ -156,7 +167,9 @@ export function App() {
   const [isRunningCuration, setIsRunningCuration] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [hasHydrated, setHasHydrated] = useState(false);
-  const syncedSignalSignatures = useRef<Record<string, string>>({});
+  const syncedSignalSignatures = useRef<Record<string, string>>(loadSyncedSignalSignatures());
+  const pendingSignalSignatures = useRef<Record<string, string>>({});
+  const curationRunInFlight = useRef(false);
 
   const importedSignals = useMemo(
     () =>
@@ -233,6 +246,10 @@ export function App() {
   const selectedThread = selectedCard ? aiThreads[selectedCard.id] ?? [] : [];
   const selectedFeedback = selectedCard ? learningFeedback[selectedCard.id] : undefined;
   const selectedSignal = selectedCard ? interactionSignals[selectedCard.id] : undefined;
+  const hasQueuedScoutWork = useMemo(
+    () => queuedJobCount > 0 || sourceCandidates.some((record) => record.status === "queued"),
+    [queuedJobCount, sourceCandidates]
+  );
 
   useEffect(() => {
     const storedState = loadStoredState();
@@ -315,12 +332,55 @@ export function App() {
         continue;
       }
 
-      syncedSignalSignatures.current[signal.postId] = signature;
-      void syncInteractionSignal(signal).catch(() => {
-        setApiMessage("Signal sync failed; local feedback is still available");
-      });
+      if (pendingSignalSignatures.current[signal.postId] === signature) {
+        continue;
+      }
+
+      pendingSignalSignatures.current[signal.postId] = signature;
+      void syncInteractionSignal(signal)
+        .then(() => {
+          syncedSignalSignatures.current[signal.postId] = signature;
+          saveSyncedSignalSignatures(syncedSignalSignatures.current);
+        })
+        .catch(() => {
+          setApiMessage("Signal sync failed; local feedback is still available");
+        })
+        .finally(() => {
+          if (pendingSignalSignatures.current[signal.postId] === signature) {
+            delete pendingSignalSignatures.current[signal.postId];
+          }
+        });
     }
   }, [apiStatus, hasHydrated, interactionSignals]);
+
+  useEffect(() => {
+    if (!hasHydrated || !autoScoutEnabled || apiStatus !== "connected") {
+      return;
+    }
+
+    const runIfUseful = () => {
+      if (document.hidden || curationRunInFlight.current || !hasQueuedScoutWork) {
+        return;
+      }
+
+      void runCuration("auto");
+    };
+    const startupTimer = window.setTimeout(runIfUseful, 2500);
+    const interval = window.setInterval(runIfUseful, 45000);
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        runIfUseful();
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      window.clearTimeout(startupTimer);
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [apiStatus, autoScoutEnabled, hasHydrated, hasQueuedScoutWork]);
 
   const handleDwell = useCallback((card: KnowledgeCard, dwellTimeMs: number) => {
     recordInteraction(card, { dwellTimeMs, skippedQuickly: false });
@@ -333,9 +393,10 @@ export function App() {
     }
 
     try {
-      const [timeline, snapshot] = await Promise.all([
+      const [timeline, snapshot, queuedJobs] = await Promise.all([
         apiRequest<ApiTimelineResponse>(`/api/timeline?now=${encodeURIComponent(new Date().toISOString())}`),
-        apiRequest<ApiSnapshot>("/api/snapshot")
+        apiRequest<ApiSnapshot>("/api/snapshot"),
+        apiRequest<ApiCurationJobsResponse>("/api/curation/jobs?status=queued")
       ]);
       const registryAssets = snapshot.sourceRegistries.flatMap((record) => record.registry.assets);
       const registryChunks = snapshot.sourceRegistries.flatMap((record) => record.registry.chunks);
@@ -345,6 +406,7 @@ export function App() {
       setSourceAssets(upsertById([], registryAssets));
       setSourceChunks(upsertById([], registryChunks));
       setSourceCandidates(snapshot.sourceCandidates);
+      setQueuedJobCount(queuedJobs.jobs.length);
       setApiStatus("connected");
       setApiMessage("Connected to local API");
     } catch (error) {
@@ -547,31 +609,48 @@ export function App() {
     }
   }
 
-  async function handleRunCuration() {
+  async function runCuration(trigger: "manual" | "auto" = "manual") {
+    if (curationRunInFlight.current) {
+      return;
+    }
+
+    curationRunInFlight.current = true;
     setIsRunningCuration(true);
-    setCurationMessage("Running due jobs");
+    setCurationMessage(trigger === "auto" ? "Auto scout running due jobs" : "Running due jobs");
 
     try {
       const result = await apiRequest<ApiCurationRunResponse>("/api/curation/run", {
         method: "POST",
         body: {
           now: new Date().toISOString(),
+          limit: trigger === "auto" ? 4 : 8,
           kinds: ["import_source", "discover_sources", "generate_followup", "schedule_review", "cooldown_topic"]
         }
       });
       const importedCount = result.records.filter((record) => record.result?.sourceImport).length;
+      const checkedAt = new Date().toISOString();
 
       setApiStatus("connected");
       setApiMessage("Connected to local API");
-      setCurationMessage(`${result.records.length} jobs processed · ${importedCount} source imports`);
+      setLastScoutAt(checkedAt);
+      setCurationMessage(
+        result.records.length > 0
+          ? `${trigger === "auto" ? "Auto scout" : "Scout"} processed ${result.records.length} jobs · ${importedCount} source imports`
+          : `${trigger === "auto" ? "Auto scout" : "Scout"} checked · no due jobs`
+      );
       await refreshFromApi({ silent: true });
     } catch (error) {
       setApiStatus("offline");
       setApiMessage(error instanceof Error ? error.message : "API unavailable");
       setCurationMessage("Worker could not run");
     } finally {
+      curationRunInFlight.current = false;
       setIsRunningCuration(false);
     }
+  }
+
+  function handleRunCuration() {
+    void runCuration("manual");
   }
 
   function handleAskAi(event: FormEvent<HTMLFormElement>) {
@@ -733,16 +812,21 @@ export function App() {
 
       <aside className="right-rail" aria-label="Context">
         <SourceCandidatePanel
+          autoScoutEnabled={autoScoutEnabled}
           candidateConcept={candidateConcept}
           candidateUrl={candidateUrl}
           curationMessage={curationMessage}
+          hasQueuedScoutWork={hasQueuedScoutWork}
           isSaving={isSavingCandidate}
           isRunningCuration={isRunningCuration}
+          lastScoutAt={lastScoutAt}
           message={candidateMessage}
           onConceptChange={setCandidateConcept}
+          onAutoScoutChange={setAutoScoutEnabled}
           onRunCuration={handleRunCuration}
           onSubmit={handleSaveCandidate}
           onUrlChange={setCandidateUrl}
+          queuedJobCount={queuedJobCount}
           records={sourceCandidates}
         />
 
@@ -862,28 +946,38 @@ export function App() {
 }
 
 function SourceCandidatePanel({
+  autoScoutEnabled,
   candidateConcept,
   candidateUrl,
   curationMessage,
+  hasQueuedScoutWork,
   isSaving,
   isRunningCuration,
+  lastScoutAt,
   message,
+  onAutoScoutChange,
   onConceptChange,
   onRunCuration,
   onSubmit,
   onUrlChange,
+  queuedJobCount,
   records
 }: {
+  autoScoutEnabled: boolean;
   candidateConcept: string;
   candidateUrl: string;
   curationMessage: string;
+  hasQueuedScoutWork: boolean;
   isSaving: boolean;
   isRunningCuration: boolean;
+  lastScoutAt: string | null;
   message: string;
+  onAutoScoutChange: (value: boolean) => void;
   onConceptChange: (value: string) => void;
   onRunCuration: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onUrlChange: (value: string) => void;
+  queuedJobCount: number;
   records: SourceCandidateRecord[];
 }) {
   return (
@@ -925,11 +1019,24 @@ function SourceCandidatePanel({
 
       <div className="candidate-message">{message}</div>
 
+      <label className="auto-scout-toggle">
+        <input
+          checked={autoScoutEnabled}
+          onChange={(event) => onAutoScoutChange(event.target.checked)}
+          type="checkbox"
+        />
+        <span>Auto scout</span>
+        <strong>{hasQueuedScoutWork ? `${queuedJobCount} queued jobs` : "Idle"}</strong>
+      </label>
+
       <button className="secondary-action candidate-worker" disabled={isRunningCuration} onClick={onRunCuration} type="button">
         {isRunningCuration ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}
         <span>{isRunningCuration ? "Running" : "Run Scout"}</span>
       </button>
-      <div className="candidate-message">{curationMessage}</div>
+      <div className="candidate-message">
+        {curationMessage}
+        {lastScoutAt ? ` · ${formatShortTime(lastScoutAt)}` : ""}
+      </div>
 
       <div className="candidate-list">
         {records.length > 0 ? (
@@ -1672,6 +1779,13 @@ function formatDueDate(value: string): string {
   }).format(new Date(value));
 }
 
+function formatShortTime(value: string): string {
+  return new Intl.DateTimeFormat("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(new Date(value));
+}
+
 function buildTimestampUrl(url: string | undefined, seconds: number): string {
   if (!url) {
     return "#";
@@ -1788,4 +1902,28 @@ function loadStoredState(): PersistedMvpState | null {
 
 function saveStoredState(state: PersistedMvpState): void {
   window.localStorage.setItem(storageKey, JSON.stringify(state));
+}
+
+function loadSyncedSignalSignatures(): Record<string, string> {
+  try {
+    const rawState = window.localStorage.getItem(syncedSignalsStorageKey);
+    const parsed = rawState ? (JSON.parse(rawState) as unknown) : {};
+
+    return isStringRecord(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveSyncedSignalSignatures(signatures: Record<string, string>): void {
+  window.localStorage.setItem(syncedSignalsStorageKey, JSON.stringify(signatures));
+}
+
+function isStringRecord(value: unknown): value is Record<string, string> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.values(value).every((item) => typeof item === "string")
+  );
 }

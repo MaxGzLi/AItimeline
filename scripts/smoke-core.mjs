@@ -482,6 +482,27 @@ assert.equal(enqueuedRecords.length, 2, "background curation store should enqueu
 assert.equal(curationStore.getDueJobs("2026-06-10T00:00:00.000Z").length, 2, "queued jobs should be due");
 assert.ok(persistedCurationJobs.includes("import_source"), "persistent curation store should serialize jobs");
 
+const duplicateBackgroundPlan = createBackgroundCurationPlan({
+  signals: [interestSignal],
+  feedback: [interestFeedback],
+  topicStates: [interestedTopicState],
+  generatedAt: "2026-06-10T00:01:00.000Z",
+  sourceCandidates: backgroundPlan.jobs
+    .flatMap((job) => (job.sourceCandidate ? [job.sourceCandidate] : []))
+});
+const duplicateRecords = curationStore.enqueuePlan(duplicateBackgroundPlan);
+
+assert.deepEqual(
+  duplicateRecords.map((record) => record.id).sort(),
+  enqueuedRecords.map((record) => record.id).sort(),
+  "background curation store should return existing active equivalent jobs"
+);
+assert.equal(
+  curationStore.getDueJobs("2026-06-10T00:01:00.000Z").length,
+  2,
+  "semantic duplicate curation jobs should not inflate the queue"
+);
+
 const rehydratedCurationStore = createPersistentBackgroundCurationJobStore(curationJobStorage);
 const importBatch = await runDueBackgroundCurationJobs(
   rehydratedCurationStore,

@@ -92,7 +92,7 @@ export function createInMemoryBackgroundCurationJobStore(
       const records: BackgroundCurationJobRecord[] = [];
 
       for (const job of plan.jobs) {
-        const existing = recordsById.get(job.id);
+        const existing = recordsById.get(job.id) ?? findActiveEquivalentJob(recordsById, job);
 
         if (existing) {
           records.push(cloneRecord(existing));
@@ -376,6 +376,28 @@ function compareRecords(left: BackgroundCurationJobRecord, right: BackgroundCura
   }
 
   return right.job.priority - left.job.priority;
+}
+
+function findActiveEquivalentJob(
+  recordsById: Map<string, BackgroundCurationJobRecord>,
+  job: BackgroundCurationJob
+): BackgroundCurationJobRecord | undefined {
+  const jobKey = createSemanticJobKey(job);
+
+  return Array.from(recordsById.values()).find(
+    (record) =>
+      (record.status === "queued" || record.status === "running") &&
+      createSemanticJobKey(record.job) === jobKey
+  );
+}
+
+function createSemanticJobKey(job: BackgroundCurationJob): string {
+  return [
+    job.kind,
+    job.topicId,
+    [...job.conceptIds].sort().join(","),
+    job.sourceCandidate?.id ?? ""
+  ].join("|");
 }
 
 function parseStoredRecord(value: unknown): BackgroundCurationJobRecord {

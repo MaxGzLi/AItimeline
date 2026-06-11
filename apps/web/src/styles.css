@@ -1146,6 +1146,39 @@ button {
   line-height: 1.35;
 }
 
+.auto-scout-toggle {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 10px;
+  border: 1px solid #dce3e8;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #334454;
+}
+
+.auto-scout-toggle input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--blue);
+}
+
+.auto-scout-toggle span,
+.auto-scout-toggle strong {
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.auto-scout-toggle strong {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 .candidate-list {
   display: grid;
   gap: 8px;

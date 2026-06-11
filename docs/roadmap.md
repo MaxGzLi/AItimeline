@@ -155,8 +155,8 @@ Open-core boundary:
 
 ## Immediate Next Milestones
 
-1. Turn `Run Scout` into an automatic background worker loop with bounded concurrency and cooldowns.
-2. Add PWA/share-target plumbing for supported browsers while keeping URL paste as the universal fallback.
+1. Add PWA/share-target plumbing for supported browsers while keeping URL paste as the universal fallback.
+2. Move auto scout from a page-visible loop to a real hosted worker with bounded concurrency, cooldowns and per-user quotas.
 3. Use model repair outcomes to tune the source grounding prompts.
 4. Replace local JSON adapters with hosted database and queue adapters when moving from local MVP to cloud app.
 5. Add a memory inspection/edit surface so users can see why the timeline recommends a topic.
