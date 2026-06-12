@@ -13,6 +13,7 @@ import {
   evaluateInteraction,
   fetchArticle,
   fetchYouTubeTranscript,
+  rankPersonalizedTimeline,
   runDueBackgroundCurationJobs,
   transformArticleUrl,
   transformYouTubeUrl
@@ -67,7 +68,15 @@ export function createApiServer(options = {}) {
       }
 
       if (request.method === "GET" && url.pathname === "/api/timeline") {
-        sendJson(response, 200, getTimelineResponse(persistenceStore.getSnapshot(), url.searchParams.get("now")));
+        sendJson(
+          response,
+          200,
+          getTimelineResponse(
+            persistenceStore.getSnapshot(),
+            url.searchParams.get("now"),
+            url.searchParams.get("userId") ?? "local-user"
+          )
+        );
         return;
       }
 
@@ -154,20 +163,39 @@ export function createApiServer(options = {}) {
 
       if (request.method === "POST" && url.pathname === "/api/signals") {
         const body = await readJsonBody(request);
-        const persistedCandidates = findMatchingSourceCandidateRecords(persistenceStore.getSnapshot(), body.signal);
-        const feedback = evaluateInteraction(body.signal, body.topicState ?? deriveTopicState(body.signal));
+        const generatedAt = body.generatedAt ?? new Date().toISOString();
+        const currentSnapshot = persistenceStore.getSnapshot();
+        const persistedCandidates = findMatchingSourceCandidateRecords(currentSnapshot, body.signal);
+        const observedTopicState = body.topicState ?? deriveTopicState(body.signal);
+        const currentTopicState = currentSnapshot.topicStates.find((record) => record.topicId === observedTopicState.topicId);
+        const feedback = evaluateInteraction(body.signal, observedTopicState);
+        const topicState = updateTopicStateFromFeedback(
+          currentTopicState,
+          observedTopicState,
+          body.signal,
+          feedback,
+          generatedAt
+        );
         const plan = createBackgroundCurationPlan({
           signals: [body.signal],
           feedback: [feedback],
-          topicStates: [body.topicState ?? deriveTopicState(body.signal)],
+          topicStates: [topicState],
           sourceCandidates: dedupeSourceCandidates([
             ...(body.sourceCandidates ?? []),
             ...persistedCandidates.map((record) => record.candidate)
           ]),
-          generatedAt: body.generatedAt ?? new Date().toISOString()
+          generatedAt
         });
         const records = curationStore.enqueuePlan(plan);
-        let snapshot = persistenceStore.saveCurationJobRecords(records);
+        const signalRecord = {
+          id: buildInteractionSignalRecordId(body.signal),
+          signal: body.signal,
+          feedback,
+          createdAt: body.signal.createdAt ?? generatedAt
+        };
+        persistenceStore.saveInteractionSignalRecords([signalRecord], generatedAt);
+        persistenceStore.saveTopicStateRecords([topicState], generatedAt);
+        let snapshot = persistenceStore.saveCurationJobRecords(records, generatedAt);
 
         if (plan.acceptedSourceCandidateIds.length) {
           const acceptedIds = new Set(plan.acceptedSourceCandidateIds);
@@ -187,6 +215,7 @@ export function createApiServer(options = {}) {
 
         sendJson(response, 200, {
           feedback,
+          topicState,
           plan,
           records,
           snapshotSummary: summarizeSnapshot(snapshot)
@@ -448,7 +477,7 @@ async function ingestSourceCandidate(candidate) {
   throw new Error(`Background source ingestion does not support ${candidate.source.type} yet.`);
 }
 
-function getTimelineResponse(snapshot, nowValue) {
+function getTimelineResponse(snapshot, nowValue, userId = "local-user") {
   const now = nowValue ? new Date(nowValue) : new Date();
   const releasePlans = snapshot.releasePlans;
   const releaseItems = releasePlans.flatMap((plan) => plan.items);
@@ -461,11 +490,21 @@ function getTimelineResponse(snapshot, nowValue) {
   const posts = releaseItems.length
     ? snapshot.posts.filter((post) => releasedPostIds.has(post.id) || !plannedPostIds.has(post.id))
     : snapshot.posts;
+  const memoryRecord = snapshot.userMemories.find((record) => record.userId === userId);
+  const rankedPosts = rankPersonalizedTimeline({
+    cards: posts,
+    memory: memoryRecord?.memory,
+    topicStates: snapshot.topicStates,
+    recentSignals: snapshot.interactionSignals.map((record) => record.signal),
+    now
+  });
 
   return {
-    posts,
+    posts: rankedPosts,
     sourceImports: snapshot.sourceImports,
     releasePlans,
+    topicStates: snapshot.topicStates,
+    recommendationSummary: summarizeRecommendation(rankedPosts),
     snapshotSummary: summarizeSnapshot(snapshot)
   };
 }
@@ -477,7 +516,24 @@ function summarizeSnapshot(snapshot) {
     runs: snapshot.harnessRuns.length,
     curationJobs: snapshot.curationJobs.length,
     memories: snapshot.userMemories.length,
+    interactionSignals: snapshot.interactionSignals.length,
+    topicStates: snapshot.topicStates.length,
     sourceCandidates: snapshot.sourceCandidates.length
+  };
+}
+
+function summarizeRecommendation(posts) {
+  const byIntent = {};
+
+  for (const post of posts) {
+    const intent = post.recommendationIntent ?? "explore";
+    byIntent[intent] = (byIntent[intent] ?? 0) + 1;
+  }
+
+  return {
+    total: posts.length,
+    byIntent,
+    topReasons: posts.flatMap((post) => post.scoreReasons ?? []).slice(0, 6)
   };
 }
 
@@ -492,6 +548,113 @@ function deriveTopicState(signal) {
     fatigueScore: signal.skippedQuickly ? 0.85 : 0.15,
     comprehensionScore: signal.askedQuestion ? 0.35 : signal.reviewed || signal.saved ? 0.78 : 0.55
   };
+}
+
+function buildInteractionSignalRecordId(signal) {
+  const signature = [
+    signal.postId,
+    signal.topicId,
+    signal.createdAt,
+    signal.dwellTimeMs,
+    signal.openedThread,
+    signal.liked,
+    signal.saved,
+    signal.askedQuestion,
+    signal.reviewed,
+    signal.skippedQuickly
+  ].join("|");
+
+  return `signal-${sanitizeSlug(signal.postId)}-${hashText(signature)}`;
+}
+
+function updateTopicStateFromFeedback(currentState, observedState, signal, feedback, nowValue) {
+  const now = new Date(nowValue);
+  let interestScore = blendScores(currentState?.interestScore, observedState.interestScore, 0.45);
+  let fatigueScore = blendScores(currentState?.fatigueScore, observedState.fatigueScore, 0.55);
+  let comprehensionScore = blendScores(currentState?.comprehensionScore, observedState.comprehensionScore, 0.35);
+  const strength = Math.max(-5, Math.min(20, feedback.signalStrength)) / 20;
+
+  if (feedback.inferredState === "interested") {
+    interestScore += 0.12 + Math.max(0, strength) * 0.18;
+    fatigueScore *= 0.55;
+  }
+
+  if (feedback.inferredState === "confused") {
+    interestScore += 0.08;
+    comprehensionScore -= 0.16;
+    fatigueScore *= 0.7;
+  }
+
+  if (feedback.inferredState === "needs_review") {
+    interestScore += 0.1;
+    comprehensionScore += 0.08;
+    fatigueScore *= 0.7;
+  }
+
+  if (feedback.inferredState === "fatigued") {
+    interestScore *= 0.82;
+    fatigueScore += 0.28;
+  }
+
+  if (feedback.inferredState === "not_relevant") {
+    interestScore *= 0.88;
+    fatigueScore += signal.dwellTimeMs < 2500 ? 0.16 : 0.06;
+  }
+
+  if (signal.dwellTimeMs >= 12000) {
+    interestScore += 0.08;
+  }
+
+  if (signal.liked || signal.saved) {
+    interestScore += 0.08;
+  }
+
+  if (signal.reviewed) {
+    comprehensionScore += 0.08;
+  }
+
+  let cooldownUntil = currentState?.cooldownUntil;
+
+  if (feedback.nextAction === "cooldown_topic") {
+    cooldownUntil = new Date(now.getTime() + 36 * 60 * 60 * 1000).toISOString();
+  } else if (cooldownUntil && new Date(cooldownUntil) <= now) {
+    cooldownUntil = undefined;
+  }
+
+  return {
+    topicId: observedState.topicId,
+    interestScore: roundScore(clampScore(interestScore)),
+    fatigueScore: roundScore(clampScore(fatigueScore)),
+    comprehensionScore: roundScore(clampScore(comprehensionScore)),
+    cooldownUntil,
+    updatedAt: now.toISOString()
+  };
+}
+
+function blendScores(currentValue, observedValue, observedWeight) {
+  if (typeof currentValue !== "number") {
+    return observedValue;
+  }
+
+  return currentValue * (1 - observedWeight) + observedValue * observedWeight;
+}
+
+function clampScore(value) {
+  return Math.max(0, Math.min(1, value));
+}
+
+function roundScore(value) {
+  return Math.round(value * 100) / 100;
+}
+
+function hashText(value) {
+  let hash = 0;
+
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+
+  return hash.toString(16);
 }
 
 function createFileStorageAdapter(filePath) {

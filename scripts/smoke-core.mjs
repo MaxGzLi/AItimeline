@@ -13,6 +13,7 @@ const { createOpenAICompatibleModelClient, createOpenAICompatibleModelClientFrom
   "../packages/core/dist/model/openaiCompatibleClient.js"
 );
 const { createSourcePostReleasePlan } = await import("../packages/core/dist/ranking/postReleasePlan.js");
+const { rankPersonalizedTimeline } = await import("../packages/core/dist/ranking/ranker.js");
 const { createOpenAICompatibleSourceImportWorker, createSourceImportWorker } = await import(
   "../packages/core/dist/source/sourceImportWorker.js"
 );
@@ -390,6 +391,20 @@ const interestedTopicState = {
   comprehensionScore: 0.74
 };
 const interestFeedback = evaluateInteraction(interestSignal, interestedTopicState);
+const personalizedRanking = rankPersonalizedTimeline({
+  cards: result.cards,
+  memory: memoryEditResult.memory,
+  topicStates: [interestedTopicState],
+  recentSignals: [interestSignal],
+  now: "2026-06-10T00:00:00.000Z"
+});
+
+assert.ok(personalizedRanking[0].scoreReasons.length > 0, "personalized ranking should explain scores");
+assert.ok(
+  personalizedRanking.some((card) => card.id === interestSignal.postId && card.recommendationIntent !== "explore"),
+  "personalized ranking should react to recent interaction signals"
+);
+
 const backgroundPlan = createBackgroundCurationPlan({
   signals: [interestSignal],
   feedback: [interestFeedback],
@@ -647,6 +662,26 @@ appPersistence.saveSourceCandidateRecords(
   ],
   "2026-06-10T00:20:00.000Z"
 );
+appPersistence.saveInteractionSignalRecords(
+  [
+    {
+      id: "smoke-interest-signal",
+      signal: interestSignal,
+      feedback: interestFeedback,
+      createdAt: interestSignal.createdAt
+    }
+  ],
+  "2026-06-10T00:20:00.000Z"
+);
+appPersistence.saveTopicStateRecords(
+  [
+    {
+      ...interestedTopicState,
+      updatedAt: "2026-06-10T00:20:00.000Z"
+    }
+  ],
+  "2026-06-10T00:20:00.000Z"
+);
 appPersistence.saveUserMemory(
   "user-smoke",
   memoryEditResult.memory,
@@ -670,6 +705,8 @@ assert.equal(appSnapshot.curationJobs.length, 2, "persistence should store curat
 assert.equal(appSnapshot.releasePlans.length, 1, "persistence should store release plans");
 assert.equal(appSnapshot.userMemories[0]?.userId, "user-smoke", "persistence should store user memory");
 assert.equal(appSnapshot.memoryEvents.length, 5, "persistence should store memory edit events");
+assert.equal(appSnapshot.interactionSignals.length, 1, "persistence should store interaction signals");
+assert.equal(appSnapshot.topicStates.length, 1, "persistence should store topic states");
 assert.equal(appSnapshot.sourceCandidates.length, 1, "persistence should store source candidates");
 assert.equal(appSnapshot.sourceCandidates[0]?.status, "pending", "source candidates should preserve status");
 
@@ -715,7 +752,14 @@ console.log(
         posts: appSnapshot.posts.length,
         memories: appSnapshot.userMemories.length,
         curationJobs: appSnapshot.curationJobs.length,
+        interactionSignals: appSnapshot.interactionSignals.length,
+        topicStates: appSnapshot.topicStates.length,
         sourceCandidates: appSnapshot.sourceCandidates.length
+      },
+      ranking: {
+        topScore: personalizedRanking[0].score,
+        topIntent: personalizedRanking[0].recommendationIntent,
+        reasons: personalizedRanking[0].scoreReasons
       },
       backgroundCuration: {
         interestedJobs: backgroundPlan.jobs.map((job) => job.kind),

@@ -108,8 +108,14 @@ type ApiSnapshot = {
 };
 
 type ApiTimelineResponse = {
-  posts: KnowledgeCard[];
+  posts: RankedKnowledgeCard[];
   sourceImports: SourceImport[];
+  topicStates?: TopicState[];
+  recommendationSummary?: {
+    total: number;
+    byIntent: Record<string, number>;
+    topReasons: string[];
+  };
 };
 
 type ApiCurationRunResponse = {
@@ -219,12 +225,17 @@ export function App() {
     [interactionSignals]
   );
 
-  const allCards = useMemo(() => [...importedCards, ...demoCards], [importedCards]);
+  const rankedImportedCards = useMemo(() => ensureRankedCards(importedCards), [importedCards]);
+  const demoRankedCards = useMemo(() => rankKnowledgeCards(demoCards, demoProfile), []);
+  const rankedCards = useMemo(
+    () => (rankedImportedCards.length > 0 ? rankedImportedCards : demoRankedCards),
+    [demoRankedCards, rankedImportedCards]
+  );
+  const allCards = useMemo(() => rankedCards, [rankedCards]);
   const allSignals = useMemo(
     () => [...demoSignals, ...importedSignals, ...interactionUserSignals],
     [importedSignals, interactionUserSignals]
   );
-  const rankedCards = useMemo(() => rankKnowledgeCards(allCards, demoProfile), [allCards]);
   const selectedCard = useMemo(
     () => (selectedCardId ? rankedCards.find((card) => card.id === selectedCardId) ?? null : null),
     [rankedCards, selectedCardId]
@@ -394,7 +405,9 @@ export function App() {
 
     try {
       const [timeline, snapshot, queuedJobs] = await Promise.all([
-        apiRequest<ApiTimelineResponse>(`/api/timeline?now=${encodeURIComponent(new Date().toISOString())}`),
+        apiRequest<ApiTimelineResponse>(
+          `/api/timeline?userId=local-user&now=${encodeURIComponent(new Date().toISOString())}`
+        ),
         apiRequest<ApiSnapshot>("/api/snapshot"),
         apiRequest<ApiCurationJobsResponse>("/api/curation/jobs?status=queued")
       ]);
@@ -433,7 +446,11 @@ export function App() {
   }
 
   async function syncInteractionSignal(signal: InteractionSignal): Promise<void> {
-    const result = await apiRequest<{ plan?: { acceptedSourceCandidateIds?: string[] } }>("/api/signals", {
+    const result = await apiRequest<{
+      feedback?: LearningFeedback;
+      topicState?: TopicState;
+      plan?: { acceptedSourceCandidateIds?: string[] };
+    }>("/api/signals", {
       method: "POST",
       body: {
         generatedAt: new Date().toISOString(),
@@ -443,9 +460,14 @@ export function App() {
       }
     });
 
-    if (result.plan?.acceptedSourceCandidateIds?.length) {
-      await refreshFromApi({ silent: true });
+    if (result.feedback) {
+      setLearningFeedback((feedbackByPost) => ({
+        ...feedbackByPost,
+        [signal.postId]: result.feedback as LearningFeedback
+      }));
     }
+
+    await refreshFromApi({ silent: true });
   }
 
   async function syncMemoryForCard(card: KnowledgeCard, action: MemoryAction, question?: string): Promise<void> {
@@ -1324,6 +1346,14 @@ function KnowledgeCardView({
           </div>
         ) : null}
 
+        {card.scoreReasons.length > 0 ? (
+          <div className="recommendation-reasons" aria-label="Recommendation reasons">
+            {card.scoreReasons.slice(0, 3).map((reason) => (
+              <span key={reason}>{reason}</span>
+            ))}
+          </div>
+        ) : null}
+
         <div className="concept-list">
           {card.concepts.slice(0, 3).map((concept) => (
             <span key={concept}>{concept}</span>
@@ -1569,6 +1599,26 @@ function SourceDetailDrawer({
 function mergeCards(newCards: KnowledgeCard[], currentCards: KnowledgeCard[]): KnowledgeCard[] {
   const newCardIds = new Set(newCards.map((card) => card.id));
   return [...newCards, ...currentCards.filter((card) => !newCardIds.has(card.id))];
+}
+
+function ensureRankedCards(cards: KnowledgeCard[]): RankedKnowledgeCard[] {
+  return cards.map((card) => {
+    if (isRankedKnowledgeCard(card)) {
+      return card;
+    }
+
+    return {
+      ...card,
+      score: 0,
+      scoreReasons: [card.recommendedBecause || "Imported source is ready for exploration"]
+    };
+  });
+}
+
+function isRankedKnowledgeCard(card: KnowledgeCard): card is RankedKnowledgeCard {
+  const maybeRanked = card as Partial<RankedKnowledgeCard>;
+
+  return typeof maybeRanked.score === "number" && Array.isArray(maybeRanked.scoreReasons);
 }
 
 function upsertById<T extends { id: string }>(currentItems: T[], newItems: T[]): T[] {

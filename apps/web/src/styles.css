@@ -1042,6 +1042,29 @@ button {
   background: #fff8ed;
 }
 
+.recommendation-reasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 10px;
+  min-width: 0;
+}
+
+.recommendation-reasons span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  max-width: 100%;
+  padding: 0 8px;
+  border: 1px solid #cbd7df;
+  border-radius: 6px;
+  background: #eef3f7;
+  color: #263847;
+  font-size: 12px;
+  font-weight: 750;
+  overflow-wrap: anywhere;
+}
+
 .concept-list {
   display: flex;
   flex-wrap: wrap;

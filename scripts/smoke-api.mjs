@@ -35,6 +35,8 @@ try {
   const timeline = await requestJson("/api/timeline?now=2026-06-10T00:00:00.000Z");
 
   assert.ok(timeline.posts.length > 0, "timeline API should expose imported posts");
+  assert.equal(typeof timeline.posts[0].score, "number", "timeline API should rank posts");
+  assert.ok(Array.isArray(timeline.posts[0].scoreReasons), "timeline API should explain ranking scores");
 
   const firstPost = timeline.posts[0];
   const firstTopic = firstPost.concepts[0] ?? "agentic-learning";
@@ -103,10 +105,19 @@ try {
   });
 
   assert.ok(signalResult.records.length > 0, "signal API should enqueue curation jobs");
+  assert.equal(signalResult.topicState.topicId, firstTopic, "signal API should persist next topic state");
+  assert.equal(typeof signalResult.topicState.interestScore, "number", "topic state should include interest score");
   assert.ok(
     signalResult.records.some((record) => record.job.kind === "import_source"),
     "strong interest with source candidates should enqueue source import"
   );
+
+  const personalizedTimeline = await requestJson(
+    "/api/timeline?userId=smoke-user&now=2026-06-10T00:00:00.000Z"
+  );
+
+  assert.ok(personalizedTimeline.posts[0].scoreReasons.length > 0, "personalized timeline should explain top rank");
+  assert.ok(personalizedTimeline.recommendationSummary.total > 0, "timeline should summarize recommendation mix");
 
   const curationRun = await requestJson("/api/curation/run", {
     method: "POST",
@@ -128,6 +139,8 @@ try {
   assert.ok(snapshot.posts.length >= importResult.posts.length, "snapshot should persist posts");
   assert.ok(snapshot.curationJobs.length >= signalResult.records.length, "snapshot should persist curation records");
   assert.equal(snapshot.userMemories.length, 1, "snapshot should persist user memory");
+  assert.equal(snapshot.interactionSignals.length, 1, "snapshot should persist interaction signals");
+  assert.equal(snapshot.topicStates.length, 1, "snapshot should persist topic states");
   assert.equal(snapshot.sourceCandidates.length, 1, "snapshot should persist source candidates");
   assert.equal(snapshot.sourceCandidates[0].status, "imported", "imported source candidate should be marked imported");
 

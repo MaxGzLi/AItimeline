@@ -5,9 +5,12 @@ import type { SourceImportWorkerResult } from "../source/sourceImportWorker.js";
 import type {
   AgentHarnessRun,
   HarnessValidationResult,
+  InteractionSignal,
   KnowledgePost,
+  LearningFeedback,
   SourceImport,
   SourceRegistry,
+  TopicState,
   UserMemory
 } from "../types.js";
 import type { UserMemoryEditEvent } from "../memory/userMemoryControls.js";
@@ -43,6 +46,17 @@ export interface UserMemoryEditEventRecord {
   event: UserMemoryEditEvent;
 }
 
+export interface InteractionSignalRecord {
+  id: string;
+  signal: InteractionSignal;
+  feedback: LearningFeedback;
+  createdAt: string;
+}
+
+export interface TopicStateRecord extends TopicState {
+  updatedAt: string;
+}
+
 export type SourceCandidateRecordStatus = "pending" | "queued" | "imported" | "dismissed";
 
 export type SourceCandidateIntakeKind = "user_paste" | "browser_share" | "agent_discovery" | "manual";
@@ -73,6 +87,8 @@ export interface AITimelinePersistenceSnapshot {
   releasePlans: SourcePostReleasePlan[];
   userMemories: UserMemoryRecord[];
   memoryEvents: UserMemoryEditEventRecord[];
+  interactionSignals: InteractionSignalRecord[];
+  topicStates: TopicStateRecord[];
   sourceCandidates: SourceCandidateRecord[];
 }
 
@@ -85,6 +101,11 @@ export interface AITimelinePersistenceStore {
     records: SourceCandidateRecord[],
     savedAt?: string | Date
   ): AITimelinePersistenceSnapshot;
+  saveInteractionSignalRecords(
+    records: InteractionSignalRecord[],
+    savedAt?: string | Date
+  ): AITimelinePersistenceSnapshot;
+  saveTopicStateRecords(records: TopicStateRecord[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
   saveUserMemory(
     userId: string,
     memory: UserMemory,
@@ -161,6 +182,26 @@ export function createAITimelinePersistenceStore(
 
       return cloneSnapshot(snapshot);
     },
+    saveInteractionSignalRecords(records, savedAt = new Date()) {
+      snapshot = {
+        ...snapshot,
+        updatedAt: normalizeDate(savedAt).toISOString(),
+        interactionSignals: upsertManyById(snapshot.interactionSignals, records)
+      };
+      persist(storage, snapshot);
+
+      return cloneSnapshot(snapshot);
+    },
+    saveTopicStateRecords(records, savedAt = new Date()) {
+      snapshot = {
+        ...snapshot,
+        updatedAt: normalizeDate(savedAt).toISOString(),
+        topicStates: upsertTopicStateRecords(snapshot.topicStates, records)
+      };
+      persist(storage, snapshot);
+
+      return cloneSnapshot(snapshot);
+    },
     saveUserMemory(userId, memory, events = [], savedAt = new Date()) {
       const updatedAt = normalizeDate(savedAt).toISOString();
 
@@ -216,6 +257,8 @@ function createSnapshot(input: Partial<AITimelinePersistenceSnapshot> = {}): AIT
     releasePlans: input.releasePlans ?? [],
     userMemories: input.userMemories ?? [],
     memoryEvents: input.memoryEvents ?? [],
+    interactionSignals: input.interactionSignals ?? [],
+    topicStates: input.topicStates ?? [],
     sourceCandidates: input.sourceCandidates ?? []
   };
 }
@@ -262,6 +305,16 @@ function upsertUserMemory(items: UserMemoryRecord[], item: UserMemoryRecord): Us
   byUserId.set(item.userId, item);
 
   return Array.from(byUserId.values());
+}
+
+function upsertTopicStateRecords(items: TopicStateRecord[], nextItems: TopicStateRecord[]): TopicStateRecord[] {
+  const byTopicId = new Map(items.map((record) => [record.topicId, record]));
+
+  for (const item of nextItems) {
+    byTopicId.set(item.topicId, item);
+  }
+
+  return Array.from(byTopicId.values());
 }
 
 function withReleasePlanId(plan: SourcePostReleasePlan): SourcePostReleasePlan & { id: string } {
