@@ -133,9 +133,28 @@ try {
     "curation run should import a background source"
   );
 
+  const followupRun = await requestJson("/api/curation/run", {
+    method: "POST",
+    body: {
+      now: "2026-06-10T00:00:00.000Z",
+      kinds: ["generate_followup"]
+    }
+  });
+
+  assert.ok(followupRun.records.length > 0, "curation run should process follow-up jobs");
+  assert.ok(
+    followupRun.records.some(
+      (record) =>
+        record.status === "succeeded" &&
+        record.result?.sourceImport?.importRecord.status === "ready" &&
+        record.result?.followupProtocol
+    ),
+    "follow-up run should produce a grounded source import and protocol"
+  );
+
   const snapshot = await requestJson("/api/snapshot");
 
-  assert.ok(snapshot.sourceImports.length >= 2, "snapshot should include direct and background imports");
+  assert.ok(snapshot.sourceImports.length >= 3, "snapshot should include direct, background, and follow-up imports");
   assert.ok(snapshot.posts.length >= importResult.posts.length, "snapshot should persist posts");
   assert.ok(snapshot.curationJobs.length >= signalResult.records.length, "snapshot should persist curation records");
   assert.equal(snapshot.userMemories.length, 1, "snapshot should persist user memory");

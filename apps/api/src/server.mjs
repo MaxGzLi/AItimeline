@@ -231,6 +231,7 @@ export function createApiServer(options = {}) {
             sourceImportWorker,
             ingestSourceCandidate: (candidate) => ingestSourceCandidate(candidate),
             discoverSources: () => [],
+            loadSeedPost: (job) => persistenceStore.getSnapshot().posts.find((post) => post.id === job.postId),
             cooldownTopic: (job) => ({
               kind: job.kind,
               message: "Topic cooldown recorded by API worker."

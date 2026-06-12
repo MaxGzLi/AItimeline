@@ -6,6 +6,9 @@ const { createPersistentBackgroundCurationJobStore, runDueBackgroundCurationJobs
 );
 const { createModelKnowledgePostRunner } = await import("../packages/core/dist/harness/modelRunner.js");
 const { evaluateInteraction } = await import("../packages/core/dist/harness/feedbackPolicy.js");
+const { createFollowupGenerationProtocol, validateFollowupGenerationProtocol } = await import(
+  "../packages/core/dist/harness/followupHarness.js"
+);
 const { applyUserMemoryEdits, createEmptyUserMemory } = await import(
   "../packages/core/dist/memory/userMemoryControls.js"
 );
@@ -444,6 +447,21 @@ assert.deepEqual(
   ["candidate-knowledge-graph-memory"],
   "background curation should track accepted external sources"
 );
+const followupJob = backgroundPlan.jobs.find((job) => job.kind === "generate_followup");
+
+assert.ok(followupJob, "background curation should include a follow-up generation job");
+assert.equal(followupJob.postId, interestSignal.postId, "follow-up job should retain the seed post id");
+assert.equal(followupJob.nextAction, "expand_broader", "follow-up job should retain the learning intent");
+
+const followupProtocol = createFollowupGenerationProtocol({
+  job: followupJob,
+  seedPost: result.cards.find((card) => card.id === interestSignal.postId),
+  createdAt: "2026-06-10T00:00:00.000Z"
+});
+const followupProtocolValidation = validateFollowupGenerationProtocol(followupProtocol);
+
+assert.equal(followupProtocol.intent, "expand_broader", "follow-up protocol should encode broaden intent");
+assert.equal(followupProtocolValidation.valid, true, "follow-up protocol should validate");
 
 const skipSignal = {
   postId: result.cards[0].id,
@@ -571,6 +589,32 @@ assert.equal(
   "persistent curation store should rehydrate executed job status"
 );
 
+const followupBatch = await runDueBackgroundCurationJobs(
+  finalCurationStore,
+  {
+    sourceImportWorker: deterministicWorker,
+    loadSeedPost: (job) => result.cards.find((card) => card.id === job.postId)
+  },
+  {
+    now: "2026-06-10T00:00:00.000Z",
+    kinds: ["generate_followup"]
+  }
+);
+const followupJobRecord = followupBatch.records[0];
+
+assert.equal(followupBatch.records.length, 1, "executor should run one follow-up job");
+assert.equal(followupJobRecord.status, "succeeded", "follow-up job should succeed");
+assert.equal(
+  followupJobRecord.result?.sourceImport?.importRecord.status,
+  "ready",
+  "follow-up job should produce a ready source import"
+);
+assert.equal(
+  followupJobRecord.result?.followupProtocol?.intent,
+  "expand_broader",
+  "follow-up job should preserve the protocol intent"
+);
+
 const discoveryPlan = createBackgroundCurationPlan({
   signals: [interestSignal],
   feedback: [interestFeedback],
@@ -632,7 +676,10 @@ const appPersistence = createAITimelinePersistenceStore({
 });
 
 appPersistence.saveSourceImportResult(deterministicImport, "2026-06-10T00:00:00.000Z");
-appPersistence.saveCurationJobRecords([...importBatch.records, ...discoveryBatch.records], "2026-06-10T00:20:00.000Z");
+appPersistence.saveCurationJobRecords(
+  [...importBatch.records, ...followupBatch.records, ...discoveryBatch.records],
+  "2026-06-10T00:20:00.000Z"
+);
 appPersistence.saveReleasePlan(releasePlan, "2026-06-10T00:20:00.000Z");
 appPersistence.saveSourceCandidateRecords(
   [
@@ -701,7 +748,7 @@ assert.equal(appSnapshot.sourceImports.length, 1, "persistence should store sour
 assert.equal(appSnapshot.sourceRegistries.length, 1, "persistence should store source registries");
 assert.equal(appSnapshot.posts.length, 4, "persistence should store generated posts");
 assert.equal(appSnapshot.harnessRuns.length, 1, "persistence should store harness runs");
-assert.equal(appSnapshot.curationJobs.length, 2, "persistence should store curation job records");
+assert.equal(appSnapshot.curationJobs.length, 3, "persistence should store curation job records");
 assert.equal(appSnapshot.releasePlans.length, 1, "persistence should store release plans");
 assert.equal(appSnapshot.userMemories[0]?.userId, "user-smoke", "persistence should store user memory");
 assert.equal(appSnapshot.memoryEvents.length, 5, "persistence should store memory edit events");
@@ -765,6 +812,8 @@ console.log(
         interestedJobs: backgroundPlan.jobs.map((job) => job.kind),
         cooldownJobs: cooldownPlan.jobs.map((job) => job.kind),
         executedImportStatus: importedJobRecord.status,
+        executedFollowupStatus: followupJobRecord.status,
+        followupIntent: followupJobRecord.result?.followupProtocol?.intent,
         executedDiscoveryStatus: discoveryJobRecord.status
       },
       validation: result.validation.map((validation) => ({

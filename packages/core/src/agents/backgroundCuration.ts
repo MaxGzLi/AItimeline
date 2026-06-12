@@ -4,6 +4,7 @@ import type {
   AgentExpansionPlan,
   InteractionSignal,
   LearningFeedback,
+  NextActionPolicy,
   Source,
   TopicState
 } from "../types.js";
@@ -31,8 +32,10 @@ export interface BackgroundSourceCandidate {
 export interface BackgroundCurationJob {
   id: string;
   kind: BackgroundCurationJobKind;
+  postId?: string;
   topicId: string;
   conceptIds: string[];
+  nextAction?: NextActionPolicy;
   priority: number;
   reason: string;
   createdAt: string;
@@ -212,8 +215,10 @@ function mapExpansionJob(job: AgentExpansionJob): BackgroundCurationJob {
   return {
     id: `${job.id}-curation`,
     kind: job.kind,
+    postId: job.postId,
     topicId: job.topicId,
     conceptIds: job.conceptIds,
+    nextAction: job.nextAction,
     priority: job.priority,
     reason: job.reason,
     createdAt: job.createdAt,
@@ -231,8 +236,10 @@ function createSourceImportJob(
   return {
     id: `${expansionJob.id}-import-${candidate.id}`,
     kind: "import_source",
+    postId: expansionJob.postId,
     topicId: expansionJob.topicId,
     conceptIds: mergeUnique(expansionJob.conceptIds, candidate.conceptIds),
+    nextAction: expansionJob.nextAction,
     priority: roundPriority(Math.min(1, expansionJob.priority * 0.65 + sourceScore * 0.35)),
     reason: `User showed interest, so package this related source for the timeline: ${candidate.reason}`,
     createdAt: generatedAt.toISOString(),
@@ -252,8 +259,10 @@ function createSourceDiscoveryJob(
   return {
     id: `${expansionJob.id}-discover-sources`,
     kind: "discover_sources",
+    postId: expansionJob.postId,
     topicId: expansionJob.topicId,
     conceptIds: expansionJob.conceptIds,
+    nextAction: expansionJob.nextAction,
     priority: roundPriority(Math.max(0.1, expansionJob.priority - 0.08)),
     reason: "User showed interest, but no matching source candidate is available yet, so ask the agent to look for sources.",
     createdAt: generatedAt.toISOString(),

@@ -5,6 +5,7 @@ export * from "./fixtures.js";
 export * from "./graph/knowledgeGraph.js";
 export * from "./harness/expansionPolicy.js";
 export * from "./harness/feedbackPolicy.js";
+export * from "./harness/followupHarness.js";
 export * from "./harness/groundingGate.js";
 export * from "./harness/modelRunner.js";
 export * from "./harness/postHarness.js";

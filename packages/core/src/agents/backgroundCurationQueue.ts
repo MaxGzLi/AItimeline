@@ -4,8 +4,9 @@ import type {
   BackgroundCurationPlan,
   BackgroundSourceCandidate
 } from "./backgroundCuration.js";
+import { createFollowupSourceImportPlan, type FollowupGenerationProtocol } from "../harness/followupHarness.js";
 import type { SourceImportWorker, SourceImportWorkerResult } from "../source/sourceImportWorker.js";
-import type { KnowledgeChunk, SourceAsset, SourceRegistry } from "../types.js";
+import type { KnowledgeChunk, KnowledgePost, SourceAsset, SourceRegistry } from "../types.js";
 
 export type BackgroundCurationJobStatus = "queued" | "running" | "succeeded" | "failed" | "skipped";
 
@@ -14,6 +15,7 @@ export interface BackgroundCurationJobResult {
   message?: string;
   sourceImport?: SourceImportWorkerResult;
   discoveredSourceCandidates?: BackgroundSourceCandidate[];
+  followupProtocol?: FollowupGenerationProtocol;
 }
 
 export interface BackgroundCurationJobRecord {
@@ -63,6 +65,7 @@ export interface BackgroundCurationExecutionHandlers {
   discoverSources?: (
     job: BackgroundCurationJob
   ) => Promise<BackgroundSourceCandidate[]> | BackgroundSourceCandidate[];
+  loadSeedPost?: (job: BackgroundCurationJob) => Promise<KnowledgePost | undefined> | KnowledgePost | undefined;
   generateFollowup?: (job: BackgroundCurationJob) => Promise<BackgroundCurationJobResult> | BackgroundCurationJobResult;
   scheduleReview?: (job: BackgroundCurationJob) => Promise<BackgroundCurationJobResult> | BackgroundCurationJobResult;
   askClarifyingQuestion?: (job: BackgroundCurationJob) => Promise<BackgroundCurationJobResult> | BackgroundCurationJobResult;
@@ -257,9 +260,7 @@ async function runJob(
   }
 
   if (job.kind === "generate_followup") {
-    return handlers.generateFollowup
-      ? handlers.generateFollowup(job)
-      : skippedResult(job, "follow-up generation handler is not configured.");
+    return handlers.generateFollowup ? handlers.generateFollowup(job) : runGenerateFollowupJob(job, handlers, now);
   }
 
   if (job.kind === "schedule_review") {
@@ -284,6 +285,35 @@ async function runJob(
   }
 
   return skippedResult(job, "background curation job kind is not supported.");
+}
+
+async function runGenerateFollowupJob(
+  job: BackgroundCurationJob,
+  handlers: BackgroundCurationExecutionHandlers,
+  now: string
+): Promise<BackgroundCurationJobResult> {
+  if (!handlers.sourceImportWorker) {
+    return skippedResult(job, "follow-up generation requires a sourceImportWorker.");
+  }
+
+  const seedPost = await handlers.loadSeedPost?.(job);
+  const plan = createFollowupSourceImportPlan({
+    job,
+    seedPost,
+    createdAt: now
+  });
+  const sourceImport = await handlers.sourceImportWorker.run(plan.input);
+
+  if (sourceImport.importRecord.status === "failed") {
+    throw new Error(sourceImport.errorMessage ?? "Follow-up source import worker failed.");
+  }
+
+  return {
+    kind: job.kind,
+    sourceImport,
+    followupProtocol: plan.protocol,
+    message: "Generated a grounded follow-up post for the timeline."
+  };
 }
 
 async function runImportSourceJob(
@@ -394,8 +424,10 @@ function findActiveEquivalentJob(
 function createSemanticJobKey(job: BackgroundCurationJob): string {
   return [
     job.kind,
+    job.postId ?? "",
     job.topicId,
     [...job.conceptIds].sort().join(","),
+    job.nextAction ?? "",
     job.sourceCandidate?.id ?? ""
   ].join("|");
 }
