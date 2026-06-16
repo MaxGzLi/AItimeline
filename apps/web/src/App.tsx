@@ -77,6 +77,39 @@ type InteractionSignals = Record<string, InteractionSignal>;
 type LearningFeedbackByPost = Record<string, LearningFeedback>;
 type ApiStatus = "checking" | "connected" | "offline";
 type SourceCandidateStatus = "pending" | "queued" | "imported" | "dismissed";
+type GroundingStatus = "passed" | "warning" | "failed";
+
+type EvidenceLedger = {
+  postId: string;
+  valid: boolean;
+  generatedAt: string;
+  summary: {
+    totalClaims: number;
+    passed: number;
+    warnings: number;
+    failed: number;
+    citedSources: number;
+    citedChunks: number;
+  };
+  claims: Array<{
+    id: string;
+    fieldPath: string;
+    kind: string;
+    claim: string;
+    status: GroundingStatus;
+    overlapScore: number;
+    reason: string;
+    evidence: Array<{
+      sourceId: string;
+      sourceTitle: string;
+      chunkId: string;
+      quote: string;
+      startTimeSeconds?: number;
+      endTimeSeconds?: number;
+      overlapScore: number;
+    }>;
+  }>;
+};
 
 type PersistedMvpState = {
   sourceImports: SourceImport[];
@@ -116,6 +149,10 @@ type ApiTimelineResponse = {
     byIntent: Record<string, number>;
     topReasons: string[];
   };
+};
+
+type ApiEvidenceResponse = {
+  ledger: EvidenceLedger;
 };
 
 type ApiCurationRunResponse = {
@@ -158,6 +195,7 @@ export function App() {
   const [aiThreads, setAiThreads] = useState<AiThreads>({});
   const [interactionSignals, setInteractionSignals] = useState<InteractionSignals>({});
   const [learningFeedback, setLearningFeedback] = useState<LearningFeedbackByPost>({});
+  const [evidenceLedgers, setEvidenceLedgers] = useState<Record<string, EvidenceLedger | null>>({});
   const [apiStatus, setApiStatus] = useState<ApiStatus>("checking");
   const [apiMessage, setApiMessage] = useState("Connecting to local API");
   const [curationMessage, setCurationMessage] = useState("No worker run yet");
@@ -257,6 +295,7 @@ export function App() {
   const selectedThread = selectedCard ? aiThreads[selectedCard.id] ?? [] : [];
   const selectedFeedback = selectedCard ? learningFeedback[selectedCard.id] : undefined;
   const selectedSignal = selectedCard ? interactionSignals[selectedCard.id] : undefined;
+  const selectedEvidenceLedger = selectedCard ? evidenceLedgers[selectedCard.id] : undefined;
   const hasQueuedScoutWork = useMemo(
     () => queuedJobCount > 0 || sourceCandidates.some((record) => record.status === "queued"),
     [queuedJobCount, sourceCandidates]
@@ -363,6 +402,41 @@ export function App() {
         });
     }
   }, [apiStatus, hasHydrated, interactionSignals]);
+
+  useEffect(() => {
+    if (!selectedCard || apiStatus !== "connected" || selectedCard.id in evidenceLedgers) {
+      return;
+    }
+
+    let isStale = false;
+    const postId = selectedCard.id;
+
+    void apiRequest<ApiEvidenceResponse>(`/api/evidence/${encodeURIComponent(postId)}`)
+      .then((result) => {
+        if (isStale) {
+          return;
+        }
+
+        setEvidenceLedgers((ledgers) => ({
+          ...ledgers,
+          [postId]: result.ledger
+        }));
+      })
+      .catch(() => {
+        if (isStale) {
+          return;
+        }
+
+        setEvidenceLedgers((ledgers) => ({
+          ...ledgers,
+          [postId]: null
+        }));
+      });
+
+    return () => {
+      isStale = true;
+    };
+  }, [apiStatus, evidenceLedgers, selectedCard]);
 
   useEffect(() => {
     if (!hasHydrated || !autoScoutEnabled || apiStatus !== "connected") {
@@ -954,6 +1028,7 @@ export function App() {
           asset={selectedAsset}
           card={selectedCard}
           chunks={selectedChunks}
+          evidenceLedger={selectedEvidenceLedger}
           feedback={selectedFeedback}
           messages={selectedThread}
           onAsk={handleAskAi}
@@ -1397,6 +1472,7 @@ function SourceDetailDrawer({
   asset,
   card,
   chunks,
+  evidenceLedger,
   feedback,
   messages,
   onAsk,
@@ -1408,6 +1484,7 @@ function SourceDetailDrawer({
   asset?: SourceAsset;
   card: RankedKnowledgeCard;
   chunks: KnowledgeChunk[];
+  evidenceLedger?: EvidenceLedger | null;
   feedback?: LearningFeedback;
   messages: AiMessage[];
   onAsk: (event: FormEvent<HTMLFormElement>) => void;
@@ -1445,6 +1522,8 @@ function SourceDetailDrawer({
           <span className="muted-copy">No citation available</span>
         )}
       </section>
+
+      <EvidenceLedgerPanel ledger={evidenceLedger} />
 
       <section className="drawer-section">
         <div className="drawer-section-heading">
@@ -1593,6 +1672,54 @@ function SourceDetailDrawer({
         </form>
       </section>
     </aside>
+  );
+}
+
+function EvidenceLedgerPanel({ ledger }: { ledger?: EvidenceLedger | null }) {
+  return (
+    <section className="drawer-section evidence-ledger-section">
+      <div className="drawer-section-heading">
+        <CheckCircle2 size={18} />
+        <h3>Evidence Ledger</h3>
+      </div>
+
+      {ledger === undefined ? (
+        <p className="muted-copy">Checking source grounding...</p>
+      ) : ledger === null ? (
+        <p className="muted-copy">No evidence ledger is available for this card yet.</p>
+      ) : (
+        <>
+          <div className="evidence-summary">
+            <span className="evidence-stat passed">{ledger.summary.passed} passed</span>
+            <span className="evidence-stat warning">{ledger.summary.warnings} warnings</span>
+            <span className="evidence-stat failed">{ledger.summary.failed} failed</span>
+          </div>
+          <div className="evidence-meta">
+            <span>{ledger.summary.citedSources} sources</span>
+            <span>{ledger.summary.citedChunks} chunks</span>
+            <span>{ledger.summary.totalClaims} claims</span>
+          </div>
+          <div className="evidence-claim-list">
+            {ledger.claims.slice(0, 5).map((claim) => (
+              <div className={`evidence-claim ${claim.status}`} key={claim.id}>
+                <div className="evidence-claim-top">
+                  <span>{formatEvidenceFieldPath(claim.fieldPath)}</span>
+                  <strong>{formatGroundingStatus(claim.status)}</strong>
+                </div>
+                <p>{claim.claim}</p>
+                {claim.evidence[0] ? (
+                  <small>
+                    {claim.evidence[0].sourceTitle} · {Math.round(claim.evidence[0].overlapScore * 100)}% overlap
+                  </small>
+                ) : (
+                  <small>No source chunk resolved</small>
+                )}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </section>
   );
 }
 
@@ -1805,6 +1932,28 @@ function formatNextAction(action: NonNullable<KnowledgeCard["nextActions"]>[numb
   };
 
   return labels[action];
+}
+
+function formatGroundingStatus(status: GroundingStatus): string {
+  const labels: Record<GroundingStatus, string> = {
+    passed: "Passed",
+    warning: "Warning",
+    failed: "Failed"
+  };
+
+  return labels[status];
+}
+
+function formatEvidenceFieldPath(path: string): string {
+  if (path.startsWith("$.thread")) {
+    return "Thread";
+  }
+
+  if (path.startsWith("$.graphEdges")) {
+    return "Graph";
+  }
+
+  return path.replace(/^\$\./, "").replace(/([A-Z])/g, " $1");
 }
 
 function formatCardSource(card: KnowledgeCard): string {

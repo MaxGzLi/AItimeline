@@ -4,6 +4,7 @@ const { createBackgroundCurationPlan } = await import("../packages/core/dist/age
 const { createPersistentBackgroundCurationJobStore, runDueBackgroundCurationJobs } = await import(
   "../packages/core/dist/agents/backgroundCurationQueue.js"
 );
+const { createEvidenceLedger } = await import("../packages/core/dist/harness/evidenceLedger.js");
 const { createModelKnowledgePostRunner } = await import("../packages/core/dist/harness/modelRunner.js");
 const { evaluateInteraction } = await import("../packages/core/dist/harness/feedbackPolicy.js");
 const { createFollowupGenerationProtocol, validateFollowupGenerationProtocol } = await import(
@@ -197,6 +198,17 @@ for (const validation of result.validation) {
     `${validation.postId} should include grounding checks`
   );
 }
+
+const evidenceLedger = createEvidenceLedger(
+  result.cards[0],
+  result.sourceRegistry,
+  "2026-06-10T00:00:00.000Z"
+);
+
+assert.equal(evidenceLedger.postId, result.cards[0].id, "evidence ledger should target the post");
+assert.ok(evidenceLedger.summary.totalClaims > 0, "evidence ledger should include grounded claims");
+assert.equal(evidenceLedger.summary.failed, 0, "deterministic posts should have no failed source-fact claims");
+assert.ok(evidenceLedger.claims[0]?.evidence.length > 0, "evidence ledger claims should resolve source chunks");
 
 let repairCalls = 0;
 const repairRunner = createModelKnowledgePostRunner({
@@ -807,6 +819,12 @@ console.log(
         topScore: personalizedRanking[0].score,
         topIntent: personalizedRanking[0].recommendationIntent,
         reasons: personalizedRanking[0].scoreReasons
+      },
+      evidenceLedger: {
+        claims: evidenceLedger.summary.totalClaims,
+        passed: evidenceLedger.summary.passed,
+        warnings: evidenceLedger.summary.warnings,
+        failed: evidenceLedger.summary.failed
       },
       backgroundCuration: {
         interestedJobs: backgroundPlan.jobs.map((job) => job.kind),

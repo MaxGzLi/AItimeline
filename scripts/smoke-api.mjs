@@ -39,6 +39,12 @@ try {
   assert.ok(Array.isArray(timeline.posts[0].scoreReasons), "timeline API should explain ranking scores");
 
   const firstPost = timeline.posts[0];
+  const evidenceResult = await requestJson(`/api/evidence/${encodeURIComponent(firstPost.id)}`);
+
+  assert.equal(evidenceResult.ledger.postId, firstPost.id, "evidence API should return the requested post ledger");
+  assert.ok(evidenceResult.ledger.summary.totalClaims > 0, "evidence API should expose grounded claims");
+  assert.ok(evidenceResult.ledger.claims[0].evidence.length > 0, "evidence API should resolve source chunks");
+
   const firstTopic = firstPost.concepts[0] ?? "agentic-learning";
   const memoryResult = await requestJson("/api/memory", {
     method: "POST",

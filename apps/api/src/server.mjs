@@ -13,11 +13,13 @@ import {
   evaluateInteraction,
   fetchArticle,
   fetchYouTubeTranscript,
+  mergeSourceRegistries,
   rankPersonalizedTimeline,
   runDueBackgroundCurationJobs,
   transformArticleUrl,
   transformYouTubeUrl
 } from "../../../packages/core/dist/index.js";
+import { createEvidenceLedger } from "../../../packages/core/dist/harness/evidenceLedger.js";
 
 const defaultPort = 8787;
 const currentDir = dirname(fileURLToPath(import.meta.url));
@@ -77,6 +79,19 @@ export function createApiServer(options = {}) {
             url.searchParams.get("userId") ?? "local-user"
           )
         );
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname.startsWith("/api/evidence/")) {
+        const postId = decodeURIComponent(url.pathname.replace(/^\/api\/evidence\//, ""));
+        const ledgerResponse = getEvidenceLedgerResponse(persistenceStore.getSnapshot(), postId);
+
+        if (!ledgerResponse) {
+          sendJson(response, 404, { error: "Evidence ledger not found for this post." });
+          return;
+        }
+
+        sendJson(response, 200, ledgerResponse);
         return;
       }
 
@@ -508,6 +523,41 @@ function getTimelineResponse(snapshot, nowValue, userId = "local-user") {
     recommendationSummary: summarizeRecommendation(rankedPosts),
     snapshotSummary: summarizeSnapshot(snapshot)
   };
+}
+
+function getEvidenceLedgerResponse(snapshot, postId) {
+  const post = snapshot.posts.find((item) => item.id === postId);
+
+  if (!post) {
+    return undefined;
+  }
+
+  const registry = findSourceRegistryForPost(snapshot, post);
+
+  if (!registry) {
+    return undefined;
+  }
+
+  return {
+    ledger: createEvidenceLedger(post, registry),
+    validation: snapshot.validation.find((record) => record.postId === post.id)?.result
+  };
+}
+
+function findSourceRegistryForPost(snapshot, post) {
+  const sourceIds = new Set(post.sources.map((source) => source.id));
+  const registries = snapshot.sourceRegistries
+    .filter(
+      (record) =>
+        sourceIds.has(record.sourceId) || record.registry.sources.some((source) => sourceIds.has(source.id))
+    )
+    .map((record) => record.registry);
+
+  if (registries.length === 0) {
+    return undefined;
+  }
+
+  return registries.length === 1 ? registries[0] : mergeSourceRegistries(...registries);
 }
 
 function summarizeSnapshot(snapshot) {
