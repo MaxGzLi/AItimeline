@@ -3075,7 +3075,11 @@ section.agent-brief {
     background: #1b2026;
   }
   aside.detail-drawer .chat-message.user {
-    background: var(--blue);
+    /* Not var(--blue): the brightened dark accent #4d8bff under white text is
+       only 3.25:1 (fails AA for this real message body text). #3568de = 5.02:1
+       (AA pass) and stays an unmistakably-blue bubble. Scoped to the bubble so
+       the blue accent elsewhere is unchanged. (iter 21 dark-contrast fix) */
+    background: #3568de;
     color: #ffffff;
   }
 
