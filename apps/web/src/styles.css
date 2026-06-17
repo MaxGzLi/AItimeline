@@ -2451,3 +2451,65 @@ body .drawer-header h2 {
     0 0 0 2px #f5f7f8,
     0 0 0 4px var(--blue);
 }
+
+/* === Drawer detail view: cohesive X widget cards (iter 14) ===
+   Mirror the right-rail iter-9 treatment onto the drawer's "tweet detail":
+   each .drawer-section becomes the same rounded tinted widget card the right
+   rail uses, and the read-only list rows inside (chunk/thread/edge/review) are
+   de-boxed from their own border+fill into borderless divider-separated
+   quiet-hover lines — removing the nested card-in-card look. Scoped to
+   aside.detail-drawer; the .chat-list (already an X thread) and state-coded
+   bits (.feedback-panel, signal/next-action chips, evidence stats) are left
+   alone. No display/grid changes -> row layout preserved. */
+
+aside.detail-drawer .drawer-section {
+  padding: 14px 16px 16px;
+  border-radius: 14px;
+  background: #f7f9fb;
+}
+
+aside.detail-drawer .evidence-ledger-section {
+  border-radius: 14px;
+}
+
+aside.detail-drawer .thread-block-list,
+aside.detail-drawer .chunk-list,
+aside.detail-drawer .edge-list,
+aside.detail-drawer .review-prompt-list {
+  margin-top: 2px;
+}
+
+aside.detail-drawer .chunk-row,
+aside.detail-drawer .thread-block,
+aside.detail-drawer .edge-row,
+aside.detail-drawer .review-prompt-row {
+  padding: 10px 4px;
+  border: 0;
+  border-top: 1px solid #e6edf2;
+  border-radius: 6px;
+  background: transparent;
+  transition: background-color 120ms ease;
+}
+
+aside.detail-drawer .chunk-list .chunk-row:first-child,
+aside.detail-drawer .thread-block-list .thread-block:first-child,
+aside.detail-drawer .edge-list .edge-row:first-child,
+aside.detail-drawer .review-prompt-list .review-prompt-row:first-child {
+  border-top: 0;
+}
+
+aside.detail-drawer .chunk-row:hover,
+aside.detail-drawer .thread-block:hover,
+aside.detail-drawer .edge-row:hover,
+aside.detail-drawer .review-prompt-row:hover {
+  background: #eef3f7;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  aside.detail-drawer .chunk-row,
+  aside.detail-drawer .thread-block,
+  aside.detail-drawer .edge-row,
+  aside.detail-drawer .review-prompt-row {
+    transition: none;
+  }
+}
