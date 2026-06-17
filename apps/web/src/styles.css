@@ -397,6 +397,12 @@ button {
   width: 42px;
   height: 42px;
   font-size: 13px;
+  background: linear-gradient(140deg, #3b7bff 0%, #2f6df6 42%, #1f2f3f 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    0 1px 2px rgba(31, 47, 63, 0.18);
+  letter-spacing: 0.3px;
+  text-shadow: 0 1px 1px rgba(15, 23, 42, 0.35);
 }
 
 .post-main {
@@ -426,6 +432,8 @@ button {
 .post-author-line strong {
   color: var(--ink);
   font-size: 15px;
+  font-weight: 800;
+  letter-spacing: -0.1px;
 }
 
 .post-author-line span {
@@ -446,10 +454,12 @@ button {
   min-height: 24px;
   padding: 0 8px;
   border: 1px solid #d8e2e8;
-  border-radius: 6px;
+  border-radius: 999px;
   color: #4d5d69;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 800;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
 }
 
 .post-open-button,
@@ -499,11 +509,23 @@ button {
 .trust-badge {
   display: inline-flex;
   align-items: center;
+  gap: 6px;
   min-height: 24px;
   padding: 0 8px;
-  border-radius: 6px;
-  font-size: 12px;
+  border-radius: 999px;
+  font-size: 11px;
   font-weight: 800;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+
+.trust-badge::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: 0 0 auto;
 }
 
 .trust-badge.supported {
