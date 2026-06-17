@@ -594,13 +594,14 @@ button {
 
 .post-claim-card {
   gap: 8px;
-  border-color: #cbd7df;
-  background: #f8fafb;
+  border: 0;
+  border-left: 3px solid var(--blue);
+  border-radius: 0 8px 8px 0;
+  background: #f5f8ff;
 }
 
 .post-claim-card:hover {
-  border-color: #a8c4ff;
-  background: #f3f7ff;
+  background: #eaf1ff;
 }
 
 .post-thesis {
@@ -703,15 +704,14 @@ button {
   column-gap: 8px;
   row-gap: 2px;
   min-width: 0;
-  padding: 8px 10px;
-  border: 1px solid #dce3e8;
-  border-radius: 8px;
-  background: #ffffff;
+  padding: 8px 11px;
+  border: 0;
+  border-radius: 10px;
+  background: #f3f6fa;
 }
 
 .feed-prompt:hover {
-  border-color: #a8c4ff;
-  background: #f6f9ff;
+  background: #e9f0f8;
 }
 
 .feed-prompt svg {
