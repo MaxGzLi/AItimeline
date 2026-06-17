@@ -2571,3 +2571,51 @@ body .empty-state {
   text-align: center;
   line-height: 1.45;
 }
+
+/* === Left-rail "Run Scout" promoted CTA (iter 18) ===
+   .primary-action was the only interactive control in the left column with NO
+   interaction states (iters 13–16 gave .nav-item/.topic-pill/.secondary-action
+   hover/active/focus). X's primary CTA ("Post") is a PILL that darkens on hover,
+   presses darker on click, and shows a keyboard ring. Lift .agent-brief into a
+   soft promoted block and turn its primary-action into that pill. Scoped to
+   .agent-brief so the shared .primary-action used elsewhere is untouched. Only
+   radius/color/shadow/transform — no display/flow/grid change. NOTE the
+   :focus-visible rule is required, not redundant with the global ring: the
+   resting .agent-brief .primary-action box-shadow (0,2,0) out-specifies the
+   global button:focus-visible (0,1,1), so the scoped (0,3,0) focus rule is what
+   actually lets the ring paint over the resting shadow. */
+section.agent-brief {
+  border-color: #e4ebf1;
+  background: linear-gradient(180deg, #f7faff 0%, #ffffff 64%);
+}
+
+.agent-brief .primary-action {
+  border-radius: 999px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  box-shadow: 0 1px 2px rgba(31, 47, 63, 0.14);
+  transition:
+    background 140ms ease,
+    box-shadow 140ms ease,
+    transform 90ms ease;
+}
+
+.agent-brief .primary-action:hover:not(:disabled) {
+  background: #2560e6;
+  box-shadow: 0 2px 8px rgba(47, 109, 246, 0.32);
+}
+
+.agent-brief .primary-action:active:not(:disabled) {
+  background: #1f54cf;
+  box-shadow: 0 1px 2px rgba(31, 47, 63, 0.18);
+  transform: translateY(1px);
+}
+
+.agent-brief .primary-action:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px #ffffff,
+    0 0 0 4px var(--blue);
+}
+
+
