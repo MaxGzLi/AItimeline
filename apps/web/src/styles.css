@@ -2336,3 +2336,63 @@ aside.detail-drawer .ask-form input:focus {
     transition: none;
   }
 }
+
+/* === Source-import as an X compose box (iter 11) ===
+   Restyle the "paste a URL" panel so the input + action read like X's compose
+   ("what's happening?") box: a pill-rounded input that lights a blue focus
+   ring, leading icon muted->blue when active, and a matching pill Import CTA.
+   `body`-scoped overrides; the .source-form grid/sizing/gaps are untouched, so
+   the two-column layout and the responsive override are preserved. */
+
+body .source-input-shell {
+  border-radius: 999px;
+  border-color: #d3dde4;
+  box-shadow: none;
+  transition:
+    border-color 130ms ease,
+    box-shadow 130ms ease,
+    background-color 130ms ease;
+}
+
+body .source-input-shell:hover {
+  border-color: #bcd0ee;
+}
+
+body .source-input-shell:focus-within {
+  border-color: var(--blue);
+  background: #ffffff;
+  box-shadow:
+    0 0 0 1px var(--blue),
+    0 0 0 4px rgba(47, 109, 246, 0.14);
+}
+
+body .source-input-shell svg {
+  color: #8a98a4;
+  transition: color 130ms ease;
+}
+
+body .source-input-shell:focus-within svg {
+  color: var(--blue);
+}
+
+body .source-submit {
+  border-radius: 999px;
+  box-shadow: 0 1px 2px rgba(31, 71, 145, 0.25);
+  transition:
+    background-color 130ms ease,
+    box-shadow 130ms ease,
+    transform 90ms ease;
+}
+
+body .source-submit:not(:disabled):hover {
+  background: #2961e0;
+  box-shadow: 0 2px 8px rgba(31, 71, 145, 0.3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body .source-input-shell,
+  body .source-input-shell svg,
+  body .source-submit {
+    transition: none;
+  }
+}
