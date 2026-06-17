@@ -2095,3 +2095,90 @@ button {
     transform: rotate(360deg);
   }
 }
+
+/* === Metadata declutter (iter 8): quiet, inline X-style metadata ===
+   De-box the busy chip rows so the post's content breathes. `body`-scoped
+   overrides; edits no existing rule. */
+
+/* Recommendation reasons + concepts: drop the boxes -> muted inline tokens,
+   middot-separated, so they read as one calm line of metadata. */
+body .recommendation-reasons,
+body .concept-list {
+  gap: 0;
+  row-gap: 4px;
+  margin-top: 8px;
+  align-items: baseline;
+}
+
+body .recommendation-reasons span,
+body .concept-list span {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+body .recommendation-reasons span + span::before,
+body .concept-list span + span::before {
+  content: "\00B7";
+  margin: 0 7px;
+  color: #b6c1cb;
+  font-weight: 600;
+}
+
+body .concept-list span {
+  color: #4a6a8a;
+}
+
+body .post-social-context {
+  gap: 0;
+  margin-top: 8px;
+}
+body .post-social-context span {
+  font-weight: 500;
+}
+body .post-social-context span + span::before {
+  content: "\00B7";
+  margin: 0 7px;
+  color: #b6c1cb;
+}
+
+/* Feedback strip: de-box into a quiet inline status line with a leading state
+   dot (replaces the colored box). Scoped to .feedback-strip, never .feedback-panel. */
+body .feedback-strip {
+  min-height: 0;
+  margin-top: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  justify-content: flex-start;
+  gap: 8px;
+}
+body .feedback-strip span,
+body .feedback-strip strong {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+body .feedback-strip span:first-child::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: #9fb0bd;
+  vertical-align: middle;
+}
+body .feedback-strip.interested span:first-child::before { background: #4caf7d; }
+body .feedback-strip.confused span:first-child::before { background: #6f7dff; }
+body .feedback-strip.fatigued span:first-child::before { background: #e07a7a; }
+body .feedback-strip.needs_review span:first-child::before { background: #d99a3c; }
+body .feedback-strip strong {
+  color: #3f4f5d;
+  font-weight: 700;
+}
