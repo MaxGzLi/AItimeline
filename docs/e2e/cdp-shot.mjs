@@ -72,6 +72,15 @@ try {
 
   await send("Page.enable");
   await send("Runtime.enable");
+  // Pin prefers-color-scheme so @media color-scheme blocks are deterministic.
+  // NOTE: this headless Chrome DEFAULTS to dark, so to verify LIGHT mode you
+  // must emulate it explicitly (LIGHT=1); DARK=1 forces dark.
+  const scheme = process.env.DARK ? "dark" : process.env.LIGHT ? "light" : null;
+  if (scheme) {
+    await send("Emulation.setEmulatedMedia", {
+      features: [{ name: "prefers-color-scheme", value: scheme }],
+    });
+  }
   await send("Emulation.setDeviceMetricsOverride", {
     width: Number(w),
     height: Number(h),
