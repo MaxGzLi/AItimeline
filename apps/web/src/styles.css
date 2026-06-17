@@ -381,6 +381,12 @@ button {
   border-bottom: 1px solid var(--border);
   background: #ffffff;
   overflow: hidden;
+  /* Animate only cheap props; box-shadow starts transparent so the accent
+     slides in rather than snapping. No transform => no layout/clip risk. */
+  transition:
+    background-color 180ms ease,
+    box-shadow 180ms ease;
+  box-shadow: inset 0 0 0 rgba(47, 109, 246, 0);
 }
 
 .post-avatar,
@@ -410,7 +416,9 @@ button {
 }
 
 .knowledge-card:hover {
-  background: #f5f8fb;
+  background: #f7faff;
+  /* 3px leading accent bar in brand blue — reads as "row is live/tappable" */
+  box-shadow: inset 3px 0 0 rgba(47, 109, 246, 0.55);
 }
 
 .social-post-header {
@@ -556,6 +564,10 @@ button {
 
 .post-open-button h2 {
   margin-top: 0;
+  /* Ease the existing hover underline so the whole row feels like one gesture */
+  transition:
+    text-decoration-color 160ms ease,
+    color 160ms ease;
 }
 
 .summary {
@@ -2033,6 +2045,15 @@ button {
     border-top: 1px solid var(--border);
     border-left: 0;
     box-shadow: 0 -16px 34px rgba(31, 47, 63, 0.16);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* File has no reduced-motion guard; neutralize exactly the transitions added
+     above. Hover end-states still apply instantly, preserving all affordances. */
+  .knowledge-card,
+  .post-open-button h2 {
+    transition: none;
   }
 }
 
