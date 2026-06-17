@@ -2396,3 +2396,24 @@ body .source-submit:not(:disabled):hover {
     transition: none;
   }
 }
+
+/* === Display-heading tracking (iter 12: typographic rhythm) ===
+   The three hero headings (page title 24px, post title 21px, drawer title
+   20px) all carried letter-spacing:0 — a placeholder. X-style "clean" type
+   tightens large headings with subtle negative tracking scaled to size
+   (bigger = tighter), echoing the file's existing
+   `.post-author-line strong { letter-spacing: -0.1px }`. Pure paint: no
+   box-model/reflow, no -webkit-line-clamp interference. Mid-size headings
+   (18px/15px) stay at default tracking where negative tracking would hurt
+   legibility. body-scoped to supersede the base letter-spacing:0 rules. */
+body .timeline-header h1 {
+  letter-spacing: -0.4px;
+}
+
+body .knowledge-card h2 {
+  letter-spacing: -0.3px;
+}
+
+body .drawer-header h2 {
+  letter-spacing: -0.3px;
+}
