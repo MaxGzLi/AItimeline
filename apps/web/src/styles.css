@@ -103,14 +103,24 @@ button {
 }
 
 .nav-item {
-  padding: 0 12px;
+  padding: 0 14px;
+  border-color: transparent;
+  border-radius: 999px;
   color: #334454;
+  transition:
+    background 140ms ease,
+    color 140ms ease;
 }
 
-.nav-item.active,
 .nav-item:hover {
-  border-color: #cbd7df;
-  background: #eef3f7;
+  border-color: transparent;
+  background: #eef2f5;
+  color: var(--ink);
+}
+
+.nav-item.active {
+  border-color: transparent;
+  background: #e9eef3;
   color: var(--ink);
 }
 
@@ -2416,4 +2426,28 @@ body .knowledge-card h2 {
 
 body .drawer-header h2 {
   letter-spacing: -0.3px;
+}
+
+/* === X-style left nav rows (iter 13) ===
+   The base `.nav-item` block above now renders as a borderless 999px pill
+   (matching X's primary nav) instead of the shared 8px bordered button box it
+   used to share with .primary-action/.secondary-action/.topic-pill. These
+   trailing rules complete the treatment: larger label type with negative
+   tracking for X's icon+label rhythm, a bold label on the active section, and
+   the keyboard focus ring (same box-shadow idiom as .topic-pill:focus-visible). */
+.nav-item span {
+  font-size: 19px;
+  letter-spacing: -0.01em;
+}
+
+.nav-item.active span {
+  font-weight: 700;
+}
+
+.nav-item:focus-visible {
+  outline: none;
+  border-color: transparent;
+  box-shadow:
+    0 0 0 2px #f5f7f8,
+    0 0 0 4px var(--blue);
 }
