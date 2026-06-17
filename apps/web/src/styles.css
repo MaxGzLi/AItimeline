@@ -2513,3 +2513,21 @@ aside.detail-drawer .review-prompt-row:hover {
     transition: none;
   }
 }
+
+/* === Global keyboard focus ring (iter 15) ===
+   One consistent X-style keyboard focus ring on every button/link, so keyboard
+   nav shows the same blue ring everywhere instead of the inconsistent (often
+   invisible) browser default. Rendered as a box-shadow so it follows each
+   element's OWN border-radius (pill / round / 8px) with no shape change and no
+   reflow; `outline:none` only applies when :focus-visible matches, so the
+   native outline stays as a no-CSS fallback. Same idiom already shipped on
+   .topic-pill (iter 7) / .nav-item (iter 13). Inputs are excluded — they ring
+   their own shell (.source-input-shell:focus-within, .ask-form input:focus). */
+button:focus-visible,
+a:focus-visible,
+.icon-button:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px var(--panel),
+    0 0 0 4px var(--blue);
+}
