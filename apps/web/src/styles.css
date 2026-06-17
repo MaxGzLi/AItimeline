@@ -246,18 +246,51 @@ button {
 
 .topic-strip {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   overflow-x: auto;
-  padding: 14px 24px;
+  padding: 10px 24px;
   border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  scrollbar-width: none;
+}
+
+.topic-strip::-webkit-scrollbar {
+  display: none;
 }
 
 .topic-pill {
-  min-height: 34px;
-  padding: 0 14px;
-  border-color: #cbd7df;
-  background: #f8fafb;
+  min-height: 32px;
+  padding: 0 16px;
+  border-color: var(--border);
+  border-radius: 999px;
+  background: #f1f4f7;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 600;
   white-space: nowrap;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease,
+    border-color 0.12s ease,
+    transform 0.06s ease;
+}
+
+.topic-pill:hover {
+  border-color: #a8c4ff;
+  background: #edf3ff;
+  color: var(--blue);
+}
+
+.topic-pill:focus-visible {
+  outline: none;
+  border-color: var(--blue);
+  background: #e7efff;
+  color: var(--blue);
+}
+
+.topic-pill:active {
+  transform: scale(0.96);
+  background: #dfeaff;
 }
 
 .source-import {
