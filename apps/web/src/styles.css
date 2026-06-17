@@ -2254,3 +2254,85 @@ body .import-row:hover {
     transition: none;
   }
 }
+
+/* === Drawer Ask-AI as an X reply thread (iter 10) ===
+   Turn the .chat-list's full-width stacked message boxes into X-style
+   side-aligned chat bubbles (You = right blue, AI = left neutral, width-capped
+   with an asymmetric tail corner) + a rounded pill composer with a brand focus
+   ring. Scoped to aside.detail-drawer so the feed's own styling is untouched. */
+
+aside.detail-drawer .chat-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 2px 0;
+}
+
+aside.detail-drawer .chat-message {
+  display: inline-grid;
+  gap: 3px;
+  max-width: 85%;
+  width: fit-content;
+  padding: 9px 12px;
+  border-radius: 16px;
+  line-height: 1.45;
+}
+
+aside.detail-drawer .chat-message span {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  opacity: 0.72;
+}
+
+aside.detail-drawer .chat-message p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Outgoing "You" — right-aligned blue bubble with a bottom-right tail. */
+aside.detail-drawer .chat-message.user {
+  align-self: flex-end;
+  border: 0;
+  border-bottom-right-radius: 5px;
+  background: var(--blue);
+  color: #ffffff;
+}
+aside.detail-drawer .chat-message.user span {
+  color: #ffffff;
+  text-align: right;
+}
+
+/* Incoming "AI" — left-aligned neutral bubble with a bottom-left tail. */
+aside.detail-drawer .chat-message.assistant {
+  align-self: flex-start;
+  border: 1px solid var(--border);
+  border-bottom-left-radius: 5px;
+  background: #f4f7f9;
+  color: #354656;
+}
+aside.detail-drawer .chat-message.assistant span {
+  color: var(--blue);
+}
+
+/* Composer: X-style rounded pill input with a brand focus ring. */
+aside.detail-drawer .ask-form input {
+  min-height: 44px;
+  border-radius: 999px;
+  border-color: var(--border);
+  background: #ffffff;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+aside.detail-drawer .ask-form input:focus {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px rgba(47, 109, 246, 0.16);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  aside.detail-drawer .ask-form input {
+    transition: none;
+  }
+}
