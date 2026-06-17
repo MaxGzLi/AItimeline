@@ -624,6 +624,21 @@ button {
   -webkit-line-clamp: 2;
 }
 
+/* === Feed body type rhythm (iter 17 — the hero scroll) ===
+   .summary was the only card text token with no explicit font-size, so it
+   inherited the UA default 16px while the rest of the card sits on a
+   13/14/15/21px scale. The bold lead-in .post-hook is 15px/800, yet the
+   regular-weight summary rendered LARGER at 16px — a backwards hierarchy step
+   the eye hits on every card during the exact action the directive prioritizes
+   (addictive scrolling). Put the body on the card's own scale (15px == X tweet
+   body) and bump line-height to 1.55 so the slightly smaller glyphs keep their
+   air. body-scoped to beat the base rule; color + 2-line clamp inherited
+   (clamp counts lines, not px -> still two lines, no overflow). */
+body .summary {
+  font-size: 15px;
+  line-height: 1.55;
+}
+
 .post-hook {
   margin: 8px 0 0;
   color: #1f2f3f;
