@@ -2569,7 +2569,10 @@ body .empty-state {
   border: 0;
   border-radius: 12px;
   background: transparent;
-  color: #8896a2;
+  /* --muted (#62707c) not #8896a2: the latter is only 2.9:1 on the rail card
+     bg (fails AA for this readable copy); --muted clears 4.5 on every surface
+     and is the same grey used by the rest of the rail copy. (iter 23) */
+  color: #62707c;
   font-size: 13.5px;
   font-weight: 600;
   letter-spacing: -0.01em;
