@@ -1098,6 +1098,97 @@ button {
   font-size: 13px;
 }
 
+/* === X-style action bar — scoped to the post footer only === */
+
+/* Counts read as a quiet inline cluster, like X's reply/repost/like/view row */
+.card-footer .social-metrics {
+  gap: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.card-footer .social-metrics span {
+  white-space: nowrap;
+}
+
+/* Spread the action glyphs across the footer instead of clustering right */
+.card-footer .card-actions {
+  flex: 1;
+  max-width: 360px;
+  justify-content: space-between;
+  gap: 0;
+}
+
+/* Borderless muted glyphs with a soft circular hover halo (X action affordance).
+   Scoped to .card-footer so right-rail/drawer .icon-button.compact are untouched. */
+.card-footer .card-actions .icon-button.compact {
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  transition:
+    color 120ms ease,
+    background-color 120ms ease,
+    transform 90ms ease;
+}
+
+.card-footer .card-actions .icon-button.compact svg {
+  transition: transform 90ms ease;
+}
+
+/* Default hover: blue halo (reply/repost/bookmark are blue-tinted on X) */
+.card-footer .card-actions .icon-button.compact:hover {
+  border: 0;
+  color: var(--blue);
+  background: rgba(47, 109, 246, 0.12);
+}
+
+/* Per-action hover colors, keyed off the stable title attributes */
+.card-footer .card-actions .icon-button.compact[title="Like"]:hover,
+.card-footer .card-actions .icon-button.compact[title="Skip post"]:hover {
+  color: var(--red);
+  background: rgba(176, 68, 68, 0.12);
+}
+
+.card-footer .card-actions .icon-button.compact[title="Explain"]:hover {
+  color: var(--ink);
+  background: rgba(98, 112, 124, 0.14);
+}
+
+/* Active/selected states paint the glyph in its action color (filled-heart feel) */
+.card-footer .card-actions .icon-button.compact[title="Like"].selected {
+  color: var(--red);
+  background: rgba(176, 68, 68, 0.12);
+}
+
+.card-footer .card-actions .icon-button.compact[title="Like"].selected svg {
+  fill: currentColor;
+}
+
+.card-footer .card-actions .icon-button.compact[title="Save"].selected {
+  color: var(--blue);
+  background: rgba(47, 109, 246, 0.12);
+}
+
+.card-footer .card-actions .icon-button.compact[title="Save"].selected svg {
+  fill: currentColor;
+}
+
+.card-footer .card-actions .icon-button.compact.negative {
+  color: var(--red);
+  background: transparent;
+}
+
+/* Rewarding tap: glyph pops on press */
+.card-footer .card-actions .icon-button.compact:active {
+  transform: scale(0.9);
+}
+
+.card-footer .card-actions .icon-button.compact:active svg {
+  transform: scale(1.18);
+}
+
 .source-line {
   min-width: 0;
   color: var(--muted);
