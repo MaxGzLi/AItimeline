@@ -210,7 +210,12 @@ button {
   color: var(--blue);
   font-size: 12px;
   font-weight: 800;
-  letter-spacing: 0;
+  /* 0.3px = the house tracking already used by .trust-badge (small bold
+     uppercase); .section-label, the largest/most-used label of that species,
+     was left at the placeholder 0. Positive tracking lets uppercase breathe
+     and removes the internal inconsistency. Pure paint — short 1-2 word
+     labels, no wrap risk. (iter 19) */
+  letter-spacing: 0.3px;
   text-transform: uppercase;
 }
 
