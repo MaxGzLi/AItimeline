@@ -2531,3 +2531,28 @@ a:focus-visible,
     0 0 0 2px var(--panel),
     0 0 0 4px var(--blue);
 }
+
+/* === Calm X-style empty states (iter 16) ===
+   `.empty-state` ("No imports yet" / "No candidates yet") rendered as bare
+   left-aligned text in a DASHED rounded box — the most un-X, "fill me in"
+   surface left, and now inconsistent with the de-boxed list rows above it
+   (which got divider-line treatment in iters 9/14). Drop the dashed border,
+   center the copy, and give it breathing room so it reads as a deliberate
+   rest state. Additive `body`-scoped override; edits no existing rule. Both
+   targets render on default load (imports/candidates init []) -> statically
+   verifiable. */
+body .empty-state {
+  display: grid;
+  place-items: center;
+  min-height: 72px;
+  padding: 20px 14px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: #8896a2;
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  text-align: center;
+  line-height: 1.45;
+}
