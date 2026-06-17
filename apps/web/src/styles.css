@@ -2182,3 +2182,75 @@ body .feedback-strip strong {
   color: #3f4f5d;
   font-weight: 700;
 }
+
+/* === Right-rail "What's happening" widget cards (iter 9) ===
+   Lens: turn the flat stacked .context-section column (sections divided only
+   by a border-bottom, with every read-only row carrying its OWN border+white
+   fill) into grouped, rounded X-style sidebar widgets, and de-box the simple
+   list rows into borderless, divider-separated quiet-hover lines. CSS-only,
+   markup unchanged. `body`-prefixed to win specificity over the base rules
+   without !important (matches the file's end-of-file override convention).
+   No position/overflow/display changes -> the sticky rail and the base
+   flex layout of .graph-row/.review-row are preserved. */
+
+/* 1. Each section becomes one rounded, softly-tinted widget card. */
+body .context-section {
+  margin-bottom: 14px;
+  padding: 14px 16px 16px;
+  border: 1px solid var(--border);
+  border-bottom: 1px solid var(--border); /* override base border-bottom-only */
+  border-radius: 14px;
+  background: #f7f9fb;
+}
+
+body .context-section:first-child {
+  padding-top: 14px; /* undo base first-child padding-top:0 now it's a card */
+}
+
+body .context-section:last-child {
+  margin-bottom: 0;
+}
+
+/* Trim the list's leading gap so the first row tucks under the heading. */
+body .graph-list,
+body .review-list,
+body .import-list {
+  margin-top: 6px;
+}
+
+/* 2. De-box the read-only rows: strip per-row border / white fill; separate
+   them with a soft top divider and add a quiet full-row hover. The base
+   display:flex is left intact -> row layout unchanged. .candidate-row is
+   intentionally EXCLUDED: its colored borders+fills encode state. */
+body .graph-row,
+body .review-row,
+body .import-row {
+  min-height: 42px;
+  padding: 8px 6px;
+  border: 0;
+  border-top: 1px solid #e6edf2;
+  border-radius: 6px;
+  background: transparent;
+  transition: background-color 120ms ease;
+}
+
+/* First row in each list has no divider above it (heading already separates). */
+body .graph-list .graph-row:first-child,
+body .review-list .review-row:first-child,
+body .import-list .import-row:first-child {
+  border-top: 0;
+}
+
+body .graph-row:hover,
+body .review-row:hover,
+body .import-row:hover {
+  background: #eef3f7;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body .graph-row,
+  body .review-row,
+  body .import-row {
+    transition: none;
+  }
+}
