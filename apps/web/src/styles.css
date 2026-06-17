@@ -2765,6 +2765,19 @@ section.agent-brief {
     border-color: #2b333c;
   }
 
+  /* iter 22: four more #dce3e8-box surfaces missed above — these render only
+     for grounded/evidence posts (not the offline demo), verified via injected
+     elements. Dark border so no light outline survives on the dark fill. */
+  .post-reason,
+  .timeline-thread-block,
+  .evidence-meta span {
+    border-color: #2b333c;
+  }
+  .post-thesis {
+    border-color: #2b333c;
+    border-left-color: var(--blue); /* keep the 3px blue accent edge */
+  }
+
   .post-header-badges > span:not(.trust-badge),
   .post-meta span,
   .concept-list span,
