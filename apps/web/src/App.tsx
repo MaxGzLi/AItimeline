@@ -41,6 +41,7 @@ import {
   ListChecks,
   LoaderCircle,
   MessageCircle,
+  Moon,
   MoreHorizontal,
   Quote,
   RefreshCw,
@@ -49,6 +50,7 @@ import {
   Send,
   Settings,
   Sparkles,
+  Sun,
   Video,
   XCircle
 } from "lucide-react";
@@ -214,6 +216,13 @@ export function App() {
   const [focusedIndex, setFocusedIndex] = useState(-1);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [showScrollTop, setShowScrollTop] = useState(false);
+  const [theme, setTheme] = useState<"light" | "dark">(() => {
+    if (typeof document !== "undefined") {
+      const current = document.documentElement.getAttribute("data-theme");
+      if (current === "light" || current === "dark") return current;
+    }
+    return "light";
+  });
   const [aiPrompt, setAiPrompt] = useState("");
   const [isImporting, setIsImporting] = useState(false);
   const [isSavingCandidate, setIsSavingCandidate] = useState(false);
@@ -381,6 +390,17 @@ export function App() {
   useEffect(() => {
     setFocusedIndex((index) => (index >= visibleCount ? visibleCount - 1 : index));
   }, [visibleCount]);
+
+  // Apply the chosen theme to <html> and remember it. The inline head script
+  // sets the initial attribute before paint; this keeps it in sync on toggle.
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    try {
+      window.localStorage.setItem("aitl-theme", theme);
+    } catch {
+      // ignore unavailable storage
+    }
+  }, [theme]);
 
   // Reveal the scroll-to-top button once the feed is scrolled past ~one screen.
   useEffect(() => {
@@ -1016,6 +1036,15 @@ export function App() {
               type="button"
             >
               <Search size={19} />
+            </button>
+            <button
+              aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+              className="icon-button"
+              onClick={() => setTheme((value) => (value === "dark" ? "light" : "dark"))}
+              title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+              type="button"
+            >
+              {theme === "dark" ? <Sun size={19} /> : <Moon size={19} />}
             </button>
             <button className="icon-button" title="Notifications" type="button">
               <Bell size={19} />
