@@ -1795,9 +1795,11 @@ body .summary {
   background: #ffffff;
 }
 
-/* Saved-concept rows are buttons (click → search the feed); reset button chrome
-   so they match the de-boxed row look, keeping the existing flex/hover styling. */
-button.graph-row {
+/* Saved-concept rows search the feed; Due-Soon rows open the post's drawer to
+   review. Both are buttons — reset button chrome so they match the de-boxed row
+   look, keeping the existing flex/hover styling. */
+button.graph-row,
+button.review-row {
   width: 100%;
   font: inherit;
   color: inherit;
