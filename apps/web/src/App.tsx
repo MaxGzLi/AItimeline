@@ -22,6 +22,7 @@ import {
 } from "@aitimeline/core";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
+  ArrowUp,
   Bell,
   Bookmark,
   Bot,
@@ -211,6 +212,7 @@ export function App() {
   const [activeTopic, setActiveTopic] = useState<string | null>(null);
   const [focusedIndex, setFocusedIndex] = useState(-1);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [showScrollTop, setShowScrollTop] = useState(false);
   const [aiPrompt, setAiPrompt] = useState("");
   const [isImporting, setIsImporting] = useState(false);
   const [isSavingCandidate, setIsSavingCandidate] = useState(false);
@@ -378,6 +380,14 @@ export function App() {
   useEffect(() => {
     setFocusedIndex((index) => (index >= visibleCount ? visibleCount - 1 : index));
   }, [visibleCount]);
+
+  // Reveal the scroll-to-top button once the feed is scrolled past ~one screen.
+  useEffect(() => {
+    const onScroll = () => setShowScrollTop(window.scrollY > 600);
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
   const allSignals = useMemo(
     () => [...demoSignals, ...importedSignals, ...interactionUserSignals],
     [importedSignals, interactionUserSignals]
@@ -1274,6 +1284,18 @@ export function App() {
             </ul>
           </div>
         </div>
+      ) : null}
+
+      {showScrollTop ? (
+        <button
+          aria-label="Scroll to top"
+          className="scroll-top-button"
+          onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+          title="Back to top"
+          type="button"
+        >
+          <ArrowUp size={20} />
+        </button>
       ) : null}
     </div>
   );
