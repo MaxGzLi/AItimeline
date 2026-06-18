@@ -1354,7 +1354,8 @@ body .summary {
   padding: 0 9px;
   border-radius: 6px;
   background: #edf3ff;
-  color: var(--blue);
+  /* Darker than var(--blue) so 12px text clears AA on the pale chip (4.07 -> 4.9). */
+  color: #2862d8;
   font-size: 12px;
 }
 
@@ -1744,7 +1745,8 @@ body .summary {
   place-items: center;
   border-radius: 6px;
   background: #edf3ff;
-  color: var(--blue);
+  /* Darker than var(--blue) so 12px text clears AA on the pale chip (4.07 -> 4.9). */
+  color: #2862d8;
   font-size: 12px;
 }
 
@@ -1871,7 +1873,8 @@ button.review-row {
   place-items: center;
   border-radius: 6px;
   background: #edf3ff;
-  color: var(--blue);
+  /* Darker than var(--blue) so 12px text clears AA on the pale chip (4.07 -> 4.9). */
+  color: #2862d8;
   font-size: 12px;
 }
 
@@ -2059,7 +2062,8 @@ button.review-row {
   padding: 0 10px;
   border-radius: 6px;
   background: #edf3ff;
-  color: var(--blue);
+  /* Darker than var(--blue) so 12px text clears AA on the pale chip (4.07 -> 4.9). */
+  color: #2862d8;
   font-size: 12px;
   font-weight: 900;
 }
@@ -3290,7 +3294,10 @@ section.agent-brief {
   .candidate-row strong,
   .graph-row strong,
   .next-action-list span {
-    background: #1c2a44;
+    /* Darker chip than #1c2a44 so the 12px var(--blue) glyphs/labels clear AA
+       (#1c2a44 gave only 4.41:1); matches the reply-avatar chip. icon-button
+       .selected is an icon (3:1) so it only benefits. */
+    background: #15203a;
     color: var(--blue);
   }
 
