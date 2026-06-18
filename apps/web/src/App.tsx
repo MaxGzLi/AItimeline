@@ -2115,13 +2115,13 @@ function EvidenceLedgerPanel({ ledger }: { ledger?: EvidenceLedger | null }) {
         <>
           <div className="evidence-summary">
             <span className="evidence-stat passed">{ledger.summary.passed} passed</span>
-            <span className="evidence-stat warning">{ledger.summary.warnings} warnings</span>
+            <span className="evidence-stat warning">{pluralize(ledger.summary.warnings, "warning", "warnings")}</span>
             <span className="evidence-stat failed">{ledger.summary.failed} failed</span>
           </div>
           <div className="evidence-meta">
-            <span>{ledger.summary.citedSources} sources</span>
-            <span>{ledger.summary.citedChunks} chunks</span>
-            <span>{ledger.summary.totalClaims} claims</span>
+            <span>{pluralize(ledger.summary.citedSources, "source", "sources")}</span>
+            <span>{pluralize(ledger.summary.citedChunks, "chunk", "chunks")}</span>
+            <span>{pluralize(ledger.summary.totalClaims, "claim", "claims")}</span>
           </div>
           <div className="evidence-claim-list">
             {ledger.claims.slice(0, 5).map((claim) => (
