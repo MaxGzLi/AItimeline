@@ -2369,14 +2369,14 @@ function formatCardSource(card: KnowledgeCard): string {
 }
 
 function formatDueDate(value: string): string {
-  return new Intl.DateTimeFormat("zh-CN", {
+  return new Intl.DateTimeFormat("en", {
     month: "short",
     day: "numeric"
   }).format(new Date(value));
 }
 
 function formatShortTime(value: string): string {
-  return new Intl.DateTimeFormat("zh-CN", {
+  return new Intl.DateTimeFormat("en", {
     hour: "2-digit",
     minute: "2-digit"
   }).format(new Date(value));
