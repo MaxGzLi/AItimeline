@@ -1653,6 +1653,7 @@ function KnowledgeCardView({
           <div className="post-author-line">
             <strong>{getAgentName(primaryConcept)}</strong>
             <span>@{slugConcept(primaryConcept)}</span>
+            <span>{formatRelativeTime(card.createdAt)}</span>
             <span>{card.estimatedReadMinutes}m read</span>
           </div>
           <div className="post-header-badges">
@@ -2311,6 +2312,39 @@ function formatShortTime(value: string): string {
     hour: "2-digit",
     minute: "2-digit"
   }).format(new Date(value));
+}
+
+// X-style relative post age: "now" / "5m" / "3h" / "2d", then a date for older posts.
+function formatRelativeTime(value: string): string {
+  const then = new Date(value).getTime();
+  if (Number.isNaN(then)) {
+    return "";
+  }
+
+  const minutes = Math.floor((Date.now() - then) / 60000);
+  if (minutes < 1) {
+    return "now";
+  }
+  if (minutes < 60) {
+    return `${minutes}m`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return `${hours}h`;
+  }
+
+  const days = Math.floor(hours / 24);
+  if (days < 7) {
+    return `${days}d`;
+  }
+
+  const date = new Date(value);
+  return new Intl.DateTimeFormat("en", {
+    month: "short",
+    day: "numeric",
+    ...(date.getFullYear() === new Date().getFullYear() ? {} : { year: "numeric" })
+  }).format(date);
 }
 
 function buildTimestampUrl(url: string | undefined, seconds: number): string {
