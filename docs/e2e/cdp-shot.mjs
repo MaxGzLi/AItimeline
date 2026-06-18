@@ -72,14 +72,16 @@ try {
 
   await send("Page.enable");
   await send("Runtime.enable");
-  // Pin prefers-color-scheme so @media color-scheme blocks are deterministic.
+  // Pin media features so @media blocks are deterministic.
   // NOTE: this headless Chrome DEFAULTS to dark, so to verify LIGHT mode you
   // must emulate it explicitly (LIGHT=1); DARK=1 forces dark.
+  // REDUCE=1 emulates prefers-reduced-motion: reduce (for a11y motion checks).
+  const features = [];
   const scheme = process.env.DARK ? "dark" : process.env.LIGHT ? "light" : null;
-  if (scheme) {
-    await send("Emulation.setEmulatedMedia", {
-      features: [{ name: "prefers-color-scheme", value: scheme }],
-    });
+  if (scheme) features.push({ name: "prefers-color-scheme", value: scheme });
+  if (process.env.REDUCE) features.push({ name: "prefers-reduced-motion", value: "reduce" });
+  if (features.length) {
+    await send("Emulation.setEmulatedMedia", { features });
   }
   await send("Emulation.setDeviceMetricsOverride", {
     width: Number(w),
