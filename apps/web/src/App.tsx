@@ -1230,10 +1230,16 @@ export function App() {
 
           <div className="review-list">
             {reviewQueue.slice(0, 4).map((item) => (
-              <div className="review-row" key={`${item.cardId}-${item.concept}`}>
+              <button
+                className="review-row"
+                key={`${item.cardId}-${item.concept}`}
+                onClick={() => setSelectedCardId(item.cardId)}
+                title={`Open “${item.concept}” to review`}
+                type="button"
+              >
                 <span>{item.concept}</span>
                 <time>{formatDueDate(item.dueAt)}</time>
-              </div>
+              </button>
             ))}
           </div>
         </section>
