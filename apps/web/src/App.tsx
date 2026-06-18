@@ -1898,9 +1898,30 @@ function SourceDetailDrawer({
 }) {
   const citation = card.citations?.[0];
   const source = card.sources[0];
+  const drawerRef = useRef<HTMLElement>(null);
+
+  // Modal focus management: move focus into the dialog on open and return it to
+  // the element that opened it on close, so keyboard/screen-reader users are taken
+  // to the new content and back to their place in the feed.
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    drawerRef.current?.focus();
+    return () => {
+      if (opener && document.contains(opener)) {
+        opener.focus();
+      }
+    };
+  }, []);
 
   return (
-    <aside className="detail-drawer" aria-label="Source detail">
+    <aside
+      aria-label="Source detail"
+      aria-modal="true"
+      className="detail-drawer"
+      ref={drawerRef}
+      role="dialog"
+      tabIndex={-1}
+    >
       <div className="drawer-header">
         <div>
           <p className="section-label">Grounded Card</p>
