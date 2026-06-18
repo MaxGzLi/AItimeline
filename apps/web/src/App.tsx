@@ -210,6 +210,7 @@ export function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTopic, setActiveTopic] = useState<string | null>(null);
   const [focusedIndex, setFocusedIndex] = useState(-1);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [aiPrompt, setAiPrompt] = useState("");
   const [isImporting, setIsImporting] = useState(false);
   const [isSavingCandidate, setIsSavingCandidate] = useState(false);
@@ -352,7 +353,12 @@ export function App() {
             handleOpenCard(visibleCards[focusedIndex]);
           }
           break;
+        case "?":
+          event.preventDefault();
+          setShortcutsOpen((open) => !open);
+          break;
         case "Escape":
+          setShortcutsOpen(false);
           setFocusedIndex(-1);
           break;
         default:
@@ -1218,6 +1224,56 @@ export function App() {
           prompt={aiPrompt}
           signal={selectedSignal}
         />
+      ) : null}
+
+      {shortcutsOpen ? (
+        <div
+          aria-label="Keyboard shortcuts"
+          aria-modal="true"
+          className="shortcuts-overlay"
+          onClick={() => setShortcutsOpen(false)}
+          role="dialog"
+        >
+          <div className="shortcuts-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="shortcuts-head">
+              <h2>Keyboard shortcuts</h2>
+              <button
+                aria-label="Close shortcuts"
+                className="icon-button compact"
+                onClick={() => setShortcutsOpen(false)}
+                type="button"
+              >
+                <XCircle size={18} />
+              </button>
+            </div>
+            <ul className="shortcuts-list">
+              <li>
+                <kbd>j</kbd>
+                <span>Next post</span>
+              </li>
+              <li>
+                <kbd>k</kbd>
+                <span>Previous post</span>
+              </li>
+              <li>
+                <kbd>Enter</kbd>
+                <span>Open thread</span>
+              </li>
+              <li>
+                <kbd>/</kbd>
+                <span>Search</span>
+              </li>
+              <li>
+                <kbd>?</kbd>
+                <span>Toggle this menu</span>
+              </li>
+              <li>
+                <kbd>Esc</kbd>
+                <span>Close / clear</span>
+              </li>
+            </ul>
+          </div>
+        </div>
       ) : null}
     </div>
   );
