@@ -3509,6 +3509,10 @@ section.agent-brief {
   }
 
   .primary-action {
+    /* Not var(--blue): the brightened dark accent #4d8bff under white text is
+       only 3.25:1 (fails AA). #3568de = 5.02:1 (AA) — same fix the chat bubble
+       already uses. Resting state for every dark primary button. */
+    background: #3568de;
     color: #ffffff;
   }
 
