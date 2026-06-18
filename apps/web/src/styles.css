@@ -942,7 +942,9 @@ body .summary {
   width: 28px;
   height: 28px;
   background: #edf3ff;
-  color: var(--blue);
+  /* Darker than var(--blue) so the 10px initials clear AA on the pale chip
+     (var(--blue) on #edf3ff was only 4.07:1; #2862d8 -> 4.9:1). */
+  color: #2862d8;
   font-size: 10px;
 }
 
@@ -3294,6 +3296,12 @@ section.agent-brief {
 
   .icon-button.selected {
     border-color: #2f4d80;
+  }
+
+  /* The shared accent chip (#1c2a44) left the #4d8bff reply-avatar initials at
+     only 4.41:1 for 10px text; a dedicated darker chip lifts them past AA. */
+  .reply-avatar {
+    background: #15203a;
   }
 
   .post-claim-card {
