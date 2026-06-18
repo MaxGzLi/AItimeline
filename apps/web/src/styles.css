@@ -581,6 +581,12 @@ button {
   box-shadow: inset 3px 0 0 rgba(47, 109, 246, 0.55);
 }
 
+/* keyboard-focused card (j/k nav) — full-strength version of the hover accent */
+.knowledge-card.focused {
+  background: #f7faff;
+  box-shadow: inset 3px 0 0 var(--blue);
+}
+
 .social-post-header {
   display: flex;
   align-items: flex-start;
@@ -3038,6 +3044,10 @@ section.agent-brief {
   }
 
   .knowledge-card:hover {
+    background: #1d242d;
+  }
+
+  .knowledge-card.focused {
     background: #1d242d;
   }
 

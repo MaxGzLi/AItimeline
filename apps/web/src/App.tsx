@@ -209,6 +209,7 @@ export function App() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTopic, setActiveTopic] = useState<string | null>(null);
+  const [focusedIndex, setFocusedIndex] = useState(-1);
   const [aiPrompt, setAiPrompt] = useState("");
   const [isImporting, setIsImporting] = useState(false);
   const [isSavingCandidate, setIsSavingCandidate] = useState(false);
@@ -311,6 +312,66 @@ export function App() {
     });
   }, [displayedCards, searchQuery, activeTopic]);
   const allCards = useMemo(() => rankedCards, [rankedCards]);
+
+  // Keyboard navigation (X-style): j/k move a focus highlight between cards,
+  // Enter opens the focused card, "/" jumps to search, Escape clears.
+  const visibleCount = visibleCards.length;
+  useEffect(() => {
+    const handleKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const typing =
+        !!target &&
+        (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
+      if (typing) {
+        if (event.key === "Escape") {
+          target.blur();
+          setSearchOpen(false);
+          setSearchQuery("");
+        }
+        return;
+      }
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      switch (event.key) {
+        case "j":
+          event.preventDefault();
+          setFocusedIndex((index) => Math.min(visibleCount - 1, index + 1));
+          break;
+        case "k":
+          event.preventDefault();
+          setFocusedIndex((index) => (index <= 0 ? index : index - 1));
+          break;
+        case "/":
+          event.preventDefault();
+          setSearchOpen(true);
+          requestAnimationFrame(() =>
+            document.querySelector<HTMLInputElement>(".header-search input")?.focus()
+          );
+          break;
+        case "Enter":
+          if (focusedIndex >= 0 && visibleCards[focusedIndex]) {
+            handleOpenCard(visibleCards[focusedIndex]);
+          }
+          break;
+        case "Escape":
+          setFocusedIndex(-1);
+          break;
+        default:
+          break;
+      }
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [visibleCount, focusedIndex, visibleCards]);
+
+  // Keep the focused card scrolled into view; clamp when the filtered list shrinks.
+  useEffect(() => {
+    if (focusedIndex < 0) return;
+    const nodes = document.querySelectorAll<HTMLElement>(".feed-list .knowledge-card");
+    nodes[focusedIndex]?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [focusedIndex]);
+  useEffect(() => {
+    setFocusedIndex((index) => (index >= visibleCount ? visibleCount - 1 : index));
+  }, [visibleCount]);
   const allSignals = useMemo(
     () => [...demoSignals, ...importedSignals, ...interactionUserSignals],
     [importedSignals, interactionUserSignals]
@@ -1008,10 +1069,11 @@ export function App() {
                 : `No posts in “${activeTopic}”.`}
             </p>
           ) : (
-            visibleCards.map((card) => (
+            visibleCards.map((card, index) => (
               <KnowledgeCardView
                 card={card}
                 feedback={learningFeedback[card.id]}
+                isFocused={index === focusedIndex}
                 key={card.id}
                 onDwell={handleDwell}
                 onLike={handleLike}
@@ -1372,6 +1434,7 @@ function StatusIcon({ status }: { status: TransformationStatus }) {
 function KnowledgeCardView({
   card,
   feedback,
+  isFocused,
   onDwell,
   onLike,
   onOpen,
@@ -1381,6 +1444,7 @@ function KnowledgeCardView({
 }: {
   card: RankedKnowledgeCard;
   feedback?: LearningFeedback;
+  isFocused?: boolean;
   onDwell: (card: RankedKnowledgeCard, dwellTimeMs: number) => void;
   onLike: (card: RankedKnowledgeCard) => void;
   onOpen: (card: RankedKnowledgeCard) => void;
@@ -1453,7 +1517,7 @@ function KnowledgeCardView({
   }, [card, onDwell]);
 
   return (
-    <article className="knowledge-card" ref={cardRef}>
+    <article className={`knowledge-card${isFocused ? " focused" : ""}`} ref={cardRef}>
       <div className="post-avatar" aria-hidden="true">
         {getAgentInitials(primaryConcept)}
       </div>
