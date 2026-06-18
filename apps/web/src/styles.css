@@ -411,6 +411,15 @@ button {
   background: #dfeaff;
 }
 
+/* selected concept filter — solid blue chip (var-based, auto-adapts to dark);
+   placed after :hover/:active so it wins the cascade when the pill is active */
+.topic-pill.active {
+  border-color: var(--blue);
+  background: var(--blue);
+  color: #ffffff;
+  font-weight: 800;
+}
+
 .source-import {
   padding: 14px 24px;
   border-bottom: 1px solid var(--border);
