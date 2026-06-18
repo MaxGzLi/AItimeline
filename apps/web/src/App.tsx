@@ -365,6 +365,22 @@ export function App() {
             handleOpenCard(visibleCards[focusedIndex]);
           }
           break;
+        case "l":
+          if (focusedIndex >= 0 && visibleCards[focusedIndex]) {
+            event.preventDefault();
+            handleLike(visibleCards[focusedIndex]);
+          }
+          break;
+        case "s":
+          if (focusedIndex >= 0 && visibleCards[focusedIndex]) {
+            event.preventDefault();
+            handleSave(visibleCards[focusedIndex]);
+          }
+          break;
+        case "t":
+          event.preventDefault();
+          setTheme((value) => (value === "dark" ? "light" : "dark"));
+          break;
         case "?":
           event.preventDefault();
           setShortcutsOpen((open) => !open);
@@ -1315,8 +1331,20 @@ export function App() {
                 <span>Open thread</span>
               </li>
               <li>
+                <kbd>l</kbd>
+                <span>Like post</span>
+              </li>
+              <li>
+                <kbd>s</kbd>
+                <span>Save post</span>
+              </li>
+              <li>
                 <kbd>/</kbd>
                 <span>Search</span>
+              </li>
+              <li>
+                <kbd>t</kbd>
+                <span>Toggle theme</span>
               </li>
               <li>
                 <kbd>?</kbd>
