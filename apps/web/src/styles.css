@@ -259,6 +259,50 @@ button {
   height: 34px;
 }
 
+/* X-style feed view tabs (For you / Latest) — sticky just under the 86px header,
+   frosted to match it; vars auto-adapt to dark, only frost+hover need overrides */
+.feed-tabs {
+  position: sticky;
+  top: 86px;
+  z-index: 1;
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(16px);
+}
+
+.feed-tab {
+  position: relative;
+  flex: 1;
+  min-height: 52px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.feed-tab:hover {
+  background: #f3f7fa;
+}
+
+.feed-tab.active {
+  color: var(--ink);
+}
+
+.feed-tab.active::after {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  width: 56px;
+  height: 4px;
+  transform: translateX(-50%);
+  border-radius: 9999px;
+  background: var(--blue);
+}
+
 .topic-strip {
   display: flex;
   gap: 8px;
@@ -2745,6 +2789,14 @@ section.agent-brief {
 
   .topic-strip {
     background: var(--panel);
+  }
+
+  .feed-tabs {
+    background: rgba(21, 25, 30, 0.86); /* match dark .timeline-header frost */
+  }
+
+  .feed-tab:hover {
+    background: #222831;
   }
 
   .secondary-action,

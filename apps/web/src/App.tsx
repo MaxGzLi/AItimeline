@@ -205,6 +205,7 @@ export function App() {
   const [memoryMessage, setMemoryMessage] = useState("No memory edits yet");
   const [candidateMessage, setCandidateMessage] = useState("No queued source candidates yet");
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
+  const [feedTab, setFeedTab] = useState<"foryou" | "latest">("foryou");
   const [aiPrompt, setAiPrompt] = useState("");
   const [isImporting, setIsImporting] = useState(false);
   const [isSavingCandidate, setIsSavingCandidate] = useState(false);
@@ -268,6 +269,15 @@ export function App() {
   const rankedCards = useMemo(
     () => (rankedImportedCards.length > 0 ? rankedImportedCards : demoRankedCards),
     [demoRankedCards, rankedImportedCards]
+  );
+  // "For you" keeps the personalized ranking; "Latest" re-sorts the same cards
+  // newest-first by createdAt so users can switch between relevance and recency.
+  const displayedCards = useMemo(
+    () =>
+      feedTab === "latest"
+        ? [...rankedCards].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        : rankedCards,
+    [feedTab, rankedCards]
   );
   const allCards = useMemo(() => rankedCards, [rankedCards]);
   const allSignals = useMemo(
@@ -869,6 +879,27 @@ export function App() {
           </div>
         </header>
 
+        <div className="feed-tabs" role="tablist" aria-label="Feed view">
+          <button
+            aria-selected={feedTab === "foryou"}
+            className={`feed-tab${feedTab === "foryou" ? " active" : ""}`}
+            onClick={() => setFeedTab("foryou")}
+            role="tab"
+            type="button"
+          >
+            For you
+          </button>
+          <button
+            aria-selected={feedTab === "latest"}
+            className={`feed-tab${feedTab === "latest" ? " active" : ""}`}
+            onClick={() => setFeedTab("latest")}
+            role="tab"
+            type="button"
+          >
+            Latest
+          </button>
+        </div>
+
         <div className="topic-strip" aria-label="Topics">
           {demoProfile.interests.map((interest) => (
             <button className="topic-pill" key={interest}>
@@ -890,7 +921,7 @@ export function App() {
         />
 
         <section className="feed-list" aria-label="Knowledge cards">
-          {rankedCards.map((card) => (
+          {displayedCards.map((card) => (
             <KnowledgeCardView
               card={card}
               feedback={learningFeedback[card.id]}
