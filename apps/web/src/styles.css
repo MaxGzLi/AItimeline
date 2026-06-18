@@ -2917,19 +2917,21 @@ section.agent-brief {
    X-style dark palette: page #15191e, panel #1b2026, raised #222831,
    border #2b333c, ink #e7ecf0, muted #8b98a5, brightened accents.
    ===================================================================== */
-@media (prefers-color-scheme: dark) {
-  :root {
-    color: #e7ecf0;
-    background: #15191e;
-    --border: #2b333c;
-    --muted: #8b98a5;
-    --ink: #e7ecf0;
-    --panel: #1b2026;
-    --blue: #4d8bff;
-    --green: #35c79a;
-    --amber: #e0a44b;
-    --red: #e06a6a;
-  }
+/* Dark theme — driven by an explicit data-theme attribute that an inline
+   head script resolves before paint (from localStorage, defaulting to the OS
+   preference). Nesting scopes every rule below to :root[data-theme="dark"], so
+   a user can force light or dark over their system setting. */
+:root[data-theme="dark"] {
+  color: #e7ecf0;
+  background: #15191e;
+  --border: #2b333c;
+  --muted: #8b98a5;
+  --ink: #e7ecf0;
+  --panel: #1b2026;
+  --blue: #4d8bff;
+  --green: #35c79a;
+  --amber: #e0a44b;
+  --red: #e06a6a;
 
   body {
     background: #15191e;
