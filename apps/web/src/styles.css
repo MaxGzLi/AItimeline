@@ -654,6 +654,13 @@ button {
   font-size: 13px;
 }
 
+/* X-style middot between the metadata tokens: @handle · 3d · 5m read */
+.post-author-line span + span::before {
+  content: "·";
+  margin-right: 6px;
+  color: var(--muted);
+}
+
 .post-header-badges {
   display: flex;
   flex-wrap: wrap;
