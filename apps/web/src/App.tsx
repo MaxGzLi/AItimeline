@@ -1565,6 +1565,7 @@ function KnowledgeCardView({
   const reportedDwellMs = useRef(0);
   const threadPreview = getTimelineThreadPreview(card);
   const [threadExpanded, setThreadExpanded] = useState(false);
+  const [dismissed, setDismissed] = useState(false);
   const fullThread = card.thread ?? [];
   const visibleThread = threadExpanded ? fullThread : threadPreview;
   const canExpandThread = fullThread.length > threadPreview.length;
@@ -1627,6 +1628,19 @@ function KnowledgeCardView({
       observer.disconnect();
     };
   }, [card, onDwell]);
+
+  if (dismissed) {
+    return (
+      <article className="knowledge-card dismissed" ref={cardRef}>
+        <div className="card-dismissed">
+          <p>Not interested — we'll show fewer posts like this.</p>
+          <button className="card-dismissed-undo" onClick={() => setDismissed(false)} type="button">
+            Undo
+          </button>
+        </div>
+      </article>
+    );
+  }
 
   return (
     <article className={`knowledge-card${isFocused ? " focused" : ""}`} ref={cardRef}>
@@ -1765,7 +1779,14 @@ function KnowledgeCardView({
             <button className="icon-button compact" onClick={() => onOpen(card)} title="Explain">
               <CircleHelp size={18} />
             </button>
-            <button className={`icon-button compact ${signal?.skippedQuickly ? "negative" : ""}`} onClick={() => onSkip(card)} title="Skip post">
+            <button
+              className={`icon-button compact ${signal?.skippedQuickly ? "negative" : ""}`}
+              onClick={() => {
+                onSkip(card);
+                setDismissed(true);
+              }}
+              title="Not interested"
+            >
               <XCircle size={18} />
             </button>
           </div>
