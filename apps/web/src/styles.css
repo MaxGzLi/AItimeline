@@ -919,6 +919,35 @@ body .summary {
   color: var(--blue);
 }
 
+/* Inline thread expansion — reveal the whole thread in-feed (no drawer trip).
+   Collapsed replies stay 1-line clamped; expanded ones unclamp so they're readable. */
+.thread-chevron {
+  flex-shrink: 0;
+  transition: transform 160ms ease;
+}
+
+.thread-chevron.open {
+  transform: rotate(180deg);
+}
+
+.social-thread-preview.expanded .social-thread-reply strong {
+  overflow: visible;
+  white-space: normal;
+  text-overflow: clip;
+}
+
+.social-thread-preview.expanded .social-thread-reply p {
+  display: block;
+  overflow: visible;
+  -webkit-line-clamp: unset;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thread-chevron {
+    transition: none;
+  }
+}
+
 .thread-count-button:hover span {
   text-decoration: underline;
   text-decoration-thickness: 1px;

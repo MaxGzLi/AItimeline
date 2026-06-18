@@ -28,6 +28,7 @@ import {
   Bot,
   Brain,
   CheckCircle2,
+  ChevronDown,
   CircleHelp,
   Clock,
   Compass,
@@ -1534,6 +1535,10 @@ function KnowledgeCardView({
   const visibleSince = useRef<number | null>(null);
   const reportedDwellMs = useRef(0);
   const threadPreview = getTimelineThreadPreview(card);
+  const [threadExpanded, setThreadExpanded] = useState(false);
+  const fullThread = card.thread ?? [];
+  const visibleThread = threadExpanded ? fullThread : threadPreview;
+  const canExpandThread = fullThread.length > threadPreview.length;
   const readBlock = getReadBlock(card);
   const learnPrompts = card.reviewPrompts?.slice(0, 2) ?? [];
   const exploreEdges = card.graphEdges?.slice(0, 2) ?? [];
@@ -1629,8 +1634,8 @@ function KnowledgeCardView({
           </button>
         ) : null}
 
-        <div className="social-thread-preview">
-          {threadPreview.map((block) => (
+        <div className={`social-thread-preview${threadExpanded ? " expanded" : ""}`}>
+          {visibleThread.map((block) => (
             <button className="social-thread-reply" key={block.id} onClick={() => onOpen(card)} type="button">
               <div className="reply-avatar">{formatThreadKind(block.kind).slice(0, 2)}</div>
               <div>
@@ -1640,12 +1645,24 @@ function KnowledgeCardView({
               </div>
             </button>
           ))}
-          <button className="thread-count-button" onClick={() => onOpen(card)} type="button">
-            <MessageCircle size={16} />
-            <span>
-              Open thread · {card.thread?.length ?? 0} replies · {card.reviewPrompts?.length ?? 0} checks ready
-            </span>
-          </button>
+          {canExpandThread ? (
+            <button
+              aria-expanded={threadExpanded}
+              className="thread-count-button"
+              onClick={() => setThreadExpanded((value) => !value)}
+              type="button"
+            >
+              <ChevronDown className={`thread-chevron${threadExpanded ? " open" : ""}`} size={16} />
+              <span>{threadExpanded ? "Show less" : `Show this thread · ${fullThread.length} replies`}</span>
+            </button>
+          ) : (
+            <button className="thread-count-button" onClick={() => onOpen(card)} type="button">
+              <MessageCircle size={16} />
+              <span>
+                Open thread · {fullThread.length} replies · {card.reviewPrompts?.length ?? 0} checks ready
+              </span>
+            </button>
+          )}
         </div>
 
         {learnPrompts.length > 0 || exploreEdges.length > 0 ? (
