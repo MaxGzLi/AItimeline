@@ -353,6 +353,11 @@ export function App() {
           event.preventDefault();
           setFocusedIndex((index) => (index <= 0 ? index : index - 1));
           break;
+        case "g":
+          event.preventDefault();
+          window.scrollTo({ top: 0, behavior: "smooth" });
+          setFocusedIndex(-1);
+          break;
         case "/":
           event.preventDefault();
           setSearchOpen(true);
@@ -1332,6 +1337,10 @@ export function App() {
               <li>
                 <kbd>k</kbd>
                 <span>Previous post</span>
+              </li>
+              <li>
+                <kbd>g</kbd>
+                <span>Jump to top</span>
               </li>
               <li>
                 <kbd>Enter</kbd>
