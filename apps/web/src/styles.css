@@ -259,6 +259,65 @@ button {
   height: 34px;
 }
 
+/* Header search pill (toggled by the Search icon) — filters the feed in place.
+   All colors are var()-based so they auto-adapt to the dark theme. */
+.header-search {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  max-width: 480px;
+  margin-right: 12px;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  background: var(--panel);
+  color: var(--muted);
+}
+
+.header-search:focus-within {
+  border-color: var(--blue);
+}
+
+.header-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 15px;
+}
+
+.header-search input::placeholder {
+  color: var(--muted);
+}
+
+.header-search-clear {
+  display: inline-grid;
+  place-items: center;
+  padding: 2px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.header-search-clear:hover {
+  color: var(--ink);
+}
+
+.feed-empty {
+  margin: 0;
+  padding: 44px 24px;
+  color: var(--muted);
+  text-align: center;
+  font-size: 15px;
+}
+
 /* X-style feed view tabs (For you / Latest) — sticky just under the 86px header,
    frosted to match it; vars auto-adapt to dark, only frost+hover need overrides */
 .feed-tabs {

@@ -206,6 +206,8 @@ export function App() {
   const [candidateMessage, setCandidateMessage] = useState("No queued source candidates yet");
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
   const [feedTab, setFeedTab] = useState<"foryou" | "latest">("foryou");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
   const [aiPrompt, setAiPrompt] = useState("");
   const [isImporting, setIsImporting] = useState(false);
   const [isSavingCandidate, setIsSavingCandidate] = useState(false);
@@ -279,6 +281,27 @@ export function App() {
         : rankedCards,
     [feedTab, rankedCards]
   );
+  // Free-text filter over the active tab's cards so the header search narrows
+  // the feed in place instead of leaving the page.
+  const visibleCards = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return displayedCards;
+    return displayedCards.filter((card) => {
+      const haystack = [
+        card.title,
+        card.summary,
+        card.keyTakeaway,
+        card.hook,
+        card.thesis,
+        card.shortBody,
+        ...card.concepts
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(q);
+    });
+  }, [displayedCards, searchQuery]);
   const allCards = useMemo(() => rankedCards, [rankedCards]);
   const allSignals = useMemo(
     () => [...demoSignals, ...importedSignals, ...interactionUserSignals],
@@ -865,15 +888,50 @@ export function App() {
 
       <main className="timeline-column">
         <header className="timeline-header">
-          <div>
-            <p className="section-label">Today</p>
-            <h1>Knowledge Timeline</h1>
-          </div>
+          {searchOpen ? (
+            <div className="header-search">
+              <Search size={18} />
+              <input
+                aria-label="Search the timeline"
+                autoFocus
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="Search your timeline"
+                value={searchQuery}
+              />
+              {searchQuery ? (
+                <button
+                  aria-label="Clear search"
+                  className="header-search-clear"
+                  onClick={() => setSearchQuery("")}
+                  type="button"
+                >
+                  <XCircle size={18} />
+                </button>
+              ) : null}
+            </div>
+          ) : (
+            <div>
+              <p className="section-label">Today</p>
+              <h1>Knowledge Timeline</h1>
+            </div>
+          )}
           <div className="header-actions">
-            <button className="icon-button" title="Search">
+            <button
+              className={`icon-button${searchOpen ? " selected" : ""}`}
+              onClick={() => {
+                if (searchOpen) {
+                  setSearchOpen(false);
+                  setSearchQuery("");
+                } else {
+                  setSearchOpen(true);
+                }
+              }}
+              title="Search"
+              type="button"
+            >
               <Search size={19} />
             </button>
-            <button className="icon-button" title="Notifications">
+            <button className="icon-button" title="Notifications" type="button">
               <Bell size={19} />
             </button>
           </div>
@@ -921,19 +979,23 @@ export function App() {
         />
 
         <section className="feed-list" aria-label="Knowledge cards">
-          {displayedCards.map((card) => (
-            <KnowledgeCardView
-              card={card}
-              feedback={learningFeedback[card.id]}
-              key={card.id}
-              onDwell={handleDwell}
-              onLike={handleLike}
-              onOpen={handleOpenCard}
-              onSave={handleSave}
-              onSkip={handleSkip}
-              signal={interactionSignals[card.id]}
-            />
-          ))}
+          {visibleCards.length === 0 && searchQuery.trim() ? (
+            <p className="feed-empty">No posts match “{searchQuery.trim()}”.</p>
+          ) : (
+            visibleCards.map((card) => (
+              <KnowledgeCardView
+                card={card}
+                feedback={learningFeedback[card.id]}
+                key={card.id}
+                onDwell={handleDwell}
+                onLike={handleLike}
+                onOpen={handleOpenCard}
+                onSave={handleSave}
+                onSkip={handleSkip}
+                signal={interactionSignals[card.id]}
+              />
+            ))
+          )}
         </section>
       </main>
 
