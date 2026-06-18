@@ -60,6 +60,15 @@ const sampleSourceUrl = `${apiBaseUrl}/fixtures/article`;
 const storageKey = "aitimeline.mvp.v3";
 const syncedSignalsStorageKey = "aitimeline.synced-signals.v1";
 
+// JS smooth-scroll ignores prefers-reduced-motion (unlike CSS, which we honor
+// everywhere). Fall back to an instant jump when the user asked for reduced motion.
+function scrollMotion(): ScrollBehavior {
+  return typeof window !== "undefined" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    ? "auto"
+    : "smooth";
+}
+
 const navItems = [
   { label: "Timeline", icon: Home, active: true },
   { label: "Explore", icon: Compass },
@@ -355,7 +364,7 @@ export function App() {
           break;
         case "g":
           event.preventDefault();
-          window.scrollTo({ top: 0, behavior: "smooth" });
+          window.scrollTo({ top: 0, behavior: scrollMotion() });
           setFocusedIndex(-1);
           break;
         case "/":
@@ -406,7 +415,7 @@ export function App() {
   useEffect(() => {
     if (focusedIndex < 0) return;
     const nodes = document.querySelectorAll<HTMLElement>(".feed-list .knowledge-card");
-    nodes[focusedIndex]?.scrollIntoView({ block: "center", behavior: "smooth" });
+    nodes[focusedIndex]?.scrollIntoView({ block: "center", behavior: scrollMotion() });
   }, [focusedIndex]);
   useEffect(() => {
     setFocusedIndex((index) => (index >= visibleCount ? visibleCount - 1 : index));
@@ -1379,7 +1388,7 @@ export function App() {
         <button
           aria-label="Scroll to top"
           className="scroll-top-button"
-          onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+          onClick={() => window.scrollTo({ top: 0, behavior: scrollMotion() })}
           title="Back to top"
           type="button"
         >
