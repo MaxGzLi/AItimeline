@@ -2819,6 +2819,37 @@ section.agent-brief {
   font-size: 14px;
 }
 
+/* floating scroll-to-top button — appears after ~1 screen of scrolling.
+   var(--blue) auto-adapts to dark; no override block needed. */
+.scroll-top-button {
+  position: fixed;
+  right: 28px;
+  bottom: 28px;
+  z-index: 40;
+  display: inline-grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border: 1px solid var(--blue);
+  border-radius: 9999px;
+  background: var(--blue);
+  color: #ffffff;
+  cursor: pointer;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  transition:
+    transform 0.12s ease,
+    filter 0.12s ease;
+}
+
+.scroll-top-button:hover {
+  filter: brightness(1.07);
+  transform: translateY(-1px);
+}
+
+.scroll-top-button:active {
+  transform: translateY(0);
+}
+
 
 
 /* =====================================================================
