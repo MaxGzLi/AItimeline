@@ -1771,13 +1771,13 @@ function KnowledgeCardView({
               type="button"
             >
               <ChevronDown className={`thread-chevron${threadExpanded ? " open" : ""}`} size={16} />
-              <span>{threadExpanded ? "Show less" : `Show this thread · ${fullThread.length} replies`}</span>
+              <span>{threadExpanded ? "Show less" : `Show this thread · ${pluralize(fullThread.length, "reply", "replies")}`}</span>
             </button>
           ) : (
             <button className="thread-count-button" onClick={() => onOpen(card)} type="button">
               <MessageCircle size={16} />
               <span>
-                Open thread · {fullThread.length} replies · {card.reviewPrompts?.length ?? 0} checks ready
+                Open thread · {pluralize(fullThread.length, "reply", "replies")} · {pluralize(card.reviewPrompts?.length ?? 0, "check", "checks")} ready
               </span>
             </button>
           )}
@@ -1835,8 +1835,8 @@ function KnowledgeCardView({
         <footer className="card-footer">
           <div className="social-metrics">
             <span>{Math.max(12, Math.round(card.score))} useful</span>
-            <span>{card.thread?.length ?? 0} replies</span>
-            <span>{card.reviewPrompts?.length ?? 0} checks</span>
+            <span>{pluralize(card.thread?.length ?? 0, "reply", "replies")}</span>
+            <span>{pluralize(card.reviewPrompts?.length ?? 0, "check", "checks")}</span>
           </div>
           <div className="card-actions">
             <button className={`icon-button compact ${signal?.liked ? "selected" : ""}`} onClick={() => onLike(card)} title="Like">
@@ -2179,6 +2179,11 @@ function upsertById<T extends { id: string }>(currentItems: T[], newItems: T[]):
 
 function upsertImport(imports: SourceImport[], nextImport: SourceImport): SourceImport[] {
   return [nextImport, ...imports.filter((item) => item.id !== nextImport.id)];
+}
+
+// Count + noun with correct singular/plural (reply→replies is irregular, so no naive "+s").
+function pluralize(count: number, singular: string, plural: string): string {
+  return `${count} ${count === 1 ? singular : plural}`;
 }
 
 function getTimelineThreadPreview(card: KnowledgeCard): NonNullable<KnowledgeCard["thread"]> {
