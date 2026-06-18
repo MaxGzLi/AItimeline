@@ -1795,6 +1795,18 @@ body .summary {
   background: #ffffff;
 }
 
+/* Saved-concept rows are buttons (click → search the feed); reset button chrome
+   so they match the de-boxed row look, keeping the existing flex/hover styling. */
+button.graph-row {
+  width: 100%;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
 .graph-row span,
 .review-row span {
   overflow: hidden;

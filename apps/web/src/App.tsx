@@ -1186,10 +1186,19 @@ export function App() {
 
           <div className="graph-list">
             {graph.nodes.slice(0, 6).map((node) => (
-              <div className="graph-row" key={node.id}>
+              <button
+                className="graph-row"
+                key={node.id}
+                onClick={() => {
+                  setSearchOpen(true);
+                  setSearchQuery(node.label);
+                }}
+                title={`Search “${node.label}”`}
+                type="button"
+              >
                 <span>{node.label}</span>
                 <strong>{node.weight}</strong>
-              </div>
+              </button>
             ))}
           </div>
         </section>
