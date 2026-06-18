@@ -318,6 +318,33 @@ button {
   font-size: 15px;
 }
 
+.feed-end {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 36px 24px 64px;
+  text-align: center;
+}
+
+.feed-end-icon {
+  color: var(--green);
+  margin-bottom: 4px;
+}
+
+.feed-end-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.feed-end-sub {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
 /* X-style feed view tabs (For you / Latest) — sticky just under the 86px header,
    frosted to match it; vars auto-adapt to dark, only frost+hover need overrides */
 .feed-tabs {

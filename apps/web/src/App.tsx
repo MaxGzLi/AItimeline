@@ -1146,6 +1146,13 @@ export function App() {
               />
             ))
           )}
+          {visibleCards.length > 0 && (
+            <div className="feed-end" role="status">
+              <CheckCircle2 aria-hidden="true" className="feed-end-icon" size={22} />
+              <p className="feed-end-title">You&rsquo;re all caught up</p>
+              <p className="feed-end-sub">You&rsquo;ve reached the end of your timeline.</p>
+            </div>
+          )}
         </section>
       </main>
 
