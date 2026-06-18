@@ -1286,7 +1286,7 @@ export function App() {
         </div>
       ) : null}
 
-      {showScrollTop ? (
+      {showScrollTop && !selectedCard ? (
         <button
           aria-label="Scroll to top"
           className="scroll-top-button"
