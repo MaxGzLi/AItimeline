@@ -208,6 +208,7 @@ export function App() {
   const [feedTab, setFeedTab] = useState<"foryou" | "latest">("foryou");
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [activeTopic, setActiveTopic] = useState<string | null>(null);
   const [aiPrompt, setAiPrompt] = useState("");
   const [isImporting, setIsImporting] = useState(false);
   const [isSavingCandidate, setIsSavingCandidate] = useState(false);
@@ -285,23 +286,30 @@ export function App() {
   // the feed in place instead of leaving the page.
   const visibleCards = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    if (!q) return displayedCards;
+    const topic = activeTopic?.toLowerCase() ?? null;
+    if (!q && !topic) return displayedCards;
     return displayedCards.filter((card) => {
-      const haystack = [
-        card.title,
-        card.summary,
-        card.keyTakeaway,
-        card.hook,
-        card.thesis,
-        card.shortBody,
-        ...card.concepts
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-      return haystack.includes(q);
+      if (topic && !card.concepts.some((concept) => concept.toLowerCase() === topic)) {
+        return false;
+      }
+      if (q) {
+        const haystack = [
+          card.title,
+          card.summary,
+          card.keyTakeaway,
+          card.hook,
+          card.thesis,
+          card.shortBody,
+          ...card.concepts
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        if (!haystack.includes(q)) return false;
+      }
+      return true;
     });
-  }, [displayedCards, searchQuery]);
+  }, [displayedCards, searchQuery, activeTopic]);
   const allCards = useMemo(() => rankedCards, [rankedCards]);
   const allSignals = useMemo(
     () => [...demoSignals, ...importedSignals, ...interactionUserSignals],
@@ -959,8 +967,22 @@ export function App() {
         </div>
 
         <div className="topic-strip" aria-label="Topics">
+          <button
+            aria-pressed={activeTopic === null}
+            className={`topic-pill${activeTopic === null ? " active" : ""}`}
+            onClick={() => setActiveTopic(null)}
+            type="button"
+          >
+            All
+          </button>
           {demoProfile.interests.map((interest) => (
-            <button className="topic-pill" key={interest}>
+            <button
+              aria-pressed={activeTopic === interest}
+              className={`topic-pill${activeTopic === interest ? " active" : ""}`}
+              key={interest}
+              onClick={() => setActiveTopic((current) => (current === interest ? null : interest))}
+              type="button"
+            >
               {interest}
             </button>
           ))}
@@ -979,8 +1001,12 @@ export function App() {
         />
 
         <section className="feed-list" aria-label="Knowledge cards">
-          {visibleCards.length === 0 && searchQuery.trim() ? (
-            <p className="feed-empty">No posts match “{searchQuery.trim()}”.</p>
+          {visibleCards.length === 0 && (searchQuery.trim() || activeTopic) ? (
+            <p className="feed-empty">
+              {searchQuery.trim()
+                ? `No posts match “${searchQuery.trim()}”.`
+                : `No posts in “${activeTopic}”.`}
+            </p>
           ) : (
             visibleCards.map((card) => (
               <KnowledgeCardView
