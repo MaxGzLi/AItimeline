@@ -2744,6 +2744,81 @@ section.agent-brief {
     0 0 0 4px var(--blue);
 }
 
+/* Keyboard-shortcuts help overlay (toggled by "?") — var-based + a translucent
+   keycap fill, so it adapts to dark with no override block. */
+.shortcuts-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 19, 24, 0.55);
+  backdrop-filter: blur(2px);
+}
+
+.shortcuts-modal {
+  width: 100%;
+  max-width: 380px;
+  padding: 18px 22px 22px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--panel);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
+}
+
+.shortcuts-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.shortcuts-head h2 {
+  margin: 0;
+  font-size: 18px;
+  color: var(--ink);
+}
+
+.shortcuts-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.shortcuts-list li {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 9px 2px;
+  border-top: 1px solid var(--border);
+}
+
+.shortcuts-list li:first-child {
+  border-top: 0;
+}
+
+.shortcuts-list kbd {
+  display: inline-grid;
+  place-items: center;
+  min-width: 32px;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(128, 128, 128, 0.12);
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.shortcuts-list span {
+  color: var(--muted);
+  font-size: 14px;
+}
+
 
 
 /* =====================================================================
