@@ -401,6 +401,7 @@ export function App() {
           break;
         case "Escape":
           setShortcutsOpen(false);
+          setSelectedCardId(null);
           setFocusedIndex(-1);
           break;
         default:
