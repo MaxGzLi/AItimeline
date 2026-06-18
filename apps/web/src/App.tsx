@@ -1004,7 +1004,12 @@ export function App() {
 
         <nav className="nav-list">
           {navItems.map((item) => (
-            <button className={`nav-item ${item.active ? "active" : ""}`} key={item.label}>
+            <button
+              aria-current={item.active ? "page" : undefined}
+              aria-label={item.label}
+              className={`nav-item ${item.active ? "active" : ""}`}
+              key={item.label}
+            >
               <item.icon size={20} strokeWidth={1.9} />
               <span>{item.label}</span>
             </button>
