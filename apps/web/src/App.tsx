@@ -1703,7 +1703,7 @@ function KnowledgeCardView({
           <div className="post-author-line">
             <strong>{getAgentName(primaryConcept)}</strong>
             <span>@{slugConcept(primaryConcept)}</span>
-            <span>{formatRelativeTime(card.createdAt)}</span>
+            <span title={formatFullTimestamp(card.createdAt)}>{formatRelativeTime(card.createdAt)}</span>
             <span>{card.estimatedReadMinutes}m read</span>
           </div>
           <div className="post-header-badges">
@@ -2395,6 +2395,15 @@ function formatRelativeTime(value: string): string {
     day: "numeric",
     ...(date.getFullYear() === new Date().getFullYear() ? {} : { year: "numeric" })
   }).format(date);
+}
+
+// Full timestamp for the post-age hover tooltip (relative time loses precision).
+function formatFullTimestamp(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  return new Intl.DateTimeFormat("en", { dateStyle: "full", timeStyle: "short" }).format(date);
 }
 
 function buildTimestampUrl(url: string | undefined, seconds: number): string {
