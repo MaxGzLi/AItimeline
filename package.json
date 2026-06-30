@@ -13,7 +13,9 @@
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "smoke:core": "npm run build -w @aitimeline/core && node scripts/smoke-core.mjs",
-    "smoke:api": "npm run build -w @aitimeline/core && node scripts/smoke-api.mjs"
+    "smoke:api": "npm run build -w @aitimeline/core && node scripts/smoke-api.mjs",
+    "smoke:model": "npm run build -w @aitimeline/core && node scripts/smoke-model.mjs",
+    "test": "npm run build -w @aitimeline/core && node scripts/smoke-core.mjs && node scripts/smoke-api.mjs && node scripts/smoke-model.mjs"
   },
   "devDependencies": {
     "typescript": "latest"

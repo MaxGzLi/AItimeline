@@ -45,6 +45,17 @@ try {
   assert.ok(evidenceResult.ledger.summary.totalClaims > 0, "evidence API should expose grounded claims");
   assert.ok(evidenceResult.ledger.claims[0].evidence.length > 0, "evidence API should resolve source chunks");
 
+  const askResult = await requestJson("/api/ask", {
+    method: "POST",
+    body: { postId: importResult.posts[0].id, question: "What is the main point of this source?" }
+  });
+
+  // No model env in the smoke run, so /api/ask uses the deterministic grounded answer.
+  assert.equal(askResult.runnerKind, "deterministic", "ask API should fall back to the deterministic answer without a model");
+  assert.ok(typeof askResult.answer === "string" && askResult.answer.length > 0, "ask API should return an answer");
+  assert.ok(askResult.citations.length > 0, "ask API should resolve grounded citations from the source registry");
+  assert.equal(askResult.grounded, true, "ask API answer should be grounded in source chunks");
+
   const firstTopic = firstPost.concepts[0] ?? "agentic-learning";
   const memoryResult = await requestJson("/api/memory", {
     method: "POST",

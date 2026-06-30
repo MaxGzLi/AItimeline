@@ -13,6 +13,7 @@ const { createFollowupGenerationProtocol, validateFollowupGenerationProtocol } =
 const { applyUserMemoryEdits, createEmptyUserMemory } = await import(
   "../packages/core/dist/memory/userMemoryControls.js"
 );
+const { buildCardConnections } = await import("../packages/core/dist/graph/cardConnections.js");
 const { createOpenAICompatibleModelClient, createOpenAICompatibleModelClientFromEnv } = await import(
   "../packages/core/dist/model/openaiCompatibleClient.js"
 );
@@ -35,6 +36,24 @@ assert.equal(result.harnessRun.status, "succeeded", "harness run should succeed"
 assert.equal(result.cards.length, 4, "mock import should produce four cards");
 assert.equal(result.sourceRegistry.snapshots.length, 1, "transcript asset should produce one source snapshot");
 assert.equal(result.sourceRegistry.chunks.length, 4, "mock transcript should produce four registered chunks");
+
+// Cross-card connections turn fragments into a web: a card links to OTHER cards that share its concepts/edges.
+const cardConnections = buildCardConnections(result.cards[0], result.cards);
+assert.ok(Array.isArray(cardConnections), "card connections should be an array");
+assert.ok(cardConnections.length >= 1, "shared concepts across the transcript should connect fragments to other cards");
+assert.ok(
+  cardConnections.every((connection) => connection.cardId !== result.cards[0].id),
+  "a card should never connect to itself"
+);
+assert.ok(
+  cardConnections.every((connection) => result.cards.some((card) => card.id === connection.cardId)),
+  "every connection should point at a real card"
+);
+assert.equal(
+  buildCardConnections(result.cards[0], [result.cards[0]]).length,
+  0,
+  "a card with no peers should have no connections"
+);
 
 const fakePlayerResponse = {
   videoDetails: {

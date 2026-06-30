@@ -1,4 +1,5 @@
 import {
+  buildCardConnections,
   buildKnowledgeGraph,
   createReviewQueue,
   demoCards,
@@ -8,6 +9,7 @@ import {
   rankKnowledgeCards,
   transformMockYouTubeUrl,
   type BackgroundSourceCandidate,
+  type CardConnection,
   type InteractionSignal,
   type KnowledgeCard,
   type KnowledgeChunk,
@@ -334,6 +336,15 @@ export function App() {
     });
   }, [displayedCards, searchQuery, activeTopic]);
   const allCards = useMemo(() => rankedCards, [rankedCards]);
+  const connectionsByCard = useMemo(() => {
+    const byCard: Record<string, CardConnection[]> = {};
+
+    for (const card of allCards) {
+      byCard[card.id] = buildCardConnections(card, allCards);
+    }
+
+    return byCard;
+  }, [allCards]);
 
   // Keyboard navigation (X-style): j/k move a focus highlight between cards,
   // Enter opens the focused card, "/" jumps to search, Escape clears.
@@ -919,39 +930,72 @@ export function App() {
     void runCuration("manual");
   }
 
-  function handleAskAi(event: FormEvent<HTMLFormElement>) {
+  async function handleAskAi(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     if (!selectedCard || !aiPrompt.trim()) {
       return;
     }
 
-    const now = new Date().toISOString();
+    const card = selectedCard;
+    const chunks = selectedChunks;
+    const question = aiPrompt.trim();
+    const askedAt = new Date().toISOString();
     const userMessage: AiMessage = {
-      id: `${selectedCard.id}-user-${now}`,
+      id: `${card.id}-user-${askedAt}`,
       role: "user",
-      content: aiPrompt.trim(),
-      createdAt: now
-    };
-    const assistantMessage: AiMessage = {
-      id: `${selectedCard.id}-assistant-${now}`,
-      role: "assistant",
-      content: buildGroundedAnswer(selectedCard, selectedChunks, aiPrompt.trim()),
-      createdAt: now
+      content: question,
+      createdAt: askedAt
     };
 
     setAiThreads((threads) => ({
       ...threads,
-      [selectedCard.id]: [...(threads[selectedCard.id] ?? []), userMessage, assistantMessage]
+      [card.id]: [...(threads[card.id] ?? []), userMessage]
     }));
-    recordInteraction(selectedCard, { askedQuestion: true, openedThread: true, dwellTimeMs: 12000 });
-    void syncMemoryForCard(selectedCard, "ask", aiPrompt.trim());
     setAiPrompt("");
+    recordInteraction(card, { askedQuestion: true, openedThread: true, dwellTimeMs: 12000 });
+    void syncMemoryForCard(card, "ask", question);
+
+    let answerContent: string;
+
+    try {
+      const result = await apiRequest<AskApiResult>("/api/ask", {
+        method: "POST",
+        body: { postId: card.id, question }
+      });
+      answerContent = formatAskAnswer(result);
+    } catch {
+      // API unavailable or model not configured: keep the offline grounded answer.
+      answerContent = buildGroundedAnswer(card, chunks, question);
+    }
+
+    const answeredAt = new Date().toISOString();
+    const assistantMessage: AiMessage = {
+      id: `${card.id}-assistant-${answeredAt}`,
+      role: "assistant",
+      content: answerContent,
+      createdAt: answeredAt
+    };
+
+    setAiThreads((threads) => ({
+      ...threads,
+      [card.id]: [...(threads[card.id] ?? []), assistantMessage]
+    }));
   }
 
   function handleOpenCard(card: RankedKnowledgeCard) {
     setSelectedCardId(card.id);
     recordInteraction(card, { openedThread: true, dwellTimeMs: 9000, skippedQuickly: false });
+  }
+
+  function handleOpenCardId(cardId: string) {
+    const target = rankedCards.find((card) => card.id === cardId);
+
+    if (target) {
+      handleOpenCard(target);
+    } else {
+      setSelectedCardId(cardId);
+    }
   }
 
   function handleLike(card: RankedKnowledgeCard) {
@@ -1154,12 +1198,14 @@ export function App() {
             visibleCards.map((card, index) => (
               <KnowledgeCardView
                 card={card}
+                connections={connectionsByCard[card.id] ?? []}
                 feedback={learningFeedback[card.id]}
                 isFocused={index === focusedIndex}
                 key={card.id}
                 onDwell={handleDwell}
                 onLike={handleLike}
                 onOpen={handleOpenCard}
+                onOpenCardId={handleOpenCardId}
                 onSave={handleSave}
                 onSkip={handleSkip}
                 signal={interactionSignals[card.id]}
@@ -1313,11 +1359,13 @@ export function App() {
           asset={selectedAsset}
           card={selectedCard}
           chunks={selectedChunks}
+          connections={connectionsByCard[selectedCard.id] ?? []}
           evidenceLedger={selectedEvidenceLedger}
           feedback={selectedFeedback}
           messages={selectedThread}
           onAsk={handleAskAi}
           onClose={() => setSelectedCardId(null)}
+          onOpenCardId={handleOpenCardId}
           onPromptChange={setAiPrompt}
           prompt={aiPrompt}
           signal={selectedSignal}
@@ -1615,21 +1663,25 @@ function StatusIcon({ status }: { status: TransformationStatus }) {
 
 function KnowledgeCardView({
   card,
+  connections,
   feedback,
   isFocused,
   onDwell,
   onLike,
   onOpen,
+  onOpenCardId,
   onSave,
   onSkip,
   signal
 }: {
   card: RankedKnowledgeCard;
+  connections: CardConnection[];
   feedback?: LearningFeedback;
   isFocused?: boolean;
   onDwell: (card: RankedKnowledgeCard, dwellTimeMs: number) => void;
   onLike: (card: RankedKnowledgeCard) => void;
   onOpen: (card: RankedKnowledgeCard) => void;
+  onOpenCardId: (cardId: string) => void;
   onSave: (card: RankedKnowledgeCard) => void;
   onSkip: (card: RankedKnowledgeCard) => void;
   signal?: InteractionSignal;
@@ -1645,7 +1697,7 @@ function KnowledgeCardView({
   const canExpandThread = fullThread.length > threadPreview.length;
   const readBlock = getReadBlock(card);
   const learnPrompts = card.reviewPrompts?.slice(0, 2) ?? [];
-  const exploreEdges = card.graphEdges?.slice(0, 2) ?? [];
+  const topConnection = connections[0];
   const primaryConcept = card.concepts[0] ?? "Knowledge";
   const source = card.sources[0];
 
@@ -1783,7 +1835,7 @@ function KnowledgeCardView({
           )}
         </div>
 
-        {learnPrompts.length > 0 || exploreEdges.length > 0 ? (
+        {learnPrompts.length > 0 || topConnection ? (
           <div className="feed-prompt-row">
             {learnPrompts[0] ? (
               <button className="feed-prompt" onClick={() => onSave(card)} type="button">
@@ -1792,13 +1844,16 @@ function KnowledgeCardView({
                 <strong>{learnPrompts[0].prompt}</strong>
               </button>
             ) : null}
-            {exploreEdges[0] ? (
-              <button className="feed-prompt" onClick={() => onOpen(card)} type="button">
+            {topConnection ? (
+              <button
+                className="feed-prompt"
+                onClick={() => onOpenCardId(topConnection.cardId)}
+                title={`${formatConnectionKind(topConnection.kind)} · via ${topConnection.concept}`}
+                type="button"
+              >
                 <Route size={16} />
-                <span>Related</span>
-                <strong>
-                  {exploreEdges[0].sourceConcept} → {exploreEdges[0].targetConcept}
-                </strong>
+                <span>{formatConnectionKind(topConnection.kind)}</span>
+                <strong>{topConnection.title}</strong>
               </button>
             ) : null}
           </div>
@@ -1875,11 +1930,13 @@ function SourceDetailDrawer({
   asset,
   card,
   chunks,
+  connections,
   evidenceLedger,
   feedback,
   messages,
   onAsk,
   onClose,
+  onOpenCardId,
   onPromptChange,
   prompt,
   signal
@@ -1887,11 +1944,13 @@ function SourceDetailDrawer({
   asset?: SourceAsset;
   card: RankedKnowledgeCard;
   chunks: KnowledgeChunk[];
+  connections: CardConnection[];
   evidenceLedger?: EvidenceLedger | null;
   feedback?: LearningFeedback;
   messages: AiMessage[];
   onAsk: (event: FormEvent<HTMLFormElement>) => void;
   onClose: () => void;
+  onOpenCardId: (cardId: string) => void;
   onPromptChange: (value: string) => void;
   prompt: string;
   signal?: InteractionSignal;
@@ -2064,6 +2123,31 @@ function SourceDetailDrawer({
           </div>
         ) : null}
       </section>
+
+      {connections.length > 0 ? (
+        <section className="drawer-section">
+          <div className="drawer-section-heading">
+            <GitBranch size={18} />
+            <h3>Connections</h3>
+          </div>
+          <p className="muted-copy">How this fragment connects to cards you have collected.</p>
+          <div className="connection-list">
+            {connections.map((connection) => (
+              <button
+                className="connection-row"
+                key={`${connection.kind}-${connection.cardId}`}
+                onClick={() => onOpenCardId(connection.cardId)}
+                title={`Open “${connection.title}”`}
+                type="button"
+              >
+                <span className={`connection-kind ${connection.kind}`}>{formatConnectionKind(connection.kind)}</span>
+                <strong>{connection.title}</strong>
+                <small>via {connection.concept}</small>
+              </button>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       <section className="drawer-section">
         <div className="drawer-section-heading">
@@ -2328,6 +2412,17 @@ function formatDifficulty(value: NonNullable<KnowledgeCard["difficulty"]>): stri
   return labels[value];
 }
 
+function formatConnectionKind(kind: CardConnection["kind"]): string {
+  const labels: Record<CardConnection["kind"], string> = {
+    builds_on: "Builds on",
+    leads_to: "Leads to",
+    contrast: "Contrast",
+    related: "Related"
+  };
+
+  return labels[kind];
+}
+
 function formatConfidence(value: NonNullable<KnowledgeCard["confidence"]>): string {
   const labels: Record<NonNullable<KnowledgeCard["confidence"]>, string> = {
     low: "Low confidence",
@@ -2477,6 +2572,41 @@ function formatTimestamp(seconds: number): string {
     .padStart(2, "0");
 
   return `${minutes}:${remainingSeconds}`;
+}
+
+type AskCitation = {
+  sourceId: string;
+  sourceTitle: string;
+  chunkId: string;
+  quote: string;
+  startTimeSeconds?: number;
+  endTimeSeconds?: number;
+};
+
+type AskApiResult = {
+  answer: string;
+  citations: AskCitation[];
+  grounded: boolean;
+  runnerKind: string;
+};
+
+function formatAskAnswer(result: AskApiResult): string {
+  if (!result.citations?.length) {
+    return result.answer;
+  }
+
+  const sources = Array.from(
+    new Map(
+      result.citations.map((citation) => [
+        citation.chunkId,
+        `· ${citation.sourceTitle}${
+          citation.startTimeSeconds !== undefined ? ` (${formatTimestamp(citation.startTimeSeconds)})` : ""
+        }`
+      ])
+    ).values()
+  ).join("\n");
+
+  return `${result.answer}\n\nSources:\n${sources}`;
 }
 
 function buildGroundedAnswer(card: KnowledgeCard, chunks: KnowledgeChunk[], prompt: string): string {

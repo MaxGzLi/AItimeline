@@ -4,9 +4,12 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   applyUserMemoryEdits,
+  askGrounded,
   createAITimelinePersistenceStore,
   createBackgroundCurationPlan,
   createEmptyUserMemory,
+  createOpenAICompatibleModelClientFromEnv,
+  createOpenAICompatibleSourceImportWorker,
   createPersistentBackgroundCurationJobStore,
   createSourceImportWorker,
   createSourcePostReleasePlan,
@@ -33,7 +36,9 @@ export function createApiServer(options = {}) {
   const enableFixtures = options.enableFixtures ?? process.env.AITIMELINE_ENABLE_FIXTURES === "1";
   const persistenceStore = createAITimelinePersistenceStore(createFileStorageAdapter(dataPath));
   const curationStore = createPersistentBackgroundCurationJobStore(createFileStorageAdapter(curationDataPath));
-  const sourceImportWorker = createSourceImportWorker();
+  const sourceImportWorker = createConfiguredSourceImportWorker(process.env);
+  const importRunner = sourceImportWorker.runner;
+  const askModelClient = createConfiguredAskModelClient(process.env);
 
   return createServer(async (request, response) => {
     response.setHeader("Access-Control-Allow-Origin", "*");
@@ -152,7 +157,7 @@ export function createApiServer(options = {}) {
 
       if (request.method === "POST" && url.pathname === "/api/import/article") {
         const body = await readJsonBody(request);
-        const importResult = await importArticle(body);
+        const importResult = await importArticle(body, importRunner);
         const { snapshot, releasePlan } = persistImportAndReleasePlan(persistenceStore, importResult);
 
         sendJson(response, 200, {
@@ -165,7 +170,7 @@ export function createApiServer(options = {}) {
 
       if (request.method === "POST" && url.pathname === "/api/import/youtube") {
         const body = await readJsonBody(request);
-        const importResult = await importYouTube(body);
+        const importResult = await importYouTube(body, importRunner);
         const { snapshot, releasePlan } = persistImportAndReleasePlan(persistenceStore, importResult);
 
         sendJson(response, 200, {
@@ -173,6 +178,14 @@ export function createApiServer(options = {}) {
           releasePlan,
           snapshotSummary: summarizeSnapshot(snapshot)
         });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/ask") {
+        const body = await readJsonBody(request);
+        const answer = await handleAsk(body, persistenceStore, askModelClient);
+
+        sendJson(response, 200, answer);
         return;
       }
 
@@ -318,21 +331,62 @@ export function createApiServer(options = {}) {
   });
 }
 
-async function importArticle(body) {
+function createConfiguredSourceImportWorker(env) {
+  const modelName = env.AITIMELINE_MODEL_NAME ?? env.OPENAI_MODEL;
+
+  if (!modelName) {
+    return createSourceImportWorker();
+  }
+
+  const worker = createOpenAICompatibleSourceImportWorker(env);
+  console.log(`[aitimeline] source import using model runner (${modelName}).`);
+
+  return worker;
+}
+
+function createConfiguredAskModelClient(env) {
+  const modelName = env.AITIMELINE_MODEL_NAME ?? env.OPENAI_MODEL;
+
+  return modelName ? createOpenAICompatibleModelClientFromEnv(env) : undefined;
+}
+
+async function handleAsk(body, persistenceStore, client) {
+  requireString(body.postId, "postId");
+  requireString(body.question, "question");
+
+  const snapshot = persistenceStore.getSnapshot();
+  const post = snapshot.posts.find((candidate) => candidate.id === body.postId);
+
+  if (!post) {
+    throw new Error(`No post found for id ${body.postId}.`);
+  }
+
+  const sourceIds = new Set(post.sources.map((source) => source.id));
+  const registries = snapshot.sourceRegistries
+    .filter((record) => sourceIds.has(record.sourceId))
+    .map((record) => record.registry);
+  const registry = mergeSourceRegistries(...registries);
+
+  return askGrounded({ post, registry, question: body.question }, { client });
+}
+
+async function importArticle(body, runner) {
   requireString(body.url, "url");
   const result = await transformArticleUrl(body.url, {
     createdAt: body.createdAt,
-    recommendedBecause: body.recommendedBecause
+    recommendedBecause: body.recommendedBecause,
+    runner
   });
 
   return toSourceImportWorkerResult(result);
 }
 
-async function importYouTube(body) {
+async function importYouTube(body, runner) {
   requireString(body.url, "url");
   const result = await transformYouTubeUrl(body.url, {
     createdAt: body.createdAt,
-    recommendedBecause: body.recommendedBecause
+    recommendedBecause: body.recommendedBecause,
+    runner
   });
 
   return toSourceImportWorkerResult(result);

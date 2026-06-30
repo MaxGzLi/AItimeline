@@ -5,6 +5,7 @@ import type {
   HarnessValidationResult,
   KnowledgeChunk,
   KnowledgePost,
+  KnowledgePostAgentRunner,
   Source,
   SourceAsset,
   SourceImport,
@@ -20,6 +21,7 @@ export interface ArticleFetchOptions {
 
 export interface ArticleTransformOptions extends ArticleFetchOptions {
   recommendedBecause?: string;
+  runner?: KnowledgePostAgentRunner;
 }
 
 export interface ArticleFetchResult {
@@ -103,16 +105,19 @@ export async function transformArticleUrl(
     chunks,
     createdAt
   });
-  const importResult = await runSourceImport({
-    source: fetched.source,
-    assets: [fetched.asset],
-    chunks,
-    sourceRegistry,
-    createdAt,
-    recommendedBecause:
-      options.recommendedBecause ??
-      "You imported this article, so the agent converted its paragraphs into timeline-ready knowledge."
-  });
+  const importResult = await runSourceImport(
+    {
+      source: fetched.source,
+      assets: [fetched.asset],
+      chunks,
+      sourceRegistry,
+      createdAt,
+      recommendedBecause:
+        options.recommendedBecause ??
+        "You imported this article, so the agent converted its paragraphs into timeline-ready knowledge."
+    },
+    options.runner
+  );
 
   return {
     source: fetched.source,

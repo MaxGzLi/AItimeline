@@ -20,13 +20,13 @@ Output contract:
 - shortBody: the timeline body
 - keyTakeaway: one sentence worth remembering
 - concepts: stable concept names
-- graphEdges: concept relationships with evidence
-- thread: explain / example / contrast / extension / quiz blocks
-- reviewPrompts: recall / compare / apply / explain prompts
+- graphEdges: concept relationships, each relation is exactly one of requires / extends / contrasts / applies / evaluates / summarizes, with evidence and a weight between 0 and 1
+- thread: blocks whose kind is exactly one of explain / example / contrast / extension / quiz
+- reviewPrompts: prompts whose kind is exactly one of recall / compare / apply / explain
 - recommendedBecause: why this appears for this user
 - confidence: low / medium / high
 - difficulty: beginner / intermediate / advanced
-- nextActions: recommended follow-up policies
+- nextActions: each exactly one of continue_deeper / expand_broader / reframe_simpler / cooldown_topic / schedule_review / ask_clarifying_question
 
 Avoid:
 - generic summaries

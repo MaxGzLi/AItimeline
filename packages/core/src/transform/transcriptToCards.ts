@@ -31,14 +31,8 @@ export interface TranscriptTransformOptions {
   asset?: SourceAsset;
 }
 
-export function transformTranscriptToCards(
-  source: Source,
-  segments: TranscriptSegment[],
-  options: TranscriptTransformOptions = {}
-): TranscriptTransformResult {
-  const createdAt = options.createdAt ?? new Date().toISOString();
-
-  const chunks = segments.map((segment, index) => ({
+export function buildTranscriptChunks(source: Source, segments: TranscriptSegment[]): KnowledgeChunk[] {
+  return segments.map((segment, index) => ({
     id: `${source.id}-chunk-${index + 1}`,
     sourceId: source.id,
     content: segment.text,
@@ -46,6 +40,16 @@ export function transformTranscriptToCards(
     endTimeSeconds: segment.endTimeSeconds,
     conceptHints: extractConcepts(segment.text)
   }));
+}
+
+export function transformTranscriptToCards(
+  source: Source,
+  segments: TranscriptSegment[],
+  options: TranscriptTransformOptions = {}
+): TranscriptTransformResult {
+  const createdAt = options.createdAt ?? new Date().toISOString();
+
+  const chunks = buildTranscriptChunks(source, segments);
 
   const sourceRegistry = createSourceRegistry({
     sources: [source],

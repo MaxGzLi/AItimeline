@@ -1,6 +1,14 @@
-import type { Source, SourceAsset, SourceImport } from "../types.js";
+import type {
+  AgentHarnessRun,
+  KnowledgePostAgentRunner,
+  Source,
+  SourceAsset,
+  SourceImport
+} from "../types.js";
+import { runSourceImport } from "../source/sourceImportWorker.js";
+import { createSourceRegistry } from "../source/sourceRegistry.js";
 import {
-  transformTranscriptToCards,
+  buildTranscriptChunks,
   type TranscriptSegment,
   type TranscriptTransformResult
 } from "./transcriptToCards.js";
@@ -29,9 +37,11 @@ export interface YouTubeTranscriptFetchResult {
 
 export interface YouTubeTransformOptions extends YouTubeTranscriptFetchOptions {
   recommendedBecause?: string;
+  runner?: KnowledgePostAgentRunner;
 }
 
-export interface YouTubeTransformResult extends TranscriptTransformResult {
+export interface YouTubeTransformResult extends Omit<TranscriptTransformResult, "harnessRun"> {
+  harnessRun?: AgentHarnessRun;
   asset: SourceAsset;
   importRecord: SourceImport;
   track: YouTubeTranscriptTrack;
@@ -130,24 +140,38 @@ export async function transformYouTubeUrl(
   options: YouTubeTransformOptions = {}
 ): Promise<YouTubeTransformResult> {
   const fetched = await fetchYouTubeTranscript(url, options);
-  const transformed = transformTranscriptToCards(fetched.source, fetched.segments, {
-    asset: fetched.asset,
-    createdAt: options.createdAt,
-    recommendedBecause:
-      options.recommendedBecause ??
-      "You imported this YouTube video, so the agent converted transcript ideas into timeline cards."
+  const createdAt = options.createdAt ?? fetched.asset.createdAt;
+  const chunks = buildTranscriptChunks(fetched.source, fetched.segments);
+  const sourceRegistry = createSourceRegistry({
+    sources: [fetched.source],
+    assets: [fetched.asset],
+    chunks,
+    createdAt
   });
+  const importResult = await runSourceImport(
+    {
+      source: fetched.source,
+      assets: [fetched.asset],
+      chunks,
+      sourceRegistry,
+      createdAt,
+      recommendedBecause:
+        options.recommendedBecause ??
+        "You imported this YouTube video, so the agent converted transcript ideas into timeline cards."
+    },
+    options.runner
+  );
 
   return {
-    ...transformed,
+    source: fetched.source,
+    chunks,
+    cards: importResult.posts,
+    sourceRegistry: importResult.sourceRegistry,
+    harnessRun: importResult.harnessRun,
+    validation: importResult.validation,
     asset: fetched.asset,
     track: fetched.track,
-    importRecord: {
-      id: `${fetched.source.id}-import`,
-      source: fetched.source,
-      status: "ready",
-      createdAt: options.createdAt ?? fetched.asset.createdAt
-    }
+    importRecord: importResult.importRecord
   };
 }
 

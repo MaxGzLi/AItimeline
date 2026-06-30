@@ -79,16 +79,80 @@ export const knowledgePostJsonSchema = {
     summary: { type: "string" },
     keyTakeaway: { type: "string", maxLength: 220 },
     concepts: { type: "array", items: { type: "string" }, minItems: 1 },
-    sources: { type: "array", minItems: 1 },
-    citations: { type: "array" },
+    sources: {
+      type: "array",
+      minItems: 1,
+      items: {
+        type: "object",
+        required: ["id", "title", "url", "type"],
+        properties: {
+          id: { type: "string" },
+          title: { type: "string" },
+          url: { type: "string" },
+          type: { enum: sourceTypes }
+        }
+      }
+    },
+    citations: {
+      type: "array",
+      minItems: 1,
+      items: {
+        type: "object",
+        required: ["sourceId"],
+        properties: {
+          sourceId: { type: "string" },
+          chunkId: { type: "string" }
+        }
+      }
+    },
     recommendedBecause: { type: "string" },
     trustState: { enum: trustStates },
     estimatedReadMinutes: { type: "number", minimum: 1 },
     difficulty: { enum: difficulties },
     confidence: { enum: confidences },
-    thread: { type: "array", minItems: 1 },
-    graphEdges: { type: "array" },
-    reviewPrompts: { type: "array" },
+    thread: {
+      type: "array",
+      minItems: 1,
+      items: {
+        type: "object",
+        required: ["id", "kind", "title", "body"],
+        properties: {
+          id: { type: "string" },
+          kind: { enum: threadKinds },
+          title: { type: "string" },
+          body: { type: "string" }
+        }
+      }
+    },
+    graphEdges: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["id", "sourceConcept", "relation", "targetConcept", "evidence", "weight"],
+        properties: {
+          id: { type: "string" },
+          sourceConcept: { type: "string" },
+          relation: { enum: edgeRelations },
+          targetConcept: { type: "string" },
+          evidence: { type: "string" },
+          weight: { type: "number", minimum: 0, maximum: 1 }
+        }
+      }
+    },
+    reviewPrompts: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["id", "kind", "prompt", "answerHint", "dueInDays"],
+        properties: {
+          id: { type: "string" },
+          kind: { enum: reviewPromptKinds },
+          prompt: { type: "string" },
+          answerHint: { type: "string" },
+          dueInDays: { type: "number", minimum: 1 }
+        }
+      }
+    },
     nextActions: { type: "array", items: { enum: nextActionPolicies }, minItems: 1 },
     harnessVersion: { type: "string" }
   }
