@@ -1,5 +1,6 @@
 import {
   buildCardConnections,
+  buildConceptDigest,
   buildKnowledgeGraph,
   createReviewQueue,
   demoCards,
@@ -10,6 +11,7 @@ import {
   transformMockYouTubeUrl,
   type BackgroundSourceCandidate,
   type CardConnection,
+  type ConceptDigest,
   type InteractionSignal,
   type KnowledgeCard,
   type KnowledgeChunk,
@@ -39,6 +41,7 @@ import {
   GitBranch,
   Heart,
   Home,
+  Layers,
   Link,
   ListChecks,
   LoaderCircle,
@@ -220,6 +223,7 @@ export function App() {
   const [memoryMessage, setMemoryMessage] = useState("No memory edits yet");
   const [candidateMessage, setCandidateMessage] = useState("No queued source candidates yet");
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
+  const [conceptView, setConceptView] = useState<string | null>(null);
   const [feedTab, setFeedTab] = useState<"foryou" | "latest">("foryou");
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -345,6 +349,10 @@ export function App() {
 
     return byCard;
   }, [allCards]);
+  const conceptDigest = useMemo<ConceptDigest | null>(
+    () => (conceptView ? buildConceptDigest(conceptView, allCards) : null),
+    [conceptView, allCards]
+  );
 
   // Keyboard navigation (X-style): j/k move a focus highlight between cards,
   // Enter opens the focused card, "/" jumps to search, Escape clears.
@@ -413,6 +421,7 @@ export function App() {
         case "Escape":
           setShortcutsOpen(false);
           setSelectedCardId(null);
+          setConceptView(null);
           setFocusedIndex(-1);
           break;
         default:
@@ -998,6 +1007,15 @@ export function App() {
     }
   }
 
+  function handleOpenConcept(concept: string) {
+    setConceptView(concept);
+  }
+
+  function handleOpenCardFromConcept(cardId: string) {
+    setConceptView(null);
+    handleOpenCardId(cardId);
+  }
+
   function handleLike(card: RankedKnowledgeCard) {
     recordInteraction(card, { liked: true, skippedQuickly: false });
     void syncMemoryForCard(card, "like");
@@ -1206,6 +1224,7 @@ export function App() {
                 onLike={handleLike}
                 onOpen={handleOpenCard}
                 onOpenCardId={handleOpenCardId}
+                onOpenConcept={handleOpenConcept}
                 onSave={handleSave}
                 onSkip={handleSkip}
                 signal={interactionSignals[card.id]}
@@ -1278,11 +1297,8 @@ export function App() {
               <button
                 className="graph-row"
                 key={node.id}
-                onClick={() => {
-                  setSearchOpen(true);
-                  setSearchQuery(node.label);
-                }}
-                title={`Search “${node.label}”`}
+                onClick={() => handleOpenConcept(node.label)}
+                title={`Read everything on “${node.label}”`}
                 type="button"
               >
                 <span>{node.label}</span>
@@ -1369,6 +1385,14 @@ export function App() {
           onPromptChange={setAiPrompt}
           prompt={aiPrompt}
           signal={selectedSignal}
+        />
+      ) : null}
+
+      {conceptDigest && conceptDigest.cardCount > 0 ? (
+        <ConceptDigestPanel
+          digest={conceptDigest}
+          onClose={() => setConceptView(null)}
+          onOpenCardId={handleOpenCardFromConcept}
         />
       ) : null}
 
@@ -1670,6 +1694,7 @@ function KnowledgeCardView({
   onLike,
   onOpen,
   onOpenCardId,
+  onOpenConcept,
   onSave,
   onSkip,
   signal
@@ -1682,6 +1707,7 @@ function KnowledgeCardView({
   onLike: (card: RankedKnowledgeCard) => void;
   onOpen: (card: RankedKnowledgeCard) => void;
   onOpenCardId: (cardId: string) => void;
+  onOpenConcept: (concept: string) => void;
   onSave: (card: RankedKnowledgeCard) => void;
   onSkip: (card: RankedKnowledgeCard) => void;
   signal?: InteractionSignal;
@@ -1882,7 +1908,15 @@ function KnowledgeCardView({
 
         <div className="concept-list">
           {card.concepts.slice(0, 3).map((concept) => (
-            <span key={concept}>{concept}</span>
+            <button
+              className="concept-chip"
+              key={concept}
+              onClick={() => onOpenConcept(concept)}
+              title={`Read everything on “${concept}”`}
+              type="button"
+            >
+              {concept}
+            </button>
           ))}
           {card.concepts.length > 3 ? <span>+{card.concepts.length - 3}</span> : null}
         </div>
@@ -2421,6 +2455,75 @@ function formatConnectionKind(kind: CardConnection["kind"]): string {
   };
 
   return labels[kind];
+}
+
+type ConceptDigestRole = ConceptDigest["entries"][number]["role"];
+
+function formatConceptRole(role: ConceptDigestRole): string {
+  const labels: Record<ConceptDigestRole, string> = {
+    foundation: "Foundation",
+    builds: "Builds",
+    applies: "Applies",
+    contrast: "Contrast"
+  };
+
+  return labels[role];
+}
+
+function ConceptDigestPanel({
+  digest,
+  onClose,
+  onOpenCardId
+}: {
+  digest: ConceptDigest;
+  onClose: () => void;
+  onOpenCardId: (cardId: string) => void;
+}) {
+  return (
+    <div
+      aria-label={`Everything on ${digest.concept}`}
+      aria-modal="true"
+      className="concept-overlay"
+      onClick={onClose}
+      role="dialog"
+    >
+      <div className="concept-modal" onClick={(event) => event.stopPropagation()}>
+        <div className="concept-head">
+          <div>
+            <p className="section-label concept-eyebrow">
+              <Layers size={14} aria-hidden="true" /> Concept
+            </p>
+            <h2>{digest.concept}</h2>
+            <p className="concept-sub">
+              {digest.cardCount} {digest.cardCount === 1 ? "fragment" : "fragments"} read as one thread
+            </p>
+          </div>
+          <button
+            aria-label="Close concept view"
+            className="icon-button compact"
+            onClick={onClose}
+            type="button"
+          >
+            <XCircle size={18} />
+          </button>
+        </div>
+
+        <ol className="concept-entry-list">
+          {digest.entries.map((entry) => (
+            <li key={entry.cardId}>
+              <button className="concept-entry" onClick={() => onOpenCardId(entry.cardId)} type="button">
+                <span className={`concept-role concept-role-${entry.role}`}>{formatConceptRole(entry.role)}</span>
+                <span className="concept-entry-body">
+                  <strong>{entry.title}</strong>
+                  <span className="concept-entry-takeaway">{entry.keyTakeaway}</span>
+                </span>
+              </button>
+            </li>
+          ))}
+        </ol>
+      </div>
+    </div>
+  );
 }
 
 function formatConfidence(value: NonNullable<KnowledgeCard["confidence"]>): string {

@@ -14,6 +14,7 @@ const { applyUserMemoryEdits, createEmptyUserMemory } = await import(
   "../packages/core/dist/memory/userMemoryControls.js"
 );
 const { buildCardConnections } = await import("../packages/core/dist/graph/cardConnections.js");
+const { buildConceptDigest } = await import("../packages/core/dist/graph/conceptDigest.js");
 const { createOpenAICompatibleModelClient, createOpenAICompatibleModelClientFromEnv } = await import(
   "../packages/core/dist/model/openaiCompatibleClient.js"
 );
@@ -53,6 +54,35 @@ assert.equal(
   buildCardConnections(result.cards[0], [result.cards[0]]).length,
   0,
   "a card with no peers should have no connections"
+);
+
+// A concept digest assembles every fragment touching one concept into one ordered, readable whole.
+const digestConcept = result.cards[0].concepts[0];
+const conceptDigest = buildConceptDigest(digestConcept, result.cards);
+assert.ok(conceptDigest.cardCount >= 1, "the concept's own card should appear in its digest");
+assert.equal(conceptDigest.entries.length, conceptDigest.cardCount, "cardCount should match the entry list length");
+assert.ok(
+  conceptDigest.entries.some((entry) => entry.cardId === result.cards[0].id),
+  "the digest should include the card the concept was read from"
+);
+assert.ok(
+  conceptDigest.entries.every((entry) => result.cards.some((card) => card.id === entry.cardId)),
+  "every digest entry should point at a real card"
+);
+const digestRoles = ["foundation", "builds", "applies", "contrast"];
+assert.ok(
+  conceptDigest.entries.every((entry) => digestRoles.includes(entry.role) && entry.keyTakeaway.length > 0),
+  "every entry should carry a valid role and a non-empty takeaway"
+);
+const roleRank = Object.fromEntries(digestRoles.map((role, index) => [role, index]));
+const orderedByRole = conceptDigest.entries.every(
+  (entry, index) => index === 0 || roleRank[conceptDigest.entries[index - 1].role] <= roleRank[entry.role]
+);
+assert.ok(orderedByRole, "digest entries should read foundations -> builds -> applies -> contrasts");
+assert.equal(
+  buildConceptDigest("a-concept-no-card-mentions", result.cards).cardCount,
+  0,
+  "an unknown concept should produce an empty digest"
 );
 
 const fakePlayerResponse = {

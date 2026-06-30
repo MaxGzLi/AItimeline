@@ -3,6 +3,7 @@ export * from "./agents/backgroundCuration.js";
 export * from "./agents/backgroundCurationQueue.js";
 export * from "./fixtures.js";
 export * from "./graph/cardConnections.js";
+export * from "./graph/conceptDigest.js";
 export * from "./graph/knowledgeGraph.js";
 export * from "./harness/askGrounded.js";
 export * from "./harness/expansionPolicy.js";
