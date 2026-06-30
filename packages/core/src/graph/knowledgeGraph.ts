@@ -38,6 +38,7 @@ export function buildKnowledgeGraph(cards: KnowledgeCard[], signals: UserSignal[
 }
 
 function slugConcept(concept: string): string {
-  return concept.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+  // Keep Unicode letters/digits so non-ASCII concepts (e.g. Chinese) slug to a distinct key.
+  return concept.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/(^-|-$)/g, "");
 }
 

@@ -309,7 +309,9 @@ function getTopicId(card: KnowledgeCard): string {
 }
 
 function slugConcept(concept: string): string {
-  return concept.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "general";
+  // Keep Unicode letters/digits so non-ASCII concepts (e.g. Chinese) still slug to a
+  // distinct, non-empty key instead of collapsing to "" and matching each other.
+  return concept.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/(^-|-$)/g, "") || "general";
 }
 
 function dedupe(items: string[]): string[] {
