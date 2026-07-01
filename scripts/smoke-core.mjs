@@ -85,6 +85,33 @@ assert.equal(
   "an unknown concept should produce an empty digest"
 );
 
+// Non-ASCII (Chinese) concepts must slug to distinct, non-empty keys instead of collapsing to "".
+const zhCards = [
+  {
+    id: "zh-1",
+    title: "记忆基础",
+    summary: "智能体如何记住上下文。",
+    keyTakeaway: "智能体需要持久记忆才能跨轮次工作。",
+    concepts: ["记忆", "AI 智能体"],
+    createdAt: "2026-01-01T00:00:00.000Z",
+    difficulty: "beginner"
+  },
+  {
+    id: "zh-2",
+    title: "评估方法",
+    summary: "如何衡量智能体质量。",
+    keyTakeaway: "没有评估就无法迭代。",
+    concepts: ["评估"],
+    createdAt: "2026-01-02T00:00:00.000Z"
+  }
+];
+const zhMemory = buildConceptDigest("记忆", zhCards);
+assert.equal(zhMemory.cardCount, 1, "a Chinese concept should match only its own card, not collapse to every card");
+assert.equal(zhMemory.entries[0].cardId, "zh-1", "the Chinese digest should resolve to the matching card");
+const zhEval = buildConceptDigest("评估", zhCards);
+assert.equal(zhEval.cardCount, 1, "a different Chinese concept should slug to a different, non-empty key");
+assert.equal(zhEval.entries[0].cardId, "zh-2", "distinct Chinese concepts must not bleed into each other");
+
 const fakePlayerResponse = {
   videoDetails: {
     title: "Real transcript smoke video",

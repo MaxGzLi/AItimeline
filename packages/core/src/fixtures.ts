@@ -3,35 +3,35 @@ import { evaluateInteraction } from "./harness/feedbackPolicy.js";
 import type { InteractionSignal, KnowledgeCard, TopicState, UserProfile, UserSignal } from "./types.js";
 
 export const demoProfile: UserProfile = {
-  interests: ["AI Agent", "RAG", "Product Strategy"],
-  knownConcepts: ["LLM", "Prompting", "Vector Search"],
-  savedConcepts: ["AI Agent", "Knowledge Graph"],
-  weakConcepts: ["Evaluation", "RAG"]
+  interests: ["智能体", "RAG", "产品策略"],
+  knownConcepts: ["LLM", "提示工程", "向量检索"],
+  savedConcepts: ["智能体", "知识图谱"],
+  weakConcepts: ["评估", "RAG"]
 };
 
 export const demoCards: KnowledgeCard[] = [
   {
     id: "agent-memory-layers",
-    title: "Agent memory works better when split into task, user, and world layers",
-    hook: "Most agent memory failures are not caused by forgetting. They are caused by mixing the wrong memories together.",
+    title: "智能体的记忆拆成任务、用户、世界三层之后,效果更好",
+    hook: "大多数智能体的记忆问题,不是因为忘了,而是因为把不该放一起的记忆混在了一起。",
     thesis:
-      "A durable agent should separate task memory, user memory, and world memory so retrieval can stay precise instead of dumping stale context into every run.",
+      "一个耐用的智能体应该把任务记忆、用户记忆和世界记忆分开,这样检索才能保持精准,而不是每次运行都把过时的上下文一股脑塞进去。",
     shortBody:
-      "A durable agent should not store every interaction in one memory bucket. Separating task memory, user preferences, and external world facts makes retrieval cleaner and reduces stale context.",
+      "耐用的智能体不该把所有交互都堆进同一个记忆桶里。把任务记忆、用户偏好和外部世界事实分开,检索会更干净,也能减少过时的上下文。",
     summary:
-      "A durable agent should not store every interaction in one memory bucket. Separating task memory, user preferences, and external world facts makes retrieval cleaner and reduces stale context.",
-    keyTakeaway: "Memory quality is more important than memory volume.",
-    concepts: ["AI Agent", "Memory", "Evaluation"],
+      "耐用的智能体不该把所有交互都堆进同一个记忆桶里。把任务记忆、用户偏好和外部世界事实分开,检索会更干净,也能减少过时的上下文。",
+    keyTakeaway: "记忆的质量比记忆的数量更重要。",
+    concepts: ["智能体", "记忆", "评估"],
     sources: [
       {
         id: "source-agent-memory",
-        title: "Agent memory architecture notes",
+        title: "智能体记忆架构笔记",
         url: "https://example.com/agent-memory",
         type: "blog",
-        author: "Research Notes"
+        author: "研究笔记"
       }
     ],
-    recommendedBecause: "You saved agent workflow content and still have weak signals around evaluation.",
+    recommendedBecause: "你收藏过智能体工作流相关的内容,而且在评估这块还比较薄弱。",
     trustState: "supported",
     createdAt: "2026-06-08T01:00:00.000Z",
     estimatedReadMinutes: 4,
@@ -42,29 +42,29 @@ export const demoCards: KnowledgeCard[] = [
       {
         id: "agent-memory-layers-thread-example",
         kind: "example",
-        title: "Example",
-        body: "A shopping assistant should remember your size as user memory, the current checkout as task memory, and shipping policy as world memory."
+        title: "例子",
+        body: "购物助手应该把你的尺码记成用户记忆,把当前这单结账记成任务记忆,把配送政策记成世界记忆。"
       },
       {
         id: "agent-memory-layers-thread-contrast",
         kind: "contrast",
-        title: "What goes wrong",
-        body: "If all memory is retrieved together, the agent may treat an old task note as a current user preference."
+        title: "哪里会出错",
+        body: "如果所有记忆一起被检索出来,智能体可能把一条旧的任务笔记当成你当前的偏好。"
       },
       {
         id: "agent-memory-layers-thread-extension",
         kind: "extension",
-        title: "Where to go next",
-        body: "The next layer is evaluation: testing whether memory improves outcomes instead of just increasing context length."
+        title: "接下来往哪走",
+        body: "下一层是评估:检验记忆是真的改善了结果,还是只是把上下文撑得更长。"
       }
     ],
     graphEdges: [
       {
         id: "agent-memory-layers-edge",
-        sourceConcept: "AI Agent",
+        sourceConcept: "智能体",
         relation: "requires",
-        targetConcept: "Memory",
-        evidence: "Durable agents need separated memory layers.",
+        targetConcept: "记忆",
+        evidence: "耐用的智能体需要分层的记忆。",
         weight: 0.84
       }
     ],
@@ -72,8 +72,8 @@ export const demoCards: KnowledgeCard[] = [
       {
         id: "agent-memory-layers-review",
         kind: "compare",
-        prompt: "What is the difference between task memory and user memory?",
-        answerHint: "Task memory is about the current job; user memory is about durable preferences.",
+        prompt: "任务记忆和用户记忆有什么区别?",
+        answerHint: "任务记忆关心当前这件事;用户记忆关心持久的偏好。",
         dueInDays: 2
       }
     ],
@@ -81,25 +81,25 @@ export const demoCards: KnowledgeCard[] = [
   },
   {
     id: "rag-evaluation-loop",
-    title: "RAG systems need eval sets before they need another retrieval trick",
-    hook: "The fastest way to improve RAG is often not better chunking. It is knowing what failure looks like.",
+    title: "RAG 系统需要的是评测集,而不是又一个检索小技巧",
+    hook: "想让 RAG 变好,最快的办法往往不是更好的分块,而是先搞清楚失败长什么样。",
     thesis:
-      "A RAG system should build representative questions, expected citations, and failure labels before optimizing retrieval tactics.",
+      "一个 RAG 系统应该先准备好有代表性的问题、期望引用的出处和失败标注,再去优化检索手法。",
     shortBody:
-      "Most RAG failures come from missing measurement. A small set of representative questions, expected citations, and failure labels can improve iteration speed more than another chunking tweak.",
+      "RAG 的失败大多源于缺少度量。一小批有代表性的问题、期望引用的出处和失败标注,对迭代速度的提升,往往比再调一次分块更大。",
     summary:
-      "Most RAG failures come from missing measurement. A small set of representative questions, expected citations, and failure labels can improve iteration speed more than another chunking tweak.",
-    keyTakeaway: "Build the eval loop before optimizing retrieval.",
-    concepts: ["RAG", "Evaluation", "Vector Search"],
+      "RAG 的失败大多源于缺少度量。一小批有代表性的问题、期望引用的出处和失败标注,对迭代速度的提升,往往比再调一次分块更大。",
+    keyTakeaway: "先把评测闭环搭起来,再去优化检索。",
+    concepts: ["RAG", "评估", "向量检索"],
     sources: [
       {
         id: "source-rag-evals",
-        title: "RAG evaluation field guide",
+        title: "RAG 评测实战指南",
         url: "https://example.com/rag-evals",
         type: "paper"
       }
     ],
-    recommendedBecause: "RAG is in your interest list and evaluation is currently a weak concept.",
+    recommendedBecause: "RAG 在你的兴趣里,而评估目前是你的薄弱概念。",
     trustState: "supported",
     createdAt: "2026-06-08T02:30:00.000Z",
     estimatedReadMinutes: 5,
@@ -110,20 +110,20 @@ export const demoCards: KnowledgeCard[] = [
       {
         id: "rag-evaluation-loop-thread-example",
         kind: "example",
-        title: "Example",
-        body: "Create 30 real questions, list the expected source paragraphs, then track whether answers cite the right evidence."
+        title: "例子",
+        body: "准备 30 个真实问题,列出期望命中的出处段落,再追踪回答有没有引用对证据。"
       },
       {
         id: "rag-evaluation-loop-thread-contrast",
         kind: "contrast",
-        title: "Common mistake",
-        body: "Teams often tweak embeddings, chunk size, and reranking before they know which user questions are failing."
+        title: "常见的坑",
+        body: "团队常常在还不知道哪些用户问题在失败之前,就先去调向量、分块大小和重排。"
       },
       {
         id: "rag-evaluation-loop-thread-extension",
         kind: "extension",
-        title: "Where to go next",
-        body: "After evals exist, ranking can prioritize posts that explain the user's repeated failure categories."
+        title: "接下来往哪走",
+        body: "有了评测之后,排序就能优先推那些讲清楚用户反复踩坑类别的卡片。"
       }
     ],
     graphEdges: [
@@ -131,8 +131,8 @@ export const demoCards: KnowledgeCard[] = [
         id: "rag-evaluation-loop-edge",
         sourceConcept: "RAG",
         relation: "evaluates",
-        targetConcept: "Evaluation",
-        evidence: "RAG improvement depends on representative eval sets.",
+        targetConcept: "评估",
+        evidence: "RAG 的改进依赖有代表性的评测集。",
         weight: 0.9
       }
     ],
@@ -140,8 +140,8 @@ export const demoCards: KnowledgeCard[] = [
       {
         id: "rag-evaluation-loop-review",
         kind: "apply",
-        prompt: "Design one eval question for a RAG system and name the expected citation.",
-        answerHint: "The question should map to a known source passage and measurable answer.",
+        prompt: "为一个 RAG 系统设计一个评测问题,并说出它期望命中的出处。",
+        answerHint: "这个问题应该能对应到一段已知的出处,以及一个可衡量的答案。",
         dueInDays: 1
       }
     ],
@@ -149,25 +149,25 @@ export const demoCards: KnowledgeCard[] = [
   },
   {
     id: "knowledge-feed-product-loop",
-    title: "A knowledge feed becomes defensible when every interaction improves the next card",
-    hook: "The moat is not the feed. The moat is what the feed learns from every useful interaction.",
+    title: "当每一次互动都让下一张卡更好,知识流才有护城河",
+    hook: "护城河不是这条流,而是这条流从每一次有用的互动里学到了什么。",
     thesis:
-      "A knowledge timeline becomes defensible when likes, saves, questions, skips, and reviews change what the agent generates next.",
+      "当点赞、收藏、追问、划走和复习真的会改变智能体接下来生成什么,知识时间线才具备护城河。",
     shortBody:
-      "The product loop is not feed consumption. It is signal capture: likes, saves, questions, and reviews become the user's learning graph, which then changes ranking and explanation style.",
+      "产品闭环不是刷流本身,而是信号沉淀:点赞、收藏、追问和复习汇成用户的学习图谱,再反过来改变排序和讲解方式。",
     summary:
-      "The product loop is not feed consumption. It is signal capture: likes, saves, questions, and reviews become the user's learning graph, which then changes ranking and explanation style.",
-    keyTakeaway: "The moat is the user's accumulated learning graph.",
-    concepts: ["Product Strategy", "Knowledge Graph", "Personalization"],
+      "产品闭环不是刷流本身,而是信号沉淀:点赞、收藏、追问和复习汇成用户的学习图谱,再反过来改变排序和讲解方式。",
+    keyTakeaway: "护城河是用户日积月累的学习图谱。",
+    concepts: ["产品策略", "知识图谱", "个性化"],
     sources: [
       {
         id: "source-product-loop",
-        title: "Personal knowledge products memo",
+        title: "个人知识产品备忘",
         url: "https://example.com/knowledge-loop",
         type: "manual"
       }
     ],
-    recommendedBecause: "You are shaping an open-core knowledge product and need a tight retention loop.",
+    recommendedBecause: "你在做一个 open-core 知识产品,需要一个紧凑的留存闭环。",
     trustState: "emerging",
     createdAt: "2026-06-08T03:15:00.000Z",
     estimatedReadMinutes: 3,
@@ -178,29 +178,29 @@ export const demoCards: KnowledgeCard[] = [
       {
         id: "knowledge-feed-product-loop-thread-example",
         kind: "example",
-        title: "Example",
-        body: "If a user saves Agent Memory and skips three RAG posts, the next agent run should deepen memory and cool down RAG."
+        title: "例子",
+        body: "如果用户收藏了《智能体记忆》又划走了三张 RAG 卡,下一次智能体运行就该把记忆讲深、把 RAG 降温。"
       },
       {
         id: "knowledge-feed-product-loop-thread-contrast",
         kind: "contrast",
-        title: "Not a normal feed",
-        body: "A normal feed optimizes attention. A learning feed optimizes productive attention plus durable recall."
+        title: "不是普通的信息流",
+        body: "普通信息流优化的是注意力;学习流优化的是有产出的注意力,再加上记得更牢。"
       },
       {
         id: "knowledge-feed-product-loop-thread-extension",
         kind: "extension",
-        title: "Where to go next",
-        body: "Turn each signal into a next-action policy: deeper, broader, simpler, review, or cool down."
+        title: "接下来往哪走",
+        body: "把每个信号变成一条下一步策略:更深、更广、更简单、复习,或者降温。"
       }
     ],
     graphEdges: [
       {
         id: "knowledge-feed-product-loop-edge",
-        sourceConcept: "Product Strategy",
+        sourceConcept: "产品策略",
         relation: "applies",
-        targetConcept: "Knowledge Graph",
-        evidence: "User interactions become graph and ranking signals.",
+        targetConcept: "知识图谱",
+        evidence: "用户互动会变成图谱和排序信号。",
         weight: 0.78
       }
     ],
@@ -208,8 +208,8 @@ export const demoCards: KnowledgeCard[] = [
       {
         id: "knowledge-feed-product-loop-review",
         kind: "explain",
-        prompt: "Why is interaction feedback more defensible than static summaries?",
-        answerHint: "Because each interaction updates future generation, ranking, graph, and review.",
+        prompt: "为什么互动反馈比静态摘要更有护城河?",
+        answerHint: "因为每一次互动都会更新未来的生成、排序、图谱和复习。",
         dueInDays: 2
       }
     ],
@@ -228,7 +228,7 @@ export const demoSignals: UserSignal[] = [
     id: "signal-2",
     cardId: "knowledge-feed-product-loop",
     type: "ask",
-    prompt: "How does this become a paid app?",
+    prompt: "这怎么变成一个付费 App?",
     createdAt: "2026-06-08T04:05:00.000Z"
   },
   {
@@ -242,8 +242,8 @@ export const demoSignals: UserSignal[] = [
 export const demoInteractionSignals: InteractionSignal[] = [
   {
     postId: "agent-memory-layers",
-    topicId: "ai-agent",
-    conceptIds: ["AI Agent", "Memory", "Evaluation"],
+    topicId: "智能体",
+    conceptIds: ["智能体", "记忆", "评估"],
     impression: true,
     dwellTimeMs: 11800,
     openedThread: true,
@@ -257,7 +257,7 @@ export const demoInteractionSignals: InteractionSignal[] = [
   {
     postId: "rag-evaluation-loop",
     topicId: "rag",
-    conceptIds: ["RAG", "Evaluation", "Vector Search"],
+    conceptIds: ["RAG", "评估", "向量检索"],
     impression: true,
     dwellTimeMs: 14200,
     openedThread: true,
@@ -270,8 +270,8 @@ export const demoInteractionSignals: InteractionSignal[] = [
   },
   {
     postId: "knowledge-feed-product-loop",
-    topicId: "product-strategy",
-    conceptIds: ["Product Strategy", "Knowledge Graph", "Personalization"],
+    topicId: "产品策略",
+    conceptIds: ["产品策略", "知识图谱", "个性化"],
     impression: true,
     dwellTimeMs: 700,
     openedThread: false,
@@ -286,7 +286,7 @@ export const demoInteractionSignals: InteractionSignal[] = [
 
 export const demoTopicStates: TopicState[] = [
   {
-    topicId: "ai-agent",
+    topicId: "智能体",
     interestScore: 0.78,
     fatigueScore: 0.08,
     comprehensionScore: 0.58
@@ -298,7 +298,7 @@ export const demoTopicStates: TopicState[] = [
     comprehensionScore: 0.76
   },
   {
-    topicId: "product-strategy",
+    topicId: "产品策略",
     interestScore: 0.42,
     fatigueScore: 0.82,
     comprehensionScore: 0.64

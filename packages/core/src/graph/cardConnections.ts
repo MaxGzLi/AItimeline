@@ -153,8 +153,10 @@ function capPerKind(connections: CardConnection[], maxPerKind: number): CardConn
 }
 
 function slugConcept(concept: string): string {
+  // Keep Unicode letters/digits so non-ASCII concepts (e.g. Chinese) slug to a distinct,
+  // non-empty key instead of collapsing to "" and matching every other concept.
   return concept
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/[^\p{L}\p{N}]+/gu, "-")
     .replace(/(^-|-$)/g, "");
 }
