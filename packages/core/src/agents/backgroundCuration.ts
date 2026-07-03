@@ -241,7 +241,7 @@ function createSourceImportJob(
     conceptIds: mergeUnique(expansionJob.conceptIds, candidate.conceptIds),
     nextAction: expansionJob.nextAction,
     priority: roundPriority(Math.min(1, expansionJob.priority * 0.65 + sourceScore * 0.35)),
-    reason: `User showed interest, so package this related source for the timeline: ${candidate.reason}`,
+    reason: `你表现出了兴趣,所以为时间线打包这个相关来源:${candidate.reason}`,
     createdAt: generatedAt.toISOString(),
     runAfter: generatedAt.toISOString(),
     sourceCandidate: candidate
@@ -264,7 +264,7 @@ function createSourceDiscoveryJob(
     conceptIds: expansionJob.conceptIds,
     nextAction: expansionJob.nextAction,
     priority: roundPriority(Math.max(0.1, expansionJob.priority - 0.08)),
-    reason: "User showed interest, but no matching source candidate is available yet, so ask the agent to look for sources.",
+    reason: "你表现出了兴趣,但目前还没有匹配的候选来源,所以让智能体去找一找。",
     createdAt: generatedAt.toISOString(),
     runAfter: runAfter.toISOString()
   };

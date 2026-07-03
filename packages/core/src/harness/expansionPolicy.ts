@@ -254,23 +254,23 @@ function buildExpansionReason(
   config: AgentExpansionPolicyConfig
 ): string {
   if (kind === "cooldown_topic") {
-    return "User skipped quickly or topic fatigue is high, so pause the topic before generating more.";
+    return "你划得很快,或者这个话题让你有点疲劳,所以先暂停,不再往下生成。";
   }
 
   if (kind === "schedule_review") {
-    return "User saved or reviewed the post, so convert interest into durable recall.";
+    return "你收藏或复习过这张卡,所以把兴趣转成能长期记住的复习。";
   }
 
   if (signal.askedQuestion) {
-    return "User asked a question, so generate a simpler or more grounded follow-up before going broader.";
+    return "你提了问题,所以先做一张更简单、更贴近出处的跟进,再往外展开。";
   }
 
   if (signal.liked && nextAction === "expand_broader") {
-    return "User liked the post and appears ready, so expand into adjacent concepts.";
+    return "你点赞了,看起来已经准备好了,所以往相邻的概念延展。";
   }
 
   if (signal.openedThread || signal.dwellTimeMs >= config.softInterestDwellTimeMs) {
-    return "User showed pull through thread open or long dwell, so continue the learning path.";
+    return "你展开了讨论串或停留了很久,说明有兴趣,所以继续这条学习路径。";
   }
 
   return feedback.reason;
@@ -295,7 +295,7 @@ function createFallbackFeedback(signal: InteractionSignal): LearningFeedback {
     signalStrength,
     inferredState: signal.skippedQuickly ? "fatigued" : signalStrength >= 5 ? "interested" : "not_relevant",
     nextAction,
-    reason: "Fallback feedback inferred directly from interaction signal."
+    reason: "根据你的互动信号直接推断出的反馈。"
   };
 }
 
