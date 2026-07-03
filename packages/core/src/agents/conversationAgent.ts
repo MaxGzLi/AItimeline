@@ -90,10 +90,10 @@ export async function runConversationTurn(
     tier = answer.runnerKind === "model" ? "standard" : "free";
   } else if (matchedConcepts.length) {
     intent = "boundary_probe";
-    notes.push("No imported source covers this question yet, so the agent reports boundary placement instead of answering.");
+    notes.push("目前还没有导入的来源覆盖这个问题,所以先告诉你它落在你知识边界的什么位置,而不是直接回答。");
   } else {
     intent = "discovery_proposal";
-    notes.push("This question is outside your knowledge base. The agent proposes discovering sources instead of answering from model memory.");
+    notes.push("这个问题在你的知识库之外。我不会凭模型记忆作答,而是建议先去找相关来源。");
   }
 
   const actions = buildActions(zone, matchedConcepts, question, input.memory, options.maxDiscoveryQueries);
@@ -215,7 +215,7 @@ function buildActions(
     return [
       {
         kind: "schedule_review",
-        label: "Test yourself on this concept",
+        label: "测测这个概念",
         concepts: matchedConcepts
       }
     ];
@@ -223,17 +223,17 @@ function buildActions(
 
   if (zone === "learning") {
     return [
-      { kind: "continue_deeper", label: "Go deeper on this", concepts: matchedConcepts },
-      { kind: "reframe_simpler", label: "Explain it more simply", concepts: matchedConcepts }
+      { kind: "continue_deeper", label: "深入了解一下", concepts: matchedConcepts },
+      { kind: "reframe_simpler", label: "换个更简单的说法", concepts: matchedConcepts }
     ];
   }
 
   if (zone === "frontier") {
     return [
-      { kind: "start_series", label: "Start a learning series", concepts: matchedConcepts },
+      { kind: "start_series", label: "开一个学习系列", concepts: matchedConcepts },
       {
         kind: "discover_sources",
-        label: "Find sources on this",
+        label: "找找相关来源",
         concepts: matchedConcepts,
         queries: planDiscoveryQueries({
           concepts: matchedConcepts,
@@ -248,7 +248,7 @@ function buildActions(
   return [
     {
       kind: "discover_sources",
-      label: "Find sources for this question",
+      label: "为这个问题找来源",
       concepts: matchedConcepts,
       queries: [question.slice(0, 120)]
     }

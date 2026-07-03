@@ -95,13 +95,13 @@ export function chooseNextAction(
 
 function buildReason(state: InferredLearningState, nextAction: NextActionPolicy): string {
   const reasons: Record<InferredLearningState, string> = {
-    interested: "The user showed pull, so continue the learning path.",
-    confused: "The user asked a question, so simplify and explain the gap.",
-    fatigued: "The topic is cooling down because the user skipped or shows fatigue.",
-    not_relevant: "The signal was weak, so ask for clarification before pushing more.",
-    needs_review: "The user saved or reviewed, so schedule durable recall."
+    interested: "你表现出了兴趣,所以继续这条学习路径。",
+    confused: "你提了问题,所以先讲得更简单些,补上这块缺口。",
+    fatigued: "你划走或显得有些疲劳,所以这个话题先降降温。",
+    not_relevant: "信号还比较弱,所以先请你说清楚,再决定要不要多推。",
+    needs_review: "你收藏或复习过,所以安排一次巩固记忆的复习。"
   };
 
-  return `${reasons[state]} Next action: ${nextAction}.`;
+  return reasons[state];
 }
 

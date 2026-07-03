@@ -133,9 +133,9 @@ function buildDeterministicAnswer(input: AskGroundedInput, excerpts: GroundedExc
   const top = excerpts[0];
   const timestamp = top?.startTimeSeconds !== undefined ? ` (${formatTimestamp(top.startTimeSeconds)})` : "";
   const answer = [
-    `Based on "${source?.title ?? "this source"}"${timestamp}: ${input.post.keyTakeaway}`,
-    top ? `Grounding: ${top.quote}` : `Grounding: ${input.post.summary}`,
-    `Your question was: "${input.question}".`
+    `根据《${source?.title ?? "这个来源"}》${timestamp}:${input.post.keyTakeaway}`,
+    top ? `依据:${top.quote}` : `依据:${input.post.summary}`,
+    `你的问题是:「${input.question}」。`
   ]
     .filter(Boolean)
     .join("\n\n");

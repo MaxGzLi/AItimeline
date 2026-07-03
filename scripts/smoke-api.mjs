@@ -244,7 +244,7 @@ try {
 
   assert.ok(
     discoveredInbox.records.some(
-      (record) => record.intakeKind === "agent_discovery" && record.candidate.reason.startsWith("Discovered")
+      (record) => record.intakeKind === "agent_discovery" && record.candidate.reason.startsWith("为")
     ),
     "discovered candidates should land in the pending inbox"
   );
