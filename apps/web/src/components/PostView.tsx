@@ -1,6 +1,6 @@
 import type { CardConnection, InteractionSignal, RankedKnowledgeCard } from "@aitimeline/core";
 import { BadgeCheck, Bookmark, Clock, Heart, MessageCircle, Plus, Repeat2, XCircle } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { formatConnectionKind, formatRelativeTime, getAgentInitials, getAgentName, slugConcept } from "../lib/format";
 
 export function PostView({
@@ -12,6 +12,7 @@ export function PostView({
   onOpen,
   onOpenCardId,
   onOpenConcept,
+  onReply,
   onSave,
   onSkip,
   quoteText,
@@ -25,6 +26,7 @@ export function PostView({
   onOpen: (card: RankedKnowledgeCard) => void;
   onOpenCardId: (cardId: string) => void;
   onOpenConcept: (concept: string) => void;
+  onReply: (card: RankedKnowledgeCard, text: string) => Promise<void>;
   onSave: (card: RankedKnowledgeCard) => void;
   onSkip: (card: RankedKnowledgeCard) => void;
   quoteText?: string;
@@ -34,12 +36,42 @@ export function PostView({
   const visibleSince = useRef<number | null>(null);
   const reportedDwellMs = useRef(0);
   const [dismissed, setDismissed] = useState(false);
+  const [threadOpen, setThreadOpen] = useState(false);
+  const [replyText, setReplyText] = useState("");
+  const [sending, setSending] = useState(false);
+  const [replyError, setReplyError] = useState<string | null>(null);
   const primaryConcept = card.concepts[0] ?? "知识";
   const source = card.sources[0];
   const isUserNote = source?.type === "user_note";
   const topConnection = connections[0];
-  const replyCount = card.thread?.length ?? 0;
+  // The in-post thread shows only the public comment blocks; knowledge blocks
+  // (explain/example/…) stay in the detail drawer.
+  const commentBlocks = (card.thread ?? []).filter(
+    (block) => block.kind === "user_comment" || block.kind === "agent_reply"
+  );
+  const replyCount = commentBlocks.length;
   const reviewDueDays = card.reviewPrompts?.[0]?.dueInDays;
+
+  async function handleReplySubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const text = replyText.trim();
+
+    if (!text || sending) {
+      return;
+    }
+
+    setSending(true);
+    setReplyError(null);
+
+    try {
+      await onReply(card, text);
+      setReplyText("");
+    } catch (error) {
+      setReplyError(error instanceof Error ? error.message : "回复失败,请稍后再试。");
+    } finally {
+      setSending(false);
+    }
+  }
 
   // Viewport dwell tracking: report when the post has been ≥60% visible long
   // enough, so ranking learns from real reading instead of impressions.
@@ -157,7 +189,13 @@ export function PostView({
           ) : null}
 
           <div className="x-acts">
-            <button className="x-act" onClick={() => onOpen(card)} title="回复 / 追问" type="button">
+            <button
+              aria-expanded={threadOpen}
+              className={`x-act${threadOpen ? " on" : ""}`}
+              onClick={() => setThreadOpen((open) => !open)}
+              title="回复"
+              type="button"
+            >
               <MessageCircle size={18} />
               {replyCount > 0 ? replyCount : null}
             </button>
@@ -207,6 +245,48 @@ export function PostView({
               <XCircle size={18} />
             </button>
           </div>
+
+          {threadOpen ? (
+            <div className="x-replies" aria-label="评论线程">
+              {commentBlocks.map((block) => {
+                const isAgent = block.kind === "agent_reply";
+
+                return (
+                  <div className="x-reply" key={block.id}>
+                    <span className={`x-avatar x-reply-avatar${isAgent ? " agent" : ""}`} aria-hidden="true">
+                      {isAgent ? "AI" : "你"}
+                    </span>
+                    <div className="x-reply-main">
+                      <div className="x-head">
+                        <span className="x-name">{block.title}</span>
+                        {isAgent ? <BadgeCheck aria-label="有出处" className="x-verified" size={15} /> : null}
+                      </div>
+                      <p className="x-body">{block.body}</p>
+                    </div>
+                  </div>
+                );
+              })}
+
+              <form className="x-reply-form" onSubmit={handleReplySubmit}>
+                <span className="x-avatar x-reply-avatar" aria-hidden="true">
+                  你
+                </span>
+                <input
+                  aria-label="回复"
+                  className="x-reply-input"
+                  disabled={sending}
+                  onChange={(event) => setReplyText(event.target.value)}
+                  placeholder="回复…"
+                  value={replyText}
+                />
+                <button className="x-pill" disabled={sending || !replyText.trim()} type="submit">
+                  {sending ? "发送中" : "发送"}
+                </button>
+              </form>
+
+              {replyError ? <p className="x-reply-error">{replyError}</p> : null}
+            </div>
+          ) : null}
         </div>
       </article>
     </>

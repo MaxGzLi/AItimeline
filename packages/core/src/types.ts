@@ -24,7 +24,14 @@ export type KnowledgeDifficulty = "beginner" | "intermediate" | "advanced";
 
 export type KnowledgeConfidence = "low" | "medium" | "high";
 
-export type ThreadBlockKind = "explain" | "example" | "contrast" | "extension" | "quiz";
+export type ThreadBlockKind =
+  | "explain"
+  | "example"
+  | "contrast"
+  | "extension"
+  | "quiz"
+  | "user_comment"
+  | "agent_reply";
 
 export type KnowledgeEdgeRelation =
   | "requires"

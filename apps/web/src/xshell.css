@@ -390,6 +390,51 @@ body:has(.x-frame) {
 .x-act.like:hover, .x-act.like.on { color: var(--x-like); }
 .x-act.repost:hover { color: var(--x-repost); }
 .x-act.on { color: var(--x-blue); }
+/* ---------- 帖内评论线程 ---------- */
+.x-replies {
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--x-line);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.x-reply {
+  display: flex;
+  gap: 10px;
+}
+.x-reply-avatar {
+  width: 32px;
+  height: 32px;
+  font-size: 12px;
+}
+.x-reply-main { flex: 1; min-width: 0; }
+.x-reply-main .x-head { font-size: 14px; }
+.x-reply-main .x-body { margin: 2px 0 0; font-size: 14px; }
+.x-reply-form {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.x-reply-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 15px;
+  padding: 8px 0;
+  color: var(--x-ink);
+}
+.x-reply-input::placeholder { color: var(--x-muted); }
+.x-reply-input:focus-visible { outline: none; }
+.x-reply-form .x-pill { margin-left: 0; padding: 6px 16px; font-size: 13px; }
+.x-reply-error {
+  margin: 0;
+  padding-left: 42px;
+  font-size: 13px;
+  color: var(--x-like);
+}
 .x-dismissed {
   display: flex;
   align-items: center;
