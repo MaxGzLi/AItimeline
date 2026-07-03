@@ -26,20 +26,20 @@ export function SourceImportPanel({
   url: string;
 }) {
   return (
-    <section className="source-import">
-      <div className="source-import-heading">
+    <section className="x-import">
+      <div className="x-import-head">
         <div>
-          <p className="section-label">来源智能体</p>
+          <p className="x-label">来源智能体</p>
           <h2>URL 导入</h2>
         </div>
-        <div className={`source-kind ${apiStatus}`}>
+        <div className={`x-import-conn ${apiStatus}`}>
           {apiStatus === "connected" ? <CheckCircle2 size={17} /> : <Video size={17} />}
           <span>{apiStatus === "connected" ? "已连接" : apiStatus === "checking" ? "连接中" : "离线"}</span>
         </div>
       </div>
 
-      <form className="source-form" onSubmit={onSubmit}>
-        <label className="source-input-shell">
+      <form className="x-import-form" onSubmit={onSubmit}>
+        <label className="x-import-field">
           <Link size={18} />
           <input
             aria-label="来源 URL"
@@ -48,15 +48,15 @@ export function SourceImportPanel({
             value={url}
           />
         </label>
-        <button className="primary-action source-submit" disabled={isImporting} type="submit">
-          {isImporting ? <LoaderCircle className="spin" size={18} /> : <Send size={18} />}
+        <button className="x-pill start" disabled={isImporting} type="submit">
+          {isImporting ? <LoaderCircle className="x-spin" size={18} /> : <Send size={18} />}
           <span>{isImporting ? "导入中" : "导入"}</span>
         </button>
       </form>
 
-      <div className="import-feedback">
+      <div className="x-import-note">
         {error ? (
-          <span className="import-error">
+          <span className="x-import-err">
             <XCircle size={16} />
             {error}
           </span>

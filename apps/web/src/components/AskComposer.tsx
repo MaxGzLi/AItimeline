@@ -32,7 +32,7 @@ export const AskComposer = forwardRef<
             </button>
           ))}
           <button className="x-pill" disabled={isAsking || !question.trim()} type="submit">
-            {isAsking ? <LoaderCircle className="spin" size={16} /> : null}
+            {isAsking ? <LoaderCircle className="x-spin" size={16} /> : null}
             {isAsking ? "思考中" : "发布"}
           </button>
         </div>

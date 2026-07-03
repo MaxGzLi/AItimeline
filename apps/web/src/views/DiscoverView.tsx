@@ -33,7 +33,7 @@ export function DiscoverView({
           </p>
           <div className="x-composer-foot">
             <button className="x-pill start" disabled={isRunning} onClick={onRunCuration} type="button">
-              {isRunning ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}
+              {isRunning ? <LoaderCircle className="x-spin" size={16} /> : <RefreshCw size={16} />}
               {isRunning ? "整理中" : "立即整理"}
             </button>
           </div>

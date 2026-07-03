@@ -15,32 +15,32 @@ export function ConceptDigestPanel({
     <div
       aria-label={`关于「${digest.concept}」的全部碎片`}
       aria-modal="true"
-      className="concept-overlay"
+      className="x-overlay"
       onClick={onClose}
       role="dialog"
     >
-      <div className="concept-modal" onClick={(event) => event.stopPropagation()}>
-        <div className="concept-head">
+      <div className="x-modal" onClick={(event) => event.stopPropagation()}>
+        <div className="x-concept-head">
           <div>
-            <p className="section-label concept-eyebrow">
+            <p className="x-label x-concept-eyebrow">
               <Layers size={14} aria-hidden="true" /> 概念
             </p>
             <h2>{digest.concept}</h2>
-            <p className="concept-sub">{digest.cardCount} 张碎片,连成一整篇</p>
+            <p className="x-concept-sub">{digest.cardCount} 张碎片,连成一整篇</p>
           </div>
-          <button aria-label="关闭概念视图" className="icon-button compact" onClick={onClose} type="button">
+          <button aria-label="关闭概念视图" className="x-iconbtn" onClick={onClose} type="button">
             <XCircle size={18} />
           </button>
         </div>
 
-        <ol className="concept-entry-list">
+        <ol className="x-concept-list">
           {digest.entries.map((entry) => (
             <li key={entry.cardId}>
-              <button className="concept-entry" onClick={() => onOpenCardId(entry.cardId)} type="button">
-                <span className={`concept-role concept-role-${entry.role}`}>{formatConceptRole(entry.role)}</span>
-                <span className="concept-entry-body">
+              <button className="x-concept-entry" onClick={() => onOpenCardId(entry.cardId)} type="button">
+                <span className={`x-concept-role x-concept-role-${entry.role}`}>{formatConceptRole(entry.role)}</span>
+                <span className="x-concept-body">
                   <strong>{entry.title}</strong>
-                  <span className="concept-entry-takeaway">{entry.keyTakeaway}</span>
+                  <span className="x-concept-take">{entry.keyTakeaway}</span>
                 </span>
               </button>
             </li>
