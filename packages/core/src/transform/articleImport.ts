@@ -114,7 +114,7 @@ export async function transformArticleUrl(
       createdAt,
       recommendedBecause:
         options.recommendedBecause ??
-        "You imported this article, so the agent converted its paragraphs into timeline-ready knowledge."
+        "你导入了这篇文章,所以把它的段落转成了可以进时间线的知识卡片。"
     },
     options.runner
   );

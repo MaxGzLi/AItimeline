@@ -64,7 +64,7 @@ export function runDeterministicAgentHarness(input: AgentHarnessRunInput): Agent
       createdAt
     });
   const recommendedBecause =
-    input.recommendedBecause ?? "This source was imported and converted into timeline-ready knowledge.";
+    input.recommendedBecause ?? "这个来源已导入,并转成了可以进时间线的知识卡片。";
   const posts = chunks.map((chunk, index) =>
     createKnowledgePost({
       source: input.source,

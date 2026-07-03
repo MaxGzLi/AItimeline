@@ -193,10 +193,10 @@ function scoreQuality(item: DiscoveredSource, url: URL): number {
 }
 
 function buildReason(concepts: string[], query?: string): string {
-  const conceptText = concepts.length ? concepts.slice(0, 3).join(", ") : "your recent interests";
-  const queryText = query ? ` via "${query}"` : "";
+  const conceptText = concepts.length ? concepts.slice(0, 3).join("、") : "你近期的兴趣";
+  const queryText = query ? `,通过搜索「${query}」` : "";
 
-  return `Discovered for ${conceptText}${queryText}.`;
+  return `为${conceptText}找到${queryText}。`;
 }
 
 function normalizeUrl(value: string): string | null {

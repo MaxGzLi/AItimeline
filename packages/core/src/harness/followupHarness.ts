@@ -311,18 +311,18 @@ function buildIntentInstruction(intent: FollowupGenerationIntent, concepts: stri
 
 function buildRecommendedBecause(protocol: FollowupGenerationProtocol, job: BackgroundCurationJob): string {
   if (protocol.intent === "expand_broader") {
-    return `You showed enough pull to connect this topic outward. ${job.reason}`;
+    return `你表现出足够的兴趣,可以把这个话题往外延展了。${job.reason}`;
   }
 
   if (protocol.intent === "reframe_simpler") {
-    return `You asked or hesitated, so the agent is reframing this more simply. ${job.reason}`;
+    return `你提了问题或有些迟疑,所以换个更简单的角度重新讲一遍。${job.reason}`;
   }
 
   if (protocol.intent === "review_reinforcement") {
-    return `You saved or reviewed this, so it is returning as recall practice. ${job.reason}`;
+    return `你收藏或复习过,所以它作为回忆练习再次出现。${job.reason}`;
   }
 
-  return `You showed interest, so the agent prepared a deeper follow-up. ${job.reason}`;
+  return `你表现出了兴趣,所以准备了一张更深入的跟进卡片。${job.reason}`;
 }
 
 function inferFollowupIntent(nextAction: NextActionPolicy | undefined): FollowupGenerationIntent {

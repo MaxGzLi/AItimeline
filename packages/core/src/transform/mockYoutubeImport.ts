@@ -38,7 +38,7 @@ export function transformMockYouTubeUrl(url: string, createdAt = new Date().toIS
   const transformed = transformTranscriptToCards(source, demoYouTubeTranscript, {
     asset,
     createdAt,
-    recommendedBecause: "You imported this YouTube video, so the agent converted timestamped ideas into timeline cards."
+    recommendedBecause: "你导入了这个 YouTube 视频,所以把带时间点的要点转成了时间线卡片。"
   });
 
   return {

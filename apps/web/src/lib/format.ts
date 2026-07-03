@@ -174,9 +174,9 @@ export function formatConceptRole(role: ConceptDigestRole): string {
 
 export function formatConfidence(value: NonNullable<KnowledgeCard["confidence"]>): string {
   const labels: Record<NonNullable<KnowledgeCard["confidence"]>, string> = {
-    low: "Low confidence",
-    medium: "Medium confidence",
-    high: "High confidence"
+    low: "置信度低",
+    medium: "置信度中",
+    high: "置信度高"
   };
 
   return labels[value];
