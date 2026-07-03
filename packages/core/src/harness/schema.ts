@@ -24,7 +24,8 @@ const sourceTypes = [
   "repo",
   "pdf",
   "audio",
-  "manual"
+  "manual",
+  "user_note"
 ] as const satisfies readonly SourceType[];
 const threadKinds = ["explain", "example", "contrast", "extension", "quiz"] as const satisfies readonly ThreadBlockKind[];
 const edgeRelations = [

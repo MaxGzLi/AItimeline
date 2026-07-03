@@ -36,6 +36,7 @@ export function PostView({
   const [dismissed, setDismissed] = useState(false);
   const primaryConcept = card.concepts[0] ?? "知识";
   const source = card.sources[0];
+  const isUserNote = source?.type === "user_note";
   const topConnection = connections[0];
   const replyCount = card.thread?.length ?? 0;
   const reviewDueDays = card.reviewPrompts?.[0]?.dueInDays;
@@ -109,7 +110,7 @@ export function PostView({
 
   return (
     <>
-      {card.recommendedBecause ? (
+      {card.recommendedBecause && !isUserNote ? (
         <div className="x-ctx">
           <span className="x-ctxicon">
             <Plus size={15} />
@@ -118,22 +119,22 @@ export function PostView({
         </div>
       ) : null}
       <article className={`x-post${isFocused ? " focused" : ""}`} ref={postRef}>
-        <span className="x-avatar agent" aria-hidden="true">
-          {getAgentInitials(primaryConcept)}
+        <span className={`x-avatar${isUserNote ? "" : " agent"}`} aria-hidden="true">
+          {isUserNote ? "你" : getAgentInitials(primaryConcept)}
         </span>
         <div className="x-post-main">
           <div className="x-head">
-            <span className="x-name">{getAgentName(primaryConcept)}</span>
-            <BadgeCheck aria-label="有出处" className="x-verified" size={17} />
-            <span className="x-meta">@{slugConcept(primaryConcept)}</span>
+            <span className="x-name">{isUserNote ? "你的笔记" : getAgentName(primaryConcept)}</span>
+            {isUserNote ? null : <BadgeCheck aria-label="有出处" className="x-verified" size={17} />}
+            <span className="x-meta">@{isUserNote ? "you" : slugConcept(primaryConcept)}</span>
             <span className="x-meta">·</span>
             <span className="x-meta">{formatRelativeTime(card.createdAt)}</span>
             <span className="x-meta">·</span>
-            <span className="x-meta">{card.estimatedReadMinutes} 分钟读完</span>
+            <span className="x-meta">{isUserNote ? "笔记" : `${card.estimatedReadMinutes} 分钟读完`}</span>
           </div>
 
           <button className="x-open" onClick={() => onOpen(card)} type="button">
-            <p className="x-title">{card.title}</p>
+            {isUserNote ? null : <p className="x-title">{card.title}</p>}
             <p className="x-body">{card.shortBody ?? card.summary}</p>
           </button>
 
@@ -145,7 +146,7 @@ export function PostView({
             ))}
           </div>
 
-          {quoteText ? (
+          {quoteText && !isUserNote ? (
             <button className="x-quote" onClick={() => onOpen(card)} type="button">
               <span className="x-qhead">
                 <span className="x-name">原文出处</span>

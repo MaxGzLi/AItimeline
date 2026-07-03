@@ -275,13 +275,34 @@ try {
   );
   assert.equal(agentDark.snapshotSummary.agentTurns, 2, "agent turns should be metered in the snapshot");
 
+  // --- Notes: user posts become self-grounded posts and get an observer reply ---
+  const noteResult = await requestJson("/api/notes", {
+    method: "POST",
+    body: {
+      text: `My note: ${firstTopic} quality depends on retrieval quality.`,
+      createdAt: "2026-06-10T01:00:00.000Z"
+    }
+  });
+
+  assert.equal(noteResult.post.sources[0].type, "user_note", "notes should persist as user_note sources");
+  assert.ok(noteResult.post.citations.length > 0, "note posts should cite their own registry chunk");
+  assert.equal(noteResult.turn.intent, "grounded_qa", "notes touching library concepts should get grounded replies");
+  assert.ok(noteResult.turn.answer.citations.length > 0, "observer replies to notes should cite source chunks");
+  assert.equal(noteResult.snapshotSummary.agentTurns, 3, "note replies should be metered as agent turns");
+
+  const noteTimeline = await requestJson("/api/timeline?now=2026-06-11T00:00:00.000Z");
+  const timelineNotePost = noteTimeline.posts.find((post) => post.id === noteResult.post.id);
+
+  assert.ok(timelineNotePost, "the note should appear in the timeline immediately");
+  assert.ok(timelineNotePost.thread.length > 0, "the observer reply should persist on the note's thread");
+
   const finalSnapshot = await requestJson("/api/snapshot");
   const localUserMemory = finalSnapshot.userMemories.find((record) => record.userId === "local-user");
 
   assert.equal(
     localUserMemory?.memory.interaction.recentQuestions.length,
-    2,
-    "agent questions should accumulate into user memory"
+    3,
+    "agent questions and notes should accumulate into user memory"
   );
 
   console.log("API smoke passed");

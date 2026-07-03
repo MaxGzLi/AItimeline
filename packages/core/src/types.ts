@@ -7,7 +7,8 @@ export type SourceType =
   | "repo"
   | "pdf"
   | "audio"
-  | "manual";
+  | "manual"
+  | "user_note";
 
 export type TrustState = "emerging" | "supported" | "contested";
 
