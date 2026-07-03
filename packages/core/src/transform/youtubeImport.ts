@@ -157,7 +157,7 @@ export async function transformYouTubeUrl(
       createdAt,
       recommendedBecause:
         options.recommendedBecause ??
-        "You imported this YouTube video, so the agent converted transcript ideas into timeline cards."
+        "你导入了这个 YouTube 视频,所以把字幕里的要点转成了时间线卡片。"
     },
     options.runner
   );
