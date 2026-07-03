@@ -1303,23 +1303,23 @@ export function App() {
         <div
           aria-label="键盘快捷键"
           aria-modal="true"
-          className="shortcuts-overlay"
+          className="x-overlay"
           onClick={() => setShortcutsOpen(false)}
           role="dialog"
         >
-          <div className="shortcuts-modal" onClick={(event) => event.stopPropagation()}>
-            <div className="shortcuts-head">
+          <div className="x-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="x-shortcuts-head">
               <h2>键盘快捷键</h2>
               <button
                 aria-label="关闭快捷键"
-                className="icon-button compact"
+                className="x-iconbtn"
                 onClick={() => setShortcutsOpen(false)}
                 type="button"
               >
                 <XCircle size={18} />
               </button>
             </div>
-            <ul className="shortcuts-list">
+            <ul className="x-shortcuts-list">
               <li>
                 <kbd>j</kbd>
                 <span>下一张卡</span>
@@ -1368,7 +1368,7 @@ export function App() {
       {showScrollTop && !selectedCard ? (
         <button
           aria-label="回到顶部"
-          className="scroll-top-button"
+          className="x-scrolltop"
           onClick={() => window.scrollTo({ top: 0, behavior: scrollMotion() })}
           title="回到顶部"
           type="button"

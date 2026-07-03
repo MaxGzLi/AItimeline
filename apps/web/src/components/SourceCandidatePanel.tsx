@@ -39,19 +39,19 @@ export function SourceCandidatePanel({
   records: SourceCandidateRecord[];
 }) {
   return (
-    <section className="context-section candidate-section">
-      <div className="rail-heading">
+    <section className="x-cand-panel">
+      <div className="x-cand-head">
         <div>
-          <p className="section-label">来源队列</p>
+          <p className="x-label">来源队列</p>
           <h2>候选源</h2>
         </div>
-        <button className="icon-button compact" title="候选来源">
+        <button className="x-iconbtn" title="候选来源">
           <Link size={18} />
         </button>
       </div>
 
-      <form className="candidate-form" onSubmit={onSubmit}>
-        <label className="candidate-input">
+      <form className="x-cand-form" onSubmit={onSubmit}>
+        <label className="x-cand-field">
           <Link size={16} />
           <input
             aria-label="候选来源 URL"
@@ -60,7 +60,7 @@ export function SourceCandidatePanel({
             value={candidateUrl}
           />
         </label>
-        <label className="candidate-input">
+        <label className="x-cand-field">
           <Sparkles size={16} />
           <input
             aria-label="候选话题"
@@ -69,15 +69,15 @@ export function SourceCandidatePanel({
             value={candidateConcept}
           />
         </label>
-        <button className="primary-action candidate-submit" disabled={isSaving} type="submit">
-          {isSaving ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}
+        <button className="x-pill start" disabled={isSaving} type="submit">
+          {isSaving ? <LoaderCircle className="x-spin" size={16} /> : <Send size={16} />}
           <span>{isSaving ? "排队中" : "加入队列"}</span>
         </button>
       </form>
 
-      <div className="candidate-message">{message}</div>
+      <div className="x-cand-note">{message}</div>
 
-      <label className="auto-scout-toggle">
+      <label className="x-cand-toggle">
         <input
           checked={autoScoutEnabled}
           onChange={(event) => onAutoScoutChange(event.target.checked)}
@@ -87,19 +87,19 @@ export function SourceCandidatePanel({
         <strong>{hasQueuedScoutWork ? `${queuedJobCount} 个排队任务` : "空闲"}</strong>
       </label>
 
-      <button className="secondary-action candidate-worker" disabled={isRunningCuration} onClick={onRunCuration} type="button">
-        {isRunningCuration ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}
+      <button className="x-cand-run" disabled={isRunningCuration} onClick={onRunCuration} type="button">
+        {isRunningCuration ? <LoaderCircle className="x-spin" size={16} /> : <RefreshCw size={16} />}
         <span>{isRunningCuration ? "运行中" : "运行观察员"}</span>
       </button>
-      <div className="candidate-message">
+      <div className="x-cand-note">
         {curationMessage}
         {lastScoutAt ? ` · ${formatShortTime(lastScoutAt)}` : ""}
       </div>
 
-      <div className="candidate-list">
+      <div className="x-cand-list">
         {records.length > 0 ? (
           records.slice(0, 4).map((record) => (
-            <div className={`candidate-row ${record.status}`} key={record.id}>
+            <div className={`x-cand-row ${record.status}`} key={record.id}>
               <div>
                 <span>{record.candidate.source.title}</span>
                 <small>
@@ -110,7 +110,7 @@ export function SourceCandidatePanel({
             </div>
           ))
         ) : (
-          <div className="empty-state">还没有候选源</div>
+          <div className="x-cand-empty">还没有候选源</div>
         )}
       </div>
     </section>
