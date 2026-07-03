@@ -9,6 +9,7 @@ export * from "./graph/cardConnections.js";
 export * from "./graph/conceptDigest.js";
 export * from "./graph/knowledgeBoundary.js";
 export * from "./graph/knowledgeGraph.js";
+export * from "./graph/wikilinks.js";
 export * from "./harness/askGrounded.js";
 export * from "./harness/expansionPolicy.js";
 export * from "./harness/feedbackPolicy.js";

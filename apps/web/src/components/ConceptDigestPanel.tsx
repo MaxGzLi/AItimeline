@@ -1,12 +1,14 @@
-import type { ConceptDigest } from "@aitimeline/core";
-import { Layers, XCircle } from "lucide-react";
+import type { Backlink, ConceptDigest } from "@aitimeline/core";
+import { Layers, Link2, XCircle } from "lucide-react";
 import { formatConceptRole } from "../lib/format";
 
 export function ConceptDigestPanel({
+  backlinks,
   digest,
   onClose,
   onOpenCardId
 }: {
+  backlinks: Backlink[];
   digest: ConceptDigest;
   onClose: () => void;
   onOpenCardId: (cardId: string) => void;
@@ -46,6 +48,28 @@ export function ConceptDigestPanel({
             </li>
           ))}
         </ol>
+
+        {backlinks.length > 0 ? (
+          <div className="x-concept-backlinks">
+            <p className="x-label x-concept-eyebrow">
+              <Link2 size={14} aria-hidden="true" /> 反向链接
+            </p>
+            <div className="x-backlinks">
+              {backlinks.map((backlink) => (
+                <button
+                  className="x-backlink"
+                  key={`${backlink.fromPostId}-${backlink.snippet}`}
+                  onClick={() => onOpenCardId(backlink.fromPostId)}
+                  title={`打开「${backlink.fromTitle}」`}
+                  type="button"
+                >
+                  <span className="x-backlink-from">{backlink.fromTitle}</span>
+                  <span className="x-backlink-snip">{backlink.snippet}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
   );

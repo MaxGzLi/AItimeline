@@ -1,10 +1,12 @@
-import type { CardConnection, InteractionSignal, RankedKnowledgeCard } from "@aitimeline/core";
+import type { CardConnection, InteractionSignal, KnowledgeCard, RankedKnowledgeCard } from "@aitimeline/core";
 import { BadgeCheck, Bookmark, Clock, Heart, MessageCircle, Plus, Repeat2, XCircle } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { formatConnectionKind, formatRelativeTime, getAgentInitials, getAgentName, slugConcept } from "../lib/format";
+import { renderWithWikilinks } from "../lib/wikilinks";
 
 export function PostView({
   card,
+  cards,
   connections,
   isFocused,
   onDwell,
@@ -19,6 +21,7 @@ export function PostView({
   signal
 }: {
   card: RankedKnowledgeCard;
+  cards: KnowledgeCard[];
   connections: CardConnection[];
   isFocused?: boolean;
   onDwell: (card: RankedKnowledgeCard, dwellTimeMs: number) => void;
@@ -167,7 +170,9 @@ export function PostView({
 
           <button className="x-open" onClick={() => onOpen(card)} type="button">
             {isUserNote ? null : <p className="x-title">{card.title}</p>}
-            <p className="x-body">{card.shortBody ?? card.summary}</p>
+            <p className="x-body">
+              {renderWithWikilinks(card.shortBody ?? card.summary, cards, { onOpenConcept, onOpenCardId })}
+            </p>
           </button>
 
           <div className="x-tags">
@@ -261,7 +266,9 @@ export function PostView({
                         <span className="x-name">{block.title}</span>
                         {isAgent ? <BadgeCheck aria-label="有出处" className="x-verified" size={15} /> : null}
                       </div>
-                      <p className="x-body">{block.body}</p>
+                      <p className="x-body">
+                        {renderWithWikilinks(block.body, cards, { onOpenConcept, onOpenCardId })}
+                      </p>
                     </div>
                   </div>
                 );

@@ -1194,3 +1194,61 @@ body:has(.x-frame) {
   box-shadow: 0 2px 12px rgba(15, 20, 25, 0.25);
 }
 .x-scrolltop:hover { background: var(--x-blue-hover); }
+
+/* ---------- 双链 wikilinks ---------- */
+.x-wikilink {
+  color: var(--x-blue);
+  cursor: pointer;
+  border-radius: 3px;
+}
+.x-wikilink:hover { text-decoration: underline; }
+.x-wikilink:focus-visible {
+  outline: 2px solid var(--x-blue);
+  outline-offset: 1px;
+}
+.x-wikilink.ghost {
+  color: var(--x-muted);
+  cursor: default;
+  text-decoration: underline dashed;
+  text-underline-offset: 2px;
+}
+.x-wikilink.ghost:hover { text-decoration: underline dashed; }
+
+/* ---------- 图谱画布 ---------- */
+.x-graphcanvas {
+  position: relative;
+  width: 100%;
+  height: 70vh;
+  min-height: 420px;
+  background: var(--x-bg);
+  border-top: 1px solid var(--x-line);
+  overflow: hidden;
+}
+.x-graphcanvas canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+  touch-action: none;
+}
+
+/* ---------- 反向链接 ---------- */
+.x-backlinks { display: grid; gap: 8px; margin-top: 8px; }
+.x-backlink {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--x-line);
+  border-radius: 12px;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  color: var(--x-ink);
+}
+.x-backlink:hover { background: var(--x-hover); }
+.x-backlink-from { font-size: 13px; font-weight: 700; }
+.x-backlink-snip { font-size: 13px; color: var(--x-muted); }
+.x-concept-backlinks { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--x-line); }
+.x-concept-backlinks .x-concept-eyebrow { margin: 0 0 8px; color: var(--x-muted); }
