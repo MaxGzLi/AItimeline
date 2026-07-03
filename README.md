@@ -81,7 +81,7 @@ npm run smoke:api
 npm run smoke:model
 ```
 
-`smoke:core` builds `@aitimeline/core`, imports the compiled `dist` output in Node, and checks source import, YouTube transcript import, article import, model repair, grounding validation and background curation execution.
+`smoke:core` builds `@aitimeline/core`, imports the compiled `dist` output in Node, and checks source import, YouTube transcript import, article import, model repair, grounding validation, cross-card connections, the concept whole-view digest and background curation execution.
 
 `smoke:api` starts the local API on a temporary port and checks article import, timeline reads, memory edits, interaction signals, queued curation jobs, background source import persistence, grounded card Q&A (`POST /api/ask`), background source discovery through an injected search provider, and the agent entry (`POST /api/agent/ask`: grounded turns, dark-zone discovery proposals and turn metering).
 
@@ -98,7 +98,7 @@ npm run smoke:model
 
 The current prototype also includes a mocked YouTube import flow: paste a YouTube URL, simulate transcript extraction, convert transcript segments into cited knowledge cards, insert those cards into the ranked timeline, inspect source citations, ask source-grounded AI questions, and keep the imported state in local storage.
 
-The local API now exposes the first backend loop: import article or YouTube sources, persist source artifacts and release plans, record interaction signals, update editable user memory, enqueue background curation jobs, run due source imports, and answer source-grounded questions about a card (`POST /api/ask`). When a model is configured the answer comes from the model grounded in the card's cited chunks; otherwise it falls back to a deterministic extractive answer. The Web prototype reads timeline state from the API, imports URLs through the API, asks grounded follow-up questions through the API (with an offline fallback), links each card to other cards you have collected through the agent's concept graph (so fragments accumulate into a connected whole instead of an isolated stream), queues source candidates for later background packaging, syncs likes/saves/questions into memory, tracks viewport dwell, and runs a bounded page-visible auto scout for due curation jobs.
+The local API now exposes the first backend loop: import article or YouTube sources, persist source artifacts and release plans, record interaction signals, update editable user memory, enqueue background curation jobs, run due source imports, and answer source-grounded questions about a card (`POST /api/ask`). When a model is configured the answer comes from the model grounded in the card's cited chunks; otherwise it falls back to a deterministic extractive answer. The Web prototype reads timeline state from the API, imports URLs through the API, asks grounded follow-up questions through the API (with an offline fallback), links each card to other cards you have collected through the agent's concept graph (so fragments accumulate into a connected whole instead of an isolated stream), lets you click any concept (on a card or in the Saved Concepts rail) to read every fragment touching it as one ordered foundations-to-contrasts thread, queues source candidates for later background packaging, syncs likes/saves/questions into memory, tracks viewport dwell, and runs a bounded page-visible auto scout for due curation jobs.
 
 ## Next Planning Docs
 

@@ -24,6 +24,7 @@ const { applyUserMemoryEdits, createEmptyUserMemory } = await import(
   "../packages/core/dist/memory/userMemoryControls.js"
 );
 const { buildCardConnections } = await import("../packages/core/dist/graph/cardConnections.js");
+const { buildConceptDigest } = await import("../packages/core/dist/graph/conceptDigest.js");
 const { createOpenAICompatibleModelClient, createOpenAICompatibleModelClientFromEnv } = await import(
   "../packages/core/dist/model/openaiCompatibleClient.js"
 );
@@ -64,6 +65,62 @@ assert.equal(
   0,
   "a card with no peers should have no connections"
 );
+
+// A concept digest assembles every fragment touching one concept into one ordered, readable whole.
+const digestConcept = result.cards[0].concepts[0];
+const conceptDigest = buildConceptDigest(digestConcept, result.cards);
+assert.ok(conceptDigest.cardCount >= 1, "the concept's own card should appear in its digest");
+assert.equal(conceptDigest.entries.length, conceptDigest.cardCount, "cardCount should match the entry list length");
+assert.ok(
+  conceptDigest.entries.some((entry) => entry.cardId === result.cards[0].id),
+  "the digest should include the card the concept was read from"
+);
+assert.ok(
+  conceptDigest.entries.every((entry) => result.cards.some((card) => card.id === entry.cardId)),
+  "every digest entry should point at a real card"
+);
+const digestRoles = ["foundation", "builds", "applies", "contrast"];
+assert.ok(
+  conceptDigest.entries.every((entry) => digestRoles.includes(entry.role) && entry.keyTakeaway.length > 0),
+  "every entry should carry a valid role and a non-empty takeaway"
+);
+const roleRank = Object.fromEntries(digestRoles.map((role, index) => [role, index]));
+const orderedByRole = conceptDigest.entries.every(
+  (entry, index) => index === 0 || roleRank[conceptDigest.entries[index - 1].role] <= roleRank[entry.role]
+);
+assert.ok(orderedByRole, "digest entries should read foundations -> builds -> applies -> contrasts");
+assert.equal(
+  buildConceptDigest("a-concept-no-card-mentions", result.cards).cardCount,
+  0,
+  "an unknown concept should produce an empty digest"
+);
+
+// Non-ASCII (Chinese) concepts must slug to distinct, non-empty keys instead of collapsing to "".
+const zhCards = [
+  {
+    id: "zh-1",
+    title: "记忆基础",
+    summary: "智能体如何记住上下文。",
+    keyTakeaway: "智能体需要持久记忆才能跨轮次工作。",
+    concepts: ["记忆", "AI 智能体"],
+    createdAt: "2026-01-01T00:00:00.000Z",
+    difficulty: "beginner"
+  },
+  {
+    id: "zh-2",
+    title: "评估方法",
+    summary: "如何衡量智能体质量。",
+    keyTakeaway: "没有评估就无法迭代。",
+    concepts: ["评估"],
+    createdAt: "2026-01-02T00:00:00.000Z"
+  }
+];
+const zhMemory = buildConceptDigest("记忆", zhCards);
+assert.equal(zhMemory.cardCount, 1, "a Chinese concept should match only its own card, not collapse to every card");
+assert.equal(zhMemory.entries[0].cardId, "zh-1", "the Chinese digest should resolve to the matching card");
+const zhEval = buildConceptDigest("评估", zhCards);
+assert.equal(zhEval.cardCount, 1, "a different Chinese concept should slug to a different, non-empty key");
+assert.equal(zhEval.entries[0].cardId, "zh-2", "distinct Chinese concepts must not bleed into each other");
 
 const fakePlayerResponse = {
   videoDetails: {

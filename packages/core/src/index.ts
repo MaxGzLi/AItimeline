@@ -6,6 +6,7 @@ export * from "./discovery/searchProvider.js";
 export * from "./discovery/sourceDiscovery.js";
 export * from "./fixtures.js";
 export * from "./graph/cardConnections.js";
+export * from "./graph/conceptDigest.js";
 export * from "./graph/knowledgeBoundary.js";
 export * from "./graph/knowledgeGraph.js";
 export * from "./harness/askGrounded.js";

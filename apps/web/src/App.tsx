@@ -1,5 +1,6 @@
 import {
   buildCardConnections,
+  buildConceptDigest,
   buildKnowledgeGraph,
   createReviewQueue,
   demoCards,
@@ -10,6 +11,7 @@ import {
   transformMockYouTubeUrl,
   type BackgroundSourceCandidate,
   type CardConnection,
+  type ConceptDigest,
   type InteractionSignal,
   type KnowledgeCard,
   type KnowledgeChunk,
@@ -39,6 +41,7 @@ import {
   GitBranch,
   Heart,
   Home,
+  Layers,
   Link,
   ListChecks,
   LoaderCircle,
@@ -72,12 +75,12 @@ function scrollMotion(): ScrollBehavior {
 }
 
 const navItems = [
-  { label: "Timeline", icon: Home, active: true },
-  { label: "Explore", icon: Compass },
-  { label: "Graph", icon: GitBranch },
-  { label: "Review", icon: Brain },
-  { label: "Agents", icon: Bot },
-  { label: "Settings", icon: Settings }
+  { label: "时间线", icon: Home, active: true },
+  { label: "发现", icon: Compass },
+  { label: "图谱", icon: GitBranch },
+  { label: "复习", icon: Brain },
+  { label: "智能体", icon: Bot },
+  { label: "设置", icon: Settings }
 ];
 
 type AiMessage = {
@@ -223,7 +226,7 @@ type SourceCandidateRecord = {
 export function App() {
   const [sourceUrl, setSourceUrl] = useState(sampleSourceUrl);
   const [candidateUrl, setCandidateUrl] = useState(`${apiBaseUrl}/fixtures/article-background`);
-  const [candidateConcept, setCandidateConcept] = useState(demoProfile.interests[0] ?? "AI Agent");
+  const [candidateConcept, setCandidateConcept] = useState(demoProfile.interests[0] ?? "智能体");
   const [sourceImports, setSourceImports] = useState<SourceImport[]>([]);
   const [importedCards, setImportedCards] = useState<KnowledgeCard[]>([]);
   const [sourceAssets, setSourceAssets] = useState<SourceAsset[]>([]);
@@ -238,14 +241,15 @@ export function App() {
   const [learningFeedback, setLearningFeedback] = useState<LearningFeedbackByPost>({});
   const [evidenceLedgers, setEvidenceLedgers] = useState<Record<string, EvidenceLedger | null>>({});
   const [apiStatus, setApiStatus] = useState<ApiStatus>("checking");
-  const [apiMessage, setApiMessage] = useState("Connecting to local API");
-  const [curationMessage, setCurationMessage] = useState("No worker run yet");
+  const [apiMessage, setApiMessage] = useState("正在连接本地 API");
+  const [curationMessage, setCurationMessage] = useState("还没运行过观察员");
   const [autoScoutEnabled, setAutoScoutEnabled] = useState(true);
   const [lastScoutAt, setLastScoutAt] = useState<string | null>(null);
   const [queuedJobCount, setQueuedJobCount] = useState(0);
-  const [memoryMessage, setMemoryMessage] = useState("No memory edits yet");
-  const [candidateMessage, setCandidateMessage] = useState("No queued source candidates yet");
+  const [memoryMessage, setMemoryMessage] = useState("还没有记忆改动");
+  const [candidateMessage, setCandidateMessage] = useState("还没有排队的候选源");
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
+  const [conceptView, setConceptView] = useState<string | null>(null);
   const [feedTab, setFeedTab] = useState<"foryou" | "latest">("foryou");
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -379,6 +383,10 @@ export function App() {
 
     return byCard;
   }, [allCards]);
+  const conceptDigest = useMemo<ConceptDigest | null>(
+    () => (conceptView ? buildConceptDigest(conceptView, allCards) : null),
+    [conceptView, allCards]
+  );
 
   // Keyboard navigation (X-style): j/k move a focus highlight between cards,
   // Enter opens the focused card, "/" jumps to search, Escape clears.
@@ -447,6 +455,7 @@ export function App() {
         case "Escape":
           setShortcutsOpen(false);
           setSelectedCardId(null);
+          setConceptView(null);
           setFocusedIndex(-1);
           break;
         default:
@@ -608,7 +617,7 @@ export function App() {
           saveSyncedSignalSignatures(syncedSignalSignatures.current);
         })
         .catch(() => {
-          setApiMessage("Signal sync failed; local feedback is still available");
+          setApiMessage("信号同步失败,本地反馈仍然可用");
         })
         .finally(() => {
           if (pendingSignalSignatures.current[signal.postId] === signature) {
@@ -691,7 +700,7 @@ export function App() {
 
     if (!options.silent) {
       setApiStatus("checking");
-      setApiMessage("Refreshing local API state");
+      setApiMessage("正在刷新本地 API 状态");
     }
 
     try {
@@ -718,14 +727,14 @@ export function App() {
       setSourceCandidates(snapshot.sourceCandidates);
       setQueuedJobCount(queuedJobs.jobs.length);
       setApiStatus("connected");
-      setApiMessage("Connected to local API");
+      setApiMessage("已连接本地 API");
     } catch (error) {
       if (requestId !== refreshSequence.current) {
         return;
       }
 
       setApiStatus("offline");
-      setApiMessage(error instanceof Error ? error.message : "Start npm run dev:api to use source imports");
+      setApiMessage(error instanceof Error ? error.message : "运行 npm run dev:api 才能使用来源导入");
     }
   }
 
@@ -736,12 +745,12 @@ export function App() {
       body: {
         url,
         createdAt: new Date().toISOString(),
-        recommendedBecause: "You imported this source from the Web timeline."
+        recommendedBecause: "你从 Web 时间线导入了这个来源。"
       }
     });
 
     setApiStatus("connected");
-    setApiMessage("Connected to local API");
+    setApiMessage("已连接本地 API");
 
     return result;
   }
@@ -830,9 +839,10 @@ export function App() {
         }
       });
 
-      setMemoryMessage(`${result.events.length} memory edits from ${action}`);
+      const actionLabel = { like: "点赞", save: "收藏", ask: "追问" }[action];
+      setMemoryMessage(`${actionLabel}产生了 ${result.events.length} 条记忆改动`);
     } catch {
-      setMemoryMessage("Memory API unavailable; kept local feedback");
+      setMemoryMessage("记忆 API 不可用,已保留本地反馈");
     }
   }
 
@@ -853,7 +863,7 @@ export function App() {
     const trimmedUrl = sourceUrl.trim();
 
     if (!trimmedUrl) {
-      setImportError("Paste an article or YouTube URL first.");
+      setImportError("请先粘贴一个文章或 YouTube 链接。");
       return;
     }
 
@@ -882,9 +892,9 @@ export function App() {
         });
         setSelectedCardId(result.cards[0]?.id ?? null);
         setApiStatus("offline");
-        setApiMessage("API unavailable; showing mock YouTube import locally");
+        setApiMessage("API 不可用,改用本地模拟的 YouTube 导入");
       } else {
-        setImportError(error instanceof Error ? error.message : "Import failed.");
+        setImportError(error instanceof Error ? error.message : "导入失败。");
       }
     } finally {
       setIsImporting(false);
@@ -898,7 +908,7 @@ export function App() {
     const trimmedConcept = candidateConcept.trim();
 
     if (!trimmedUrl || !trimmedConcept) {
-      setCandidateMessage("Add a URL and topic before queuing a candidate");
+      setCandidateMessage("加入队列前请先填好 URL 和话题");
       return;
     }
 
@@ -915,18 +925,18 @@ export function App() {
           relevanceScore: 0.74,
           noveltyScore: 0.66,
           qualityScore: 0.72,
-          reason: `Queued from the Web timeline for ${trimmedConcept}.`,
+          reason: `从 Web 时间线为「${trimmedConcept}」加入队列。`,
           discoveredAt: new Date().toISOString()
         }
       });
 
       setSourceCandidates((records) => upsertById(records, [result.record]));
-      setCandidateMessage(`Queued ${result.record.candidate.source.title}`);
+      setCandidateMessage(`已加入队列:${result.record.candidate.source.title}`);
       setApiStatus("connected");
-      setApiMessage("Connected to local API");
+      setApiMessage("已连接本地 API");
     } catch (error) {
       setApiStatus("offline");
-      setCandidateMessage(error instanceof Error ? error.message : "Could not queue source candidate");
+      setCandidateMessage(error instanceof Error ? error.message : "无法把候选源加入队列");
     } finally {
       setIsSavingCandidate(false);
     }
@@ -939,7 +949,7 @@ export function App() {
 
     curationRunInFlight.current = true;
     setIsRunningCuration(true);
-    setCurationMessage(trigger === "auto" ? "Auto scout running due jobs" : "Running due jobs");
+    setCurationMessage(trigger === "auto" ? "自动观察员正在处理到期任务" : "正在处理到期任务");
 
     try {
       const result = await apiRequest<ApiCurationRunResponse>("/api/curation/run", {
@@ -954,18 +964,19 @@ export function App() {
       const checkedAt = new Date().toISOString();
 
       setApiStatus("connected");
-      setApiMessage("Connected to local API");
+      setApiMessage("已连接本地 API");
       setLastScoutAt(checkedAt);
+      const scoutLabel = trigger === "auto" ? "自动观察员" : "观察员";
       setCurationMessage(
         result.records.length > 0
-          ? `${trigger === "auto" ? "Auto scout" : "Scout"} processed ${result.records.length} jobs · ${importedCount} source imports`
-          : `${trigger === "auto" ? "Auto scout" : "Scout"} checked · no due jobs`
+          ? `${scoutLabel}处理了 ${result.records.length} 个任务 · 导入 ${importedCount} 个来源`
+          : `${scoutLabel}已检查 · 没有到期任务`
       );
       await refreshFromApi({ silent: true });
     } catch (error) {
       setApiStatus("offline");
-      setApiMessage(error instanceof Error ? error.message : "API unavailable");
-      setCurationMessage("Worker could not run");
+      setApiMessage(error instanceof Error ? error.message : "API 不可用");
+      setCurationMessage("观察员无法运行");
     } finally {
       curationRunInFlight.current = false;
       setIsRunningCuration(false);
@@ -1044,6 +1055,15 @@ export function App() {
     }
   }
 
+  function handleOpenConcept(concept: string) {
+    setConceptView(concept);
+  }
+
+  function handleOpenCardFromConcept(cardId: string) {
+    setConceptView(null);
+    handleOpenCardId(cardId);
+  }
+
   function handleLike(card: RankedKnowledgeCard) {
     recordInteraction(card, { liked: true, skippedQuickly: false });
     void syncMemoryForCard(card, "like");
@@ -1079,7 +1099,7 @@ export function App() {
       void refreshFromApi({ silent: true });
     } catch (error) {
       setAgentMessage(
-        error instanceof Error ? error.message : "Agent request failed. Start npm run dev:api first."
+        error instanceof Error ? error.message : "Agent 请求失败，请先运行 npm run dev:api。"
       );
     } finally {
       setIsAgentAsking(false);
@@ -1114,7 +1134,7 @@ export function App() {
 
   return (
     <div className="app-shell">
-      <aside className="left-rail" aria-label="Primary">
+      <aside className="left-rail" aria-label="主导航">
         <div className="brand-mark">
           <div className="brand-icon">AI</div>
           <span>AITimeline</span>
@@ -1135,12 +1155,12 @@ export function App() {
         </nav>
 
         <section className="agent-brief">
-          <div className="section-label">Active Agent</div>
-          <h2>AI Knowledge Scout</h2>
+          <div className="section-label">当前智能体</div>
+          <h2>AI 知识观察员</h2>
           <p>{curationMessage}</p>
           <button className="primary-action" disabled={isRunningCuration} onClick={handleRunCuration} type="button">
             {isRunningCuration ? <LoaderCircle className="spin" size={18} /> : <RefreshCw size={18} />}
-            <span>{isRunningCuration ? "Running" : "Run Scout"}</span>
+            <span>{isRunningCuration ? "运行中" : "运行观察员"}</span>
           </button>
         </section>
       </aside>
@@ -1151,15 +1171,15 @@ export function App() {
             <div className="header-search">
               <Search size={18} />
               <input
-                aria-label="Search the timeline"
+                aria-label="搜索时间线"
                 autoFocus
                 onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="Search your timeline"
+                placeholder="搜索你的时间线"
                 value={searchQuery}
               />
               {searchQuery ? (
                 <button
-                  aria-label="Clear search"
+                  aria-label="清除搜索"
                   className="header-search-clear"
                   onClick={() => setSearchQuery("")}
                   type="button"
@@ -1170,8 +1190,8 @@ export function App() {
             </div>
           ) : (
             <div>
-              <p className="section-label">Today</p>
-              <h1>Knowledge Timeline</h1>
+              <p className="section-label">今天</p>
+              <h1>知识时间线</h1>
             </div>
           )}
           <div className="header-actions">
@@ -1185,27 +1205,27 @@ export function App() {
                   setSearchOpen(true);
                 }
               }}
-              title="Search"
+              title="搜索"
               type="button"
             >
               <Search size={19} />
             </button>
             <button
-              aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+              aria-label={theme === "dark" ? "切换到浅色模式" : "切换到深色模式"}
               className="icon-button"
               onClick={() => setTheme((value) => (value === "dark" ? "light" : "dark"))}
-              title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+              title={theme === "dark" ? "切换到浅色模式" : "切换到深色模式"}
               type="button"
             >
               {theme === "dark" ? <Sun size={19} /> : <Moon size={19} />}
             </button>
-            <button className="icon-button" title="Notifications" type="button">
+            <button className="icon-button" title="通知" type="button">
               <Bell size={19} />
             </button>
           </div>
         </header>
 
-        <div className="feed-tabs" role="tablist" aria-label="Feed view">
+        <div className="feed-tabs" role="tablist" aria-label="信息流视图">
           <button
             aria-selected={feedTab === "foryou"}
             className={`feed-tab${feedTab === "foryou" ? " active" : ""}`}
@@ -1213,7 +1233,7 @@ export function App() {
             role="tab"
             type="button"
           >
-            For you
+            推荐
           </button>
           <button
             aria-selected={feedTab === "latest"}
@@ -1222,18 +1242,18 @@ export function App() {
             role="tab"
             type="button"
           >
-            Latest
+            最新
           </button>
         </div>
 
-        <div className="topic-strip" aria-label="Topics">
+        <div className="topic-strip" aria-label="话题">
           <button
             aria-pressed={activeTopic === null}
             className={`topic-pill${activeTopic === null ? " active" : ""}`}
             onClick={() => setActiveTopic(null)}
             type="button"
           >
-            All
+            全部
           </button>
           {demoProfile.interests.map((interest) => (
             <button
@@ -1260,12 +1280,12 @@ export function App() {
           url={sourceUrl}
         />
 
-        <section className="feed-list" aria-label="Knowledge cards">
+        <section className="feed-list" aria-label="知识卡片">
           {visibleCards.length === 0 && (searchQuery.trim() || activeTopic) ? (
             <p className="feed-empty">
               {searchQuery.trim()
-                ? `No posts match “${searchQuery.trim()}”.`
-                : `No posts in “${activeTopic}”.`}
+                ? `没有匹配「${searchQuery.trim()}」的卡片。`
+                : `「${activeTopic}」下还没有卡片。`}
             </p>
           ) : (
             visibleCards.map((card, index) => (
@@ -1279,6 +1299,7 @@ export function App() {
                 onLike={handleLike}
                 onOpen={handleOpenCard}
                 onOpenCardId={handleOpenCardId}
+                onOpenConcept={handleOpenConcept}
                 onSave={handleSave}
                 onSkip={handleSkip}
                 signal={interactionSignals[card.id]}
@@ -1288,14 +1309,14 @@ export function App() {
           {visibleCards.length > 0 && (
             <div className="feed-end" role="status">
               <CheckCircle2 aria-hidden="true" className="feed-end-icon" size={22} />
-              <p className="feed-end-title">You&rsquo;re all caught up</p>
-              <p className="feed-end-sub">You&rsquo;ve reached the end of your timeline.</p>
+              <p className="feed-end-title">已经看完啦</p>
+              <p className="feed-end-sub">你已经刷到时间线的底部了。</p>
             </div>
           )}
         </section>
       </main>
 
-      <aside className="right-rail" aria-label="Context">
+      <aside className="right-rail" aria-label="上下文">
         <AgentAskPanel
           isAsking={isAgentAsking}
           message={agentMessage}
@@ -1328,10 +1349,10 @@ export function App() {
         <section className="context-section">
           <div className="rail-heading">
             <div>
-              <p className="section-label">Sources</p>
-              <h2>Imports</h2>
+              <p className="section-label">来源</p>
+              <h2>导入</h2>
             </div>
-            <button className="icon-button compact" title="Source imports">
+            <button className="icon-button compact" title="来源导入">
               <FileText size={18} />
             </button>
           </div>
@@ -1340,7 +1361,7 @@ export function App() {
             {sourceImports.length > 0 ? (
               sourceImports.map((sourceImport) => <ImportRow item={sourceImport} key={sourceImport.id} />)
             ) : (
-              <div className="empty-state">No imports yet</div>
+              <div className="empty-state">还没有导入</div>
             )}
           </div>
         </section>
@@ -1348,10 +1369,10 @@ export function App() {
         <section className="context-section">
           <div className="rail-heading">
             <div>
-              <p className="section-label">Graph</p>
-              <h2>Saved Concepts</h2>
+              <p className="section-label">图谱</p>
+              <h2>沉淀的概念</h2>
             </div>
-            <button className="icon-button compact" title="Open graph">
+            <button className="icon-button compact" title="打开图谱">
               <GitBranch size={18} />
             </button>
           </div>
@@ -1361,11 +1382,8 @@ export function App() {
               <button
                 className="graph-row"
                 key={node.id}
-                onClick={() => {
-                  setSearchOpen(true);
-                  setSearchQuery(node.label);
-                }}
-                title={`Search “${node.label}”`}
+                onClick={() => handleOpenConcept(node.label)}
+                title={`查看「${node.label}」的全部碎片`}
                 type="button"
               >
                 <span>{node.label}</span>
@@ -1378,10 +1396,10 @@ export function App() {
         <section className="context-section">
           <div className="rail-heading">
             <div>
-              <p className="section-label">Memory</p>
-              <h2>User Signals</h2>
+              <p className="section-label">记忆</p>
+              <h2>用户信号</h2>
             </div>
-            <button className="icon-button compact" title="Memory">
+            <button className="icon-button compact" title="记忆">
               <Brain size={18} />
             </button>
           </div>
@@ -1392,10 +1410,10 @@ export function App() {
         <section className="context-section">
           <div className="rail-heading">
             <div>
-              <p className="section-label">Review</p>
-              <h2>Due Soon</h2>
+              <p className="section-label">复习</p>
+              <h2>即将到期</h2>
             </div>
-            <button className="icon-button compact" title="Review queue">
+            <button className="icon-button compact" title="复习队列">
               <Brain size={18} />
             </button>
           </div>
@@ -1406,7 +1424,7 @@ export function App() {
                 className="review-row"
                 key={`${item.cardId}-${item.concept}`}
                 onClick={() => setSelectedCardId(item.cardId)}
-                title={`Open “${item.concept}” to review`}
+                title={`打开「${item.concept}」复习`}
                 type="button"
               >
                 <span>{item.concept}</span>
@@ -1419,10 +1437,10 @@ export function App() {
         <section className="context-section">
           <div className="rail-heading">
             <div>
-              <p className="section-label">Usage</p>
-              <h2>AI Credits</h2>
+              <p className="section-label">用量</p>
+              <h2>AI 额度</h2>
             </div>
-            <button className="icon-button compact" title="Usage details">
+            <button className="icon-button compact" title="用量详情">
               <MoreHorizontal size={18} />
             </button>
           </div>
@@ -1431,8 +1449,8 @@ export function App() {
             <div className="usage-fill" />
           </div>
           <div className="usage-copy">
-            <span>128 left</span>
-            <span>Pro beta</span>
+            <span>剩余 128</span>
+            <span>Pro 内测</span>
           </div>
         </section>
       </aside>
@@ -1455,9 +1473,17 @@ export function App() {
         />
       ) : null}
 
+      {conceptDigest && conceptDigest.cardCount > 0 ? (
+        <ConceptDigestPanel
+          digest={conceptDigest}
+          onClose={() => setConceptView(null)}
+          onOpenCardId={handleOpenCardFromConcept}
+        />
+      ) : null}
+
       {shortcutsOpen ? (
         <div
-          aria-label="Keyboard shortcuts"
+          aria-label="键盘快捷键"
           aria-modal="true"
           className="shortcuts-overlay"
           onClick={() => setShortcutsOpen(false)}
@@ -1465,9 +1491,9 @@ export function App() {
         >
           <div className="shortcuts-modal" onClick={(event) => event.stopPropagation()}>
             <div className="shortcuts-head">
-              <h2>Keyboard shortcuts</h2>
+              <h2>键盘快捷键</h2>
               <button
-                aria-label="Close shortcuts"
+                aria-label="关闭快捷键"
                 className="icon-button compact"
                 onClick={() => setShortcutsOpen(false)}
                 type="button"
@@ -1478,43 +1504,43 @@ export function App() {
             <ul className="shortcuts-list">
               <li>
                 <kbd>j</kbd>
-                <span>Next post</span>
+                <span>下一张卡</span>
               </li>
               <li>
                 <kbd>k</kbd>
-                <span>Previous post</span>
+                <span>上一张卡</span>
               </li>
               <li>
                 <kbd>g</kbd>
-                <span>Jump to top</span>
+                <span>回到顶部</span>
               </li>
               <li>
                 <kbd>Enter</kbd>
-                <span>Open thread</span>
+                <span>展开卡片</span>
               </li>
               <li>
                 <kbd>l</kbd>
-                <span>Like post</span>
+                <span>点赞</span>
               </li>
               <li>
                 <kbd>s</kbd>
-                <span>Save post</span>
+                <span>收藏</span>
               </li>
               <li>
                 <kbd>/</kbd>
-                <span>Search</span>
+                <span>搜索</span>
               </li>
               <li>
                 <kbd>t</kbd>
-                <span>Toggle theme</span>
+                <span>切换主题</span>
               </li>
               <li>
                 <kbd>?</kbd>
-                <span>Toggle this menu</span>
+                <span>开关此菜单</span>
               </li>
               <li>
                 <kbd>Esc</kbd>
-                <span>Close / clear</span>
+                <span>关闭 / 清除</span>
               </li>
             </ul>
           </div>
@@ -1523,10 +1549,10 @@ export function App() {
 
       {showScrollTop && !selectedCard ? (
         <button
-          aria-label="Scroll to top"
+          aria-label="回到顶部"
           className="scroll-top-button"
           onClick={() => window.scrollTo({ top: 0, behavior: scrollMotion() })}
-          title="Back to top"
+          title="回到顶部"
           type="button"
         >
           <ArrowUp size={20} />
@@ -1560,9 +1586,9 @@ function AgentAskPanel({
       <div className="rail-heading">
         <div>
           <p className="section-label">Agent</p>
-          <h2>Ask Your Knowledge</h2>
+          <h2>问你的知识库</h2>
         </div>
-        <button className="icon-button compact" title="Agent entry">
+        <button className="icon-button compact" title="Agent 入口">
           <Bot size={18} />
         </button>
       </div>
@@ -1571,15 +1597,15 @@ function AgentAskPanel({
         <label className="candidate-input">
           <Sparkles size={16} />
           <input
-            aria-label="Ask the agent a question"
+            aria-label="向 Agent 提问"
             onChange={(event) => onQuestionChange(event.target.value)}
-            placeholder="Ask about anything you are learning"
+            placeholder="问任何你正在学的内容"
             value={question}
           />
         </label>
         <button className="primary-action candidate-submit" disabled={isAsking} type="submit">
           {isAsking ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}
-          <span>{isAsking ? "Asking" : "Ask"}</span>
+          <span>{isAsking ? "提问中" : "提问"}</span>
         </button>
       </form>
 
@@ -1609,7 +1635,7 @@ function AgentAskPanel({
                   type="button"
                 >
                   <FileText size={16} />
-                  <span>Open the cited card</span>
+                  <span>打开引用的卡片</span>
                 </button>
               ) : null}
             </>
@@ -1623,8 +1649,7 @@ function AgentAskPanel({
 
           {response && response.discoveredCandidates.length > 0 ? (
             <div className="candidate-message">
-              {pluralize(response.discoveredCandidates.length, "source candidate", "source candidates")} queued for
-              discovery.
+              已发现 {response.discoveredCandidates.length} 个来源候选，等待后台整理。
             </div>
           ) : null}
 
@@ -1643,18 +1668,18 @@ function AgentAskPanel({
 
 function formatBoundaryZone(zone: AgentBoundaryZone): string {
   if (zone === "inside") {
-    return "Inside your boundary";
+    return "已在你的知识边界内";
   }
 
   if (zone === "learning") {
-    return "In your learning zone";
+    return "在你的学习区";
   }
 
   if (zone === "frontier") {
-    return "On your frontier";
+    return "在你的知识前沿";
   }
 
-  return "Outside your knowledge base";
+  return "在你的知识库之外";
 }
 
 function SourceCandidatePanel({
@@ -1696,10 +1721,10 @@ function SourceCandidatePanel({
     <section className="context-section candidate-section">
       <div className="rail-heading">
         <div>
-          <p className="section-label">Source Queue</p>
-          <h2>Candidates</h2>
+          <p className="section-label">来源队列</p>
+          <h2>候选源</h2>
         </div>
-        <button className="icon-button compact" title="Candidate sources">
+        <button className="icon-button compact" title="候选来源">
           <Link size={18} />
         </button>
       </div>
@@ -1708,24 +1733,24 @@ function SourceCandidatePanel({
         <label className="candidate-input">
           <Link size={16} />
           <input
-            aria-label="Candidate source URL"
+            aria-label="候选来源 URL"
             onChange={(event) => onUrlChange(event.target.value)}
-            placeholder="Source URL"
+            placeholder="来源 URL"
             value={candidateUrl}
           />
         </label>
         <label className="candidate-input">
           <Sparkles size={16} />
           <input
-            aria-label="Candidate topic"
+            aria-label="候选话题"
             onChange={(event) => onConceptChange(event.target.value)}
-            placeholder="Topic"
+            placeholder="话题"
             value={candidateConcept}
           />
         </label>
         <button className="primary-action candidate-submit" disabled={isSaving} type="submit">
           {isSaving ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}
-          <span>{isSaving ? "Queuing" : "Queue"}</span>
+          <span>{isSaving ? "排队中" : "加入队列"}</span>
         </button>
       </form>
 
@@ -1737,13 +1762,13 @@ function SourceCandidatePanel({
           onChange={(event) => onAutoScoutChange(event.target.checked)}
           type="checkbox"
         />
-        <span>Auto scout</span>
-        <strong>{hasQueuedScoutWork ? `${queuedJobCount} queued jobs` : "Idle"}</strong>
+        <span>自动观察员</span>
+        <strong>{hasQueuedScoutWork ? `${queuedJobCount} 个排队任务` : "空闲"}</strong>
       </label>
 
       <button className="secondary-action candidate-worker" disabled={isRunningCuration} onClick={onRunCuration} type="button">
         {isRunningCuration ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}
-        <span>{isRunningCuration ? "Running" : "Run Scout"}</span>
+        <span>{isRunningCuration ? "运行中" : "运行观察员"}</span>
       </button>
       <div className="candidate-message">
         {curationMessage}
@@ -1757,14 +1782,14 @@ function SourceCandidatePanel({
               <div>
                 <span>{record.candidate.source.title}</span>
                 <small>
-                  {formatCandidateStatus(record.status)} · {record.candidate.conceptIds.slice(0, 2).join(", ") || "general"}
+                  {formatCandidateStatus(record.status)} · {record.candidate.conceptIds.slice(0, 2).join("、") || "通用"}
                 </small>
               </div>
               <strong>{Math.round(record.candidate.relevanceScore * 100)}</strong>
             </div>
           ))
         ) : (
-          <div className="empty-state">No candidates yet</div>
+          <div className="empty-state">还没有候选源</div>
         )}
       </div>
     </section>
@@ -1796,12 +1821,12 @@ function SourceImportPanel({
     <section className="source-import">
       <div className="source-import-heading">
         <div>
-          <p className="section-label">Source Agent</p>
-          <h2>URL Import</h2>
+          <p className="section-label">来源智能体</p>
+          <h2>URL 导入</h2>
         </div>
         <div className={`source-kind ${apiStatus}`}>
           {apiStatus === "connected" ? <CheckCircle2 size={17} /> : <Video size={17} />}
-          <span>{apiStatus === "connected" ? "API" : apiStatus === "checking" ? "Checking" : "Offline"}</span>
+          <span>{apiStatus === "connected" ? "已连接" : apiStatus === "checking" ? "连接中" : "离线"}</span>
         </div>
       </div>
 
@@ -1809,15 +1834,15 @@ function SourceImportPanel({
         <label className="source-input-shell">
           <Link size={18} />
           <input
-            aria-label="Source URL"
+            aria-label="来源 URL"
             onChange={(event) => onUrlChange(event.target.value)}
-            placeholder="Paste article or YouTube URL"
+            placeholder="粘贴文章或 YouTube 链接"
             value={url}
           />
         </label>
         <button className="primary-action source-submit" disabled={isImporting} type="submit">
           {isImporting ? <LoaderCircle className="spin" size={18} /> : <Send size={18} />}
-          <span>{isImporting ? "Importing" : "Import"}</span>
+          <span>{isImporting ? "导入中" : "导入"}</span>
         </button>
       </form>
 
@@ -1829,7 +1854,7 @@ function SourceImportPanel({
           </span>
         ) : (
           <span>
-            {latestImport ? formatStatus(latestImport.status) : "Ready"} · {cardCount} generated posts · {apiMessage}
+            {latestImport ? formatStatus(latestImport.status) : "就绪"} · 生成了 {cardCount} 张卡 · {apiMessage}
           </span>
         )}
       </div>
@@ -1874,6 +1899,7 @@ function KnowledgeCardView({
   onLike,
   onOpen,
   onOpenCardId,
+  onOpenConcept,
   onSave,
   onSkip,
   signal
@@ -1886,6 +1912,7 @@ function KnowledgeCardView({
   onLike: (card: RankedKnowledgeCard) => void;
   onOpen: (card: RankedKnowledgeCard) => void;
   onOpenCardId: (cardId: string) => void;
+  onOpenConcept: (concept: string) => void;
   onSave: (card: RankedKnowledgeCard) => void;
   onSkip: (card: RankedKnowledgeCard) => void;
   signal?: InteractionSignal;
@@ -1902,7 +1929,7 @@ function KnowledgeCardView({
   const readBlock = getReadBlock(card);
   const learnPrompts = card.reviewPrompts?.slice(0, 2) ?? [];
   const topConnection = connections[0];
-  const primaryConcept = card.concepts[0] ?? "Knowledge";
+  const primaryConcept = card.concepts[0] ?? "知识";
   const source = card.sources[0];
 
   useEffect(() => {
@@ -1963,9 +1990,9 @@ function KnowledgeCardView({
     return (
       <article className="knowledge-card dismissed" ref={cardRef}>
         <div className="card-dismissed">
-          <p>Not interested — we'll show fewer posts like this.</p>
+          <p>不感兴趣 —— 以后会少推这类卡片。</p>
           <button className="card-dismissed-undo" onClick={() => setDismissed(false)} type="button">
-            Undo
+            撤销
           </button>
         </div>
       </article>
@@ -1984,7 +2011,7 @@ function KnowledgeCardView({
             <strong>{getAgentName(primaryConcept)}</strong>
             <span>@{slugConcept(primaryConcept)}</span>
             <span title={formatFullTimestamp(card.createdAt)}>{formatRelativeTime(card.createdAt)}</span>
-            <span>{card.estimatedReadMinutes}m read</span>
+            <span>阅读 {card.estimatedReadMinutes} 分钟</span>
           </div>
           <div className="post-header-badges">
             <span className={`trust-badge ${card.trustState}`}>{formatTrustState(card.trustState)}</span>
@@ -2002,7 +2029,7 @@ function KnowledgeCardView({
           <button className="post-claim-card" onClick={() => onOpen(card)} type="button">
             <span>
               <Sparkles size={15} />
-              Agent take
+              智能体观点
             </span>
             <p>{card.thesis ?? readBlock.body}</p>
           </button>
@@ -2027,13 +2054,13 @@ function KnowledgeCardView({
               type="button"
             >
               <ChevronDown className={`thread-chevron${threadExpanded ? " open" : ""}`} size={16} />
-              <span>{threadExpanded ? "Show less" : `Show this thread · ${pluralize(fullThread.length, "reply", "replies")}`}</span>
+              <span>{threadExpanded ? "收起" : `展开这条 · ${fullThread.length} 条回应`}</span>
             </button>
           ) : (
             <button className="thread-count-button" onClick={() => onOpen(card)} type="button">
               <MessageCircle size={16} />
               <span>
-                Open thread · {pluralize(fullThread.length, "reply", "replies")} · {pluralize(card.reviewPrompts?.length ?? 0, "check", "checks")} ready
+                展开卡片 · {fullThread.length} 条回应 · {card.reviewPrompts?.length ?? 0} 个小测
               </span>
             </button>
           )}
@@ -2044,7 +2071,7 @@ function KnowledgeCardView({
             {learnPrompts[0] ? (
               <button className="feed-prompt" onClick={() => onSave(card)} type="button">
                 <Brain size={16} />
-                <span>Review</span>
+                <span>复习</span>
                 <strong>{learnPrompts[0].prompt}</strong>
               </button>
             ) : null}
@@ -2052,7 +2079,7 @@ function KnowledgeCardView({
               <button
                 className="feed-prompt"
                 onClick={() => onOpenCardId(topConnection.cardId)}
-                title={`${formatConnectionKind(topConnection.kind)} · via ${topConnection.concept}`}
+                title={`${formatConnectionKind(topConnection.kind)} · 通过「${topConnection.concept}」`}
                 type="button"
               >
                 <Route size={16} />
@@ -2064,7 +2091,7 @@ function KnowledgeCardView({
         ) : null}
 
         <div className="post-social-context">
-          <span>For you: {card.recommendedBecause}</span>
+          <span>为你推荐:{card.recommendedBecause}</span>
           <span>{formatCardSource(card)}</span>
           {source?.author ? <span>{source.author}</span> : null}
         </div>
@@ -2077,7 +2104,7 @@ function KnowledgeCardView({
         ) : null}
 
         {card.scoreReasons.length > 0 ? (
-          <div className="recommendation-reasons" aria-label="Recommendation reasons">
+          <div className="recommendation-reasons" aria-label="推荐理由">
             {card.scoreReasons.slice(0, 3).map((reason) => (
               <span key={reason}>{reason}</span>
             ))}
@@ -2086,31 +2113,39 @@ function KnowledgeCardView({
 
         <div className="concept-list">
           {card.concepts.slice(0, 3).map((concept) => (
-            <span key={concept}>{concept}</span>
+            <button
+              className="concept-chip"
+              key={concept}
+              onClick={() => onOpenConcept(concept)}
+              title={`查看「${concept}」的全部碎片`}
+              type="button"
+            >
+              {concept}
+            </button>
           ))}
           {card.concepts.length > 3 ? <span>+{card.concepts.length - 3}</span> : null}
         </div>
 
         <footer className="card-footer">
           <div className="social-metrics">
-            <span>{Math.max(12, Math.round(card.score))} useful</span>
-            <span>{pluralize(card.thread?.length ?? 0, "reply", "replies")}</span>
-            <span>{pluralize(card.reviewPrompts?.length ?? 0, "check", "checks")}</span>
+            <span>{Math.max(12, Math.round(card.score))} 有用</span>
+            <span>{card.thread?.length ?? 0} 条回应</span>
+            <span>{card.reviewPrompts?.length ?? 0} 个小测</span>
           </div>
           <div className="card-actions">
-            <button className={`icon-button compact ${signal?.liked ? "selected" : ""}`} onClick={() => onLike(card)} title="Like">
+            <button className={`icon-button compact ${signal?.liked ? "selected" : ""}`} onClick={() => onLike(card)} title="点赞">
               <Heart size={18} />
             </button>
-            <button className={`icon-button compact ${signal?.saved ? "selected" : ""}`} onClick={() => onSave(card)} title="Save">
+            <button className={`icon-button compact ${signal?.saved ? "selected" : ""}`} onClick={() => onSave(card)} title="收藏">
               <Bookmark size={18} />
             </button>
-            <button className="icon-button compact" onClick={() => onOpen(card)} title="Ask AI">
+            <button className="icon-button compact" onClick={() => onOpen(card)} title="问 AI">
               <MessageCircle size={18} />
             </button>
-            <button className="icon-button compact" onClick={() => onOpen(card)} title="View source">
+            <button className="icon-button compact" onClick={() => onOpen(card)} title="查看来源">
               <Quote size={18} />
             </button>
-            <button className="icon-button compact" onClick={() => onOpen(card)} title="Explain">
+            <button className="icon-button compact" onClick={() => onOpen(card)} title="讲解">
               <CircleHelp size={18} />
             </button>
             <button
@@ -2119,7 +2154,7 @@ function KnowledgeCardView({
                 onSkip(card);
                 setDismissed(true);
               }}
-              title="Not interested"
+              title="不感兴趣"
             >
               <XCircle size={18} />
             </button>
@@ -2178,7 +2213,7 @@ function SourceDetailDrawer({
 
   return (
     <aside
-      aria-label="Source detail"
+      aria-label="来源详情"
       aria-modal="true"
       className="detail-drawer"
       ref={drawerRef}
@@ -2187,10 +2222,10 @@ function SourceDetailDrawer({
     >
       <div className="drawer-header">
         <div>
-          <p className="section-label">Grounded Card</p>
+          <p className="section-label">有据可查的卡片</p>
           <h2>{card.title}</h2>
         </div>
-        <button className="icon-button compact" onClick={onClose} title="Close">
+        <button className="icon-button compact" onClick={onClose} title="关闭">
           <XCircle size={18} />
         </button>
       </div>
@@ -2198,15 +2233,15 @@ function SourceDetailDrawer({
       <section className="drawer-section">
         <div className="drawer-section-heading">
           <Quote size={18} />
-          <h3>Citation</h3>
+          <h3>引用出处</h3>
         </div>
-        <p>{source?.title ?? "Unknown source"}</p>
+        <p>{source?.title ?? "未知来源"}</p>
         {citation?.startTimeSeconds !== undefined ? (
           <a className="timestamp-link" href={buildTimestampUrl(source?.url, citation.startTimeSeconds)}>
             {formatTimestamp(citation.startTimeSeconds)}-{formatTimestamp(citation.endTimeSeconds ?? citation.startTimeSeconds)}
           </a>
         ) : (
-          <span className="muted-copy">No citation available</span>
+          <span className="muted-copy">暂无引用</span>
         )}
       </section>
 
@@ -2215,7 +2250,7 @@ function SourceDetailDrawer({
       <section className="drawer-section">
         <div className="drawer-section-heading">
           <Sparkles size={18} />
-          <h3>Agent Takeaway</h3>
+          <h3>智能体要点</h3>
         </div>
         <p>{card.keyTakeaway}</p>
       </section>
@@ -2224,7 +2259,7 @@ function SourceDetailDrawer({
         <section className="drawer-section">
           <div className="drawer-section-heading">
             <MessageCircle size={18} />
-            <h3>Thread</h3>
+            <h3>延展</h3>
           </div>
           <div className="thread-block-list">
             {card.thread.map((block) => (
@@ -2241,7 +2276,7 @@ function SourceDetailDrawer({
       <section className="drawer-section">
         <div className="drawer-section-heading">
           <FileText size={18} />
-          <h3>Source Chunks</h3>
+          <h3>来源片段</h3>
         </div>
         <div className="chunk-list">
           {chunks.length > 0 ? (
@@ -2252,7 +2287,7 @@ function SourceDetailDrawer({
               </div>
             ))
           ) : (
-            <p className="muted-copy">{asset?.content ?? "This demo card has no imported transcript yet."}</p>
+            <p className="muted-copy">{asset?.content ?? "这张示例卡片还没有导入转录文本。"}</p>
           )}
         </div>
       </section>
@@ -2261,7 +2296,7 @@ function SourceDetailDrawer({
         <section className="drawer-section">
           <div className="drawer-section-heading">
             <Route size={18} />
-            <h3>Graph Edges</h3>
+            <h3>图谱关系</h3>
           </div>
           <div className="edge-list">
             {card.graphEdges.map((edge) => (
@@ -2269,7 +2304,7 @@ function SourceDetailDrawer({
                 <strong>
                   {edge.sourceConcept} → {edge.targetConcept}
                 </strong>
-                <span>{edge.relation}</span>
+                <span>{formatEdgeRelation(edge.relation)}</span>
                 <p>{edge.evidence}</p>
               </div>
             ))}
@@ -2281,12 +2316,12 @@ function SourceDetailDrawer({
         <section className="drawer-section">
           <div className="drawer-section-heading">
             <ListChecks size={18} />
-            <h3>Review & Next Actions</h3>
+            <h3>复习与下一步</h3>
           </div>
           <div className="review-prompt-list">
             {card.reviewPrompts?.map((prompt) => (
               <div className="review-prompt-row" key={prompt.id}>
-                <span>{prompt.kind} · {prompt.dueInDays}d</span>
+                <span>{formatReviewPromptKind(prompt.kind)} · {prompt.dueInDays} 天后</span>
                 <p>{prompt.prompt}</p>
                 <small>{prompt.answerHint}</small>
               </div>
@@ -2305,7 +2340,7 @@ function SourceDetailDrawer({
       <section className="drawer-section">
         <div className="drawer-section-heading">
           <Brain size={18} />
-          <h3>Feedback Loop</h3>
+          <h3>反馈闭环</h3>
         </div>
         {feedback ? (
           <div className={`feedback-panel ${feedback.inferredState}`}>
@@ -2314,10 +2349,10 @@ function SourceDetailDrawer({
               <strong>{formatNextAction(feedback.nextAction)}</strong>
             </div>
             <p>{feedback.reason}</p>
-            <small>Signal strength {feedback.signalStrength}</small>
+            <small>信号强度 {feedback.signalStrength}</small>
           </div>
         ) : (
-          <p className="muted-copy">Open, like, save, ask, or skip this post to generate feedback.</p>
+          <p className="muted-copy">展开、点赞、收藏、追问或划走这张卡,都会生成反馈。</p>
         )}
         {signal ? (
           <div className="signal-chip-list">
@@ -2332,21 +2367,21 @@ function SourceDetailDrawer({
         <section className="drawer-section">
           <div className="drawer-section-heading">
             <GitBranch size={18} />
-            <h3>Connections</h3>
+            <h3>关联</h3>
           </div>
-          <p className="muted-copy">How this fragment connects to cards you have collected.</p>
+          <p className="muted-copy">这张碎片和你收集过的卡片怎么连起来。</p>
           <div className="connection-list">
             {connections.map((connection) => (
               <button
                 className="connection-row"
                 key={`${connection.kind}-${connection.cardId}`}
                 onClick={() => onOpenCardId(connection.cardId)}
-                title={`Open “${connection.title}”`}
+                title={`打开「${connection.title}」`}
                 type="button"
               >
                 <span className={`connection-kind ${connection.kind}`}>{formatConnectionKind(connection.kind)}</span>
                 <strong>{connection.title}</strong>
-                <small>via {connection.concept}</small>
+                <small>通过「{connection.concept}」</small>
               </button>
             ))}
           </div>
@@ -2356,29 +2391,29 @@ function SourceDetailDrawer({
       <section className="drawer-section">
         <div className="drawer-section-heading">
           <GraduationCap size={18} />
-          <h3>Ask AI</h3>
+          <h3>问 AI</h3>
         </div>
         <div className="chat-list">
           {messages.length > 0 ? (
             messages.map((message) => (
               <div className={`chat-message ${message.role}`} key={message.id}>
-                <span>{message.role === "assistant" ? "AI" : "You"}</span>
+                <span>{message.role === "assistant" ? "AI" : "你"}</span>
                 <p>{message.content}</p>
               </div>
             ))
           ) : (
-            <p className="muted-copy">Ask how this connects to your memory, graph, or review queue.</p>
+            <p className="muted-copy">问问它和你的记忆、图谱或复习队列怎么连起来。</p>
           )}
         </div>
 
         <form className="ask-form" onSubmit={onAsk}>
           <input
-            aria-label="Ask AI about this card"
+            aria-label="就这张卡片问 AI"
             onChange={(event) => onPromptChange(event.target.value)}
-            placeholder="Ask about this source"
+            placeholder="就这个来源提问"
             value={prompt}
           />
-          <button className="icon-button" title="Send question" type="submit">
+          <button className="icon-button" title="发送问题" type="submit">
             <Send size={18} />
           </button>
         </form>
@@ -2392,24 +2427,24 @@ function EvidenceLedgerPanel({ ledger }: { ledger?: EvidenceLedger | null }) {
     <section className="drawer-section evidence-ledger-section">
       <div className="drawer-section-heading">
         <CheckCircle2 size={18} />
-        <h3>Evidence Ledger</h3>
+        <h3>证据账本</h3>
       </div>
 
       {ledger === undefined ? (
-        <p className="muted-copy">Checking source grounding...</p>
+        <p className="muted-copy">正在核对来源依据……</p>
       ) : ledger === null ? (
-        <p className="muted-copy">No evidence ledger is available for this card yet.</p>
+        <p className="muted-copy">这张卡片暂时还没有证据账本。</p>
       ) : (
         <>
           <div className="evidence-summary">
-            <span className="evidence-stat passed">{ledger.summary.passed} passed</span>
-            <span className="evidence-stat warning">{pluralize(ledger.summary.warnings, "warning", "warnings")}</span>
-            <span className="evidence-stat failed">{ledger.summary.failed} failed</span>
+            <span className="evidence-stat passed">{ledger.summary.passed} 通过</span>
+            <span className="evidence-stat warning">{ledger.summary.warnings} 警告</span>
+            <span className="evidence-stat failed">{ledger.summary.failed} 失败</span>
           </div>
           <div className="evidence-meta">
-            <span>{pluralize(ledger.summary.citedSources, "source", "sources")}</span>
-            <span>{pluralize(ledger.summary.citedChunks, "chunk", "chunks")}</span>
-            <span>{pluralize(ledger.summary.totalClaims, "claim", "claims")}</span>
+            <span>{ledger.summary.citedSources} 个来源</span>
+            <span>{ledger.summary.citedChunks} 个片段</span>
+            <span>{ledger.summary.totalClaims} 条主张</span>
           </div>
           <div className="evidence-claim-list">
             {ledger.claims.slice(0, 5).map((claim) => (
@@ -2421,10 +2456,10 @@ function EvidenceLedgerPanel({ ledger }: { ledger?: EvidenceLedger | null }) {
                 <p>{claim.claim}</p>
                 {claim.evidence[0] ? (
                   <small>
-                    {claim.evidence[0].sourceTitle} · {Math.round(claim.evidence[0].overlapScore * 100)}% overlap
+                    {claim.evidence[0].sourceTitle} · 重叠 {Math.round(claim.evidence[0].overlapScore * 100)}%
                   </small>
                 ) : (
-                  <small>No source chunk resolved</small>
+                  <small>没有匹配到来源片段</small>
                 )}
               </div>
             ))}
@@ -2449,7 +2484,7 @@ function ensureRankedCards(cards: KnowledgeCard[]): RankedKnowledgeCard[] {
     return {
       ...card,
       score: 0,
-      scoreReasons: [card.recommendedBecause || "Imported source is ready for exploration"]
+      scoreReasons: [card.recommendedBecause || "导入的来源已经可以开始探索"]
     };
   });
 }
@@ -2469,11 +2504,6 @@ function upsertImport(imports: SourceImport[], nextImport: SourceImport): Source
   return [nextImport, ...imports.filter((item) => item.id !== nextImport.id)];
 }
 
-// Count + noun with correct singular/plural (reply→replies is irregular, so no naive "+s").
-function pluralize(count: number, singular: string, plural: string): string {
-  return `${count} ${count === 1 ? singular : plural}`;
-}
-
 function getTimelineThreadPreview(card: KnowledgeCard): NonNullable<KnowledgeCard["thread"]> {
   return (
     card.thread
@@ -2483,13 +2513,13 @@ function getTimelineThreadPreview(card: KnowledgeCard): NonNullable<KnowledgeCar
 }
 
 function getAgentName(concept: string): string {
-  if (concept === "RAG") return "RAG Field Notes";
-  if (concept === "AI Agent") return "Agent Lab";
-  if (concept === "Product Strategy") return "Product Loop";
-  if (concept === "NotebookLM") return "Source Grounding";
-  if (concept === "Recommendation") return "Ranking Desk";
+  if (concept === "RAG") return "RAG 实战笔记";
+  if (concept === "智能体") return "智能体实验室";
+  if (concept === "产品策略") return "产品闭环";
+  if (concept === "知识图谱") return "图谱工作台";
+  if (concept === "评估") return "评估台";
 
-  return `${concept} Scout`;
+  return `${concept} 观察员`;
 }
 
 function getAgentInitials(concept: string): string {
@@ -2505,7 +2535,7 @@ function getReadBlock(card: KnowledgeCard): { title: string; body: string } {
   const explainBlock = card.thread?.find((block) => block.kind === "explain");
 
   return {
-    title: explainBlock?.title ?? "Core idea",
+    title: explainBlock?.title ?? "核心观点",
     body: explainBlock?.body ?? card.thesis ?? card.shortBody ?? card.summary
   };
 }
@@ -2545,25 +2575,26 @@ function getTopicId(card: KnowledgeCard): string {
 }
 
 function slugConcept(concept: string): string {
-  return concept.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+  // Keep Unicode letters/digits so non-ASCII concepts (e.g. Chinese) slug to a distinct key.
+  return concept.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/(^-|-$)/g, "");
 }
 
 function formatTrustState(state: TrustState): string {
   const labels: Record<TrustState, string> = {
-    emerging: "Emerging",
-    supported: "Supported",
-    contested: "Contested"
+    emerging: "萌芽",
+    supported: "已支撑",
+    contested: "有争议"
   };
   return labels[state];
 }
 
 function formatStatus(status: TransformationStatus): string {
   const labels: Record<TransformationStatus, string> = {
-    queued: "Queued",
-    extracting: "Extracting",
-    transforming: "Transforming",
-    ready: "Ready",
-    failed: "Failed"
+    queued: "排队中",
+    extracting: "抽取中",
+    transforming: "转化中",
+    ready: "就绪",
+    failed: "失败"
   };
 
   return labels[status];
@@ -2571,10 +2602,10 @@ function formatStatus(status: TransformationStatus): string {
 
 function formatCandidateStatus(status: SourceCandidateStatus): string {
   const labels: Record<SourceCandidateStatus, string> = {
-    pending: "Pending",
-    queued: "Queued",
-    imported: "Imported",
-    dismissed: "Dismissed"
+    pending: "待处理",
+    queued: "已排队",
+    imported: "已导入",
+    dismissed: "已忽略"
   };
 
   return labels[status];
@@ -2582,35 +2613,35 @@ function formatCandidateStatus(status: SourceCandidateStatus): string {
 
 function formatLearningState(state: LearningFeedback["inferredState"]): string {
   const labels: Record<LearningFeedback["inferredState"], string> = {
-    interested: "Interested",
-    confused: "Confused",
-    fatigued: "Fatigued",
-    not_relevant: "Weak signal",
-    needs_review: "Needs review"
+    interested: "感兴趣",
+    confused: "有困惑",
+    fatigued: "疲劳",
+    not_relevant: "信号弱",
+    needs_review: "待复习"
   };
 
   return labels[state];
 }
 
 function formatSignalChips(signal: InteractionSignal): string[] {
-  const chips = ["Impression"];
+  const chips = ["曝光"];
 
-  if (signal.dwellTimeMs > 0) chips.push(`${Math.round(signal.dwellTimeMs / 1000)}s dwell`);
-  if (signal.openedThread) chips.push("Thread opened");
-  if (signal.liked) chips.push("Liked");
-  if (signal.saved) chips.push("Saved");
-  if (signal.askedQuestion) chips.push("Asked");
-  if (signal.reviewed) chips.push("Reviewed");
-  if (signal.skippedQuickly) chips.push("Skipped");
+  if (signal.dwellTimeMs > 0) chips.push(`停留 ${Math.round(signal.dwellTimeMs / 1000)} 秒`);
+  if (signal.openedThread) chips.push("展开了卡");
+  if (signal.liked) chips.push("点赞");
+  if (signal.saved) chips.push("收藏");
+  if (signal.askedQuestion) chips.push("追问");
+  if (signal.reviewed) chips.push("已复习");
+  if (signal.skippedQuickly) chips.push("划走");
 
   return chips;
 }
 
 function formatDifficulty(value: NonNullable<KnowledgeCard["difficulty"]>): string {
   const labels: Record<NonNullable<KnowledgeCard["difficulty"]>, string> = {
-    beginner: "Beginner",
-    intermediate: "Intermediate",
-    advanced: "Advanced"
+    beginner: "入门",
+    intermediate: "进阶",
+    advanced: "高级"
   };
 
   return labels[value];
@@ -2618,13 +2649,75 @@ function formatDifficulty(value: NonNullable<KnowledgeCard["difficulty"]>): stri
 
 function formatConnectionKind(kind: CardConnection["kind"]): string {
   const labels: Record<CardConnection["kind"], string> = {
-    builds_on: "Builds on",
-    leads_to: "Leads to",
-    contrast: "Contrast",
-    related: "Related"
+    builds_on: "承接自",
+    leads_to: "延伸到",
+    contrast: "对比",
+    related: "相关"
   };
 
   return labels[kind];
+}
+
+type ConceptDigestRole = ConceptDigest["entries"][number]["role"];
+
+function formatConceptRole(role: ConceptDigestRole): string {
+  const labels: Record<ConceptDigestRole, string> = {
+    foundation: "基础",
+    builds: "递进",
+    applies: "应用",
+    contrast: "对比"
+  };
+
+  return labels[role];
+}
+
+function ConceptDigestPanel({
+  digest,
+  onClose,
+  onOpenCardId
+}: {
+  digest: ConceptDigest;
+  onClose: () => void;
+  onOpenCardId: (cardId: string) => void;
+}) {
+  return (
+    <div
+      aria-label={`关于「${digest.concept}」的全部碎片`}
+      aria-modal="true"
+      className="concept-overlay"
+      onClick={onClose}
+      role="dialog"
+    >
+      <div className="concept-modal" onClick={(event) => event.stopPropagation()}>
+        <div className="concept-head">
+          <div>
+            <p className="section-label concept-eyebrow">
+              <Layers size={14} aria-hidden="true" /> 概念
+            </p>
+            <h2>{digest.concept}</h2>
+            <p className="concept-sub">{digest.cardCount} 张碎片,连成一整篇</p>
+          </div>
+          <button aria-label="关闭概念视图" className="icon-button compact" onClick={onClose} type="button">
+            <XCircle size={18} />
+          </button>
+        </div>
+
+        <ol className="concept-entry-list">
+          {digest.entries.map((entry) => (
+            <li key={entry.cardId}>
+              <button className="concept-entry" onClick={() => onOpenCardId(entry.cardId)} type="button">
+                <span className={`concept-role concept-role-${entry.role}`}>{formatConceptRole(entry.role)}</span>
+                <span className="concept-entry-body">
+                  <strong>{entry.title}</strong>
+                  <span className="concept-entry-takeaway">{entry.keyTakeaway}</span>
+                </span>
+              </button>
+            </li>
+          ))}
+        </ol>
+      </div>
+    </div>
+  );
 }
 
 function formatConfidence(value: NonNullable<KnowledgeCard["confidence"]>): string {
@@ -2639,11 +2732,11 @@ function formatConfidence(value: NonNullable<KnowledgeCard["confidence"]>): stri
 
 function formatThreadKind(value: NonNullable<KnowledgeCard["thread"]>[number]["kind"]): string {
   const labels: Record<NonNullable<KnowledgeCard["thread"]>[number]["kind"], string> = {
-    explain: "Explain",
-    example: "Example",
-    contrast: "Contrast",
-    extension: "Extend",
-    quiz: "Quiz"
+    explain: "讲解",
+    example: "例子",
+    contrast: "对比",
+    extension: "延伸",
+    quiz: "小测"
   };
 
   return labels[value];
@@ -2651,12 +2744,12 @@ function formatThreadKind(value: NonNullable<KnowledgeCard["thread"]>[number]["k
 
 function formatNextAction(action: NonNullable<KnowledgeCard["nextActions"]>[number]): string {
   const labels: Record<NonNullable<KnowledgeCard["nextActions"]>[number], string> = {
-    continue_deeper: "Go deeper",
-    expand_broader: "Go broader",
-    reframe_simpler: "Simplify",
-    cooldown_topic: "Cool down",
-    schedule_review: "Review",
-    ask_clarifying_question: "Ask user"
+    continue_deeper: "深入",
+    expand_broader: "拓宽",
+    reframe_simpler: "简化",
+    cooldown_topic: "降温",
+    schedule_review: "复习",
+    ask_clarifying_question: "追问澄清"
   };
 
   return labels[action];
@@ -2664,21 +2757,45 @@ function formatNextAction(action: NonNullable<KnowledgeCard["nextActions"]>[numb
 
 function formatGroundingStatus(status: GroundingStatus): string {
   const labels: Record<GroundingStatus, string> = {
-    passed: "Passed",
-    warning: "Warning",
-    failed: "Failed"
+    passed: "通过",
+    warning: "警告",
+    failed: "失败"
   };
 
   return labels[status];
 }
 
+function formatEdgeRelation(relation: NonNullable<KnowledgeCard["graphEdges"]>[number]["relation"]): string {
+  const labels: Record<NonNullable<KnowledgeCard["graphEdges"]>[number]["relation"], string> = {
+    requires: "需要",
+    extends: "延伸",
+    contrasts: "对比",
+    applies: "应用",
+    evaluates: "评估",
+    summarizes: "总结"
+  };
+
+  return labels[relation];
+}
+
+function formatReviewPromptKind(kind: NonNullable<KnowledgeCard["reviewPrompts"]>[number]["kind"]): string {
+  const labels: Record<NonNullable<KnowledgeCard["reviewPrompts"]>[number]["kind"], string> = {
+    recall: "回忆",
+    compare: "比较",
+    apply: "应用",
+    explain: "解释"
+  };
+
+  return labels[kind];
+}
+
 function formatEvidenceFieldPath(path: string): string {
   if (path.startsWith("$.thread")) {
-    return "Thread";
+    return "延展";
   }
 
   if (path.startsWith("$.graphEdges")) {
-    return "Graph";
+    return "图谱";
   }
 
   return path.replace(/^\$\./, "").replace(/([A-Z])/g, " $1");
@@ -2689,7 +2806,7 @@ function formatCardSource(card: KnowledgeCard): string {
   const citation = card.citations?.[0];
 
   if (!source) {
-    return "Unknown source";
+    return "未知来源";
   }
 
   if (source.type === "youtube" && citation?.startTimeSeconds !== undefined) {
@@ -2700,20 +2817,20 @@ function formatCardSource(card: KnowledgeCard): string {
 }
 
 function formatDueDate(value: string): string {
-  return new Intl.DateTimeFormat("en", {
+  return new Intl.DateTimeFormat("zh-CN", {
     month: "short",
     day: "numeric"
   }).format(new Date(value));
 }
 
 function formatShortTime(value: string): string {
-  return new Intl.DateTimeFormat("en", {
+  return new Intl.DateTimeFormat("zh-CN", {
     hour: "2-digit",
     minute: "2-digit"
   }).format(new Date(value));
 }
 
-// X-style relative post age: "now" / "5m" / "3h" / "2d", then a date for older posts.
+// 类微博的相对时间:"刚刚" / "5分钟" / "3小时" / "2天",更早的显示日期。
 function formatRelativeTime(value: string): string {
   const then = new Date(value).getTime();
   if (Number.isNaN(then)) {
@@ -2722,37 +2839,37 @@ function formatRelativeTime(value: string): string {
 
   const minutes = Math.floor((Date.now() - then) / 60000);
   if (minutes < 1) {
-    return "now";
+    return "刚刚";
   }
   if (minutes < 60) {
-    return `${minutes}m`;
+    return `${minutes}分钟`;
   }
 
   const hours = Math.floor(minutes / 60);
   if (hours < 24) {
-    return `${hours}h`;
+    return `${hours}小时`;
   }
 
   const days = Math.floor(hours / 24);
   if (days < 7) {
-    return `${days}d`;
+    return `${days}天`;
   }
 
   const date = new Date(value);
-  return new Intl.DateTimeFormat("en", {
+  return new Intl.DateTimeFormat("zh-CN", {
     month: "short",
     day: "numeric",
     ...(date.getFullYear() === new Date().getFullYear() ? {} : { year: "numeric" })
   }).format(date);
 }
 
-// Full timestamp for the post-age hover tooltip (relative time loses precision).
+// 鼠标悬停在时间上时显示的完整时间戳(相对时间会丢失精度)。
 function formatFullTimestamp(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
     return "";
   }
-  return new Intl.DateTimeFormat("en", { dateStyle: "full", timeStyle: "short" }).format(date);
+  return new Intl.DateTimeFormat("zh-CN", { dateStyle: "full", timeStyle: "short" }).format(date);
 }
 
 function buildTimestampUrl(url: string | undefined, seconds: number): string {
@@ -2810,7 +2927,7 @@ function formatAskAnswer(result: AskApiResult): string {
     ).values()
   ).join("\n");
 
-  return `${result.answer}\n\nSources:\n${sources}`;
+  return `${result.answer}\n\n来源:\n${sources}`;
 }
 
 function buildGroundedAnswer(card: KnowledgeCard, chunks: KnowledgeChunk[], prompt: string): string {
@@ -2819,14 +2936,14 @@ function buildGroundedAnswer(card: KnowledgeCard, chunks: KnowledgeChunk[], prom
   const groundedChunk =
     chunks.find((chunk) => chunk.id === citation?.chunkId) ?? chunks.find((chunk) => chunk.sourceId === source?.id);
   const timestamp =
-    citation?.startTimeSeconds !== undefined ? ` at ${formatTimestamp(citation.startTimeSeconds)}` : "";
-  const conceptLine = card.concepts.length > 0 ? `Concepts: ${card.concepts.join(", ")}.` : "";
+    citation?.startTimeSeconds !== undefined ? `(${formatTimestamp(citation.startTimeSeconds)})` : "";
+  const conceptLine = card.concepts.length > 0 ? `涉及概念:${card.concepts.join("、")}。` : "";
 
   return [
-    `Based on "${source?.title ?? "this source"}"${timestamp}, the card is saying: ${card.keyTakeaway}`,
-    groundedChunk ? `Grounding: ${groundedChunk.content}` : `Grounding: ${card.summary}`,
-    card.nextActions?.length ? `Harness next action: ${card.nextActions.map(formatNextAction).join(", ")}.` : "",
-    `${conceptLine} Your question was: "${prompt}".`
+    `根据《${source?.title ?? "这个来源"}》${timestamp},这张卡片想说的是:${card.keyTakeaway}`,
+    groundedChunk ? `依据:${groundedChunk.content}` : `依据:${card.summary}`,
+    card.nextActions?.length ? `下一步建议:${card.nextActions.map(formatNextAction).join("、")}。` : "",
+    `${conceptLine}你的问题是:「${prompt}」。`
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -2846,7 +2963,7 @@ async function apiRequest<T>(path: string, options: { method?: "GET" | "POST"; b
     const message =
       isRecord(payload) && typeof payload.error === "string"
         ? payload.error
-        : `AITimeline API request failed with ${response.status}.`;
+        : `AITimeline API 请求失败,状态码 ${response.status}。`;
 
     throw new Error(message);
   }
