@@ -20,6 +20,11 @@
   "devDependencies": {
     "typescript": "latest"
   },
+  "overrides": {
+    "react": "19.0.0",
+    "react-dom": "19.0.0",
+    "react-native": "0.79.6"
+  },
   "engines": {
     "node": ">=20"
   }
