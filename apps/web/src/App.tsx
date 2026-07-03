@@ -112,6 +112,7 @@ export function App() {
   const [autoScoutEnabled, setAutoScoutEnabled] = useState(true);
   const [lastScoutAt, setLastScoutAt] = useState<string | null>(null);
   const [queuedJobCount, setQueuedJobCount] = useState(0);
+  const [agentTurnCount, setAgentTurnCount] = useState(0);
   const [memoryMessage, setMemoryMessage] = useState("还没有记忆改动");
   const [candidateMessage, setCandidateMessage] = useState("还没有排队的候选源");
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
@@ -410,7 +411,7 @@ export function App() {
   );
   const graph = useMemo(() => buildKnowledgeGraph(allCards, allSignals), [allCards, allSignals]);
   const reviewQueue = useMemo(
-    () => createReviewQueue(allCards, allSignals, new Date("2026-06-08T08:00:00.000Z")),
+    () => createReviewQueue(allCards, allSignals),
     [allCards, allSignals]
   );
   const boundary = useMemo(
@@ -627,6 +628,7 @@ export function App() {
       setSourceChunks(upsertById([], registryChunks));
       setSourceCandidates(snapshot.sourceCandidates);
       setQueuedJobCount(queuedJobs.jobs.length);
+      setAgentTurnCount(snapshot.agentTurns.length);
       setApiStatus("connected");
       setApiMessage("已连接本地 API");
     } catch (error) {
@@ -1242,6 +1244,7 @@ export function App() {
             onRunCuration={handleRunCuration}
             onSaveCandidate={handleSaveCandidate}
             onSourceUrlChange={setSourceUrl}
+            agentTurnCount={agentTurnCount}
             queuedJobCount={queuedJobCount}
             sourceCandidates={sourceCandidates}
             sourceImports={sourceImports}

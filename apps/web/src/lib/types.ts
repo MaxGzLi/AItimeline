@@ -1,4 +1,5 @@
 import type {
+  AgentTurnRecord,
   BackgroundSourceCandidate,
   InteractionSignal,
   KnowledgeCard,
@@ -84,6 +85,7 @@ export type ApiSnapshot = {
   }>;
   posts: KnowledgeCard[];
   sourceCandidates: SourceCandidateRecord[];
+  agentTurns: AgentTurnRecord[];
 };
 
 export type ApiTimelineResponse = {

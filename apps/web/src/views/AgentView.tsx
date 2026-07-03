@@ -8,6 +8,7 @@ import type { ApiStatus, SourceCandidateRecord } from "../lib/types";
 // The observer's machine room: everything operational (imports, candidate
 // queue, memory, usage) lives here instead of cluttering the timeline.
 export function AgentView({
+  agentTurnCount,
   apiMessage,
   apiStatus,
   autoScoutEnabled,
@@ -35,6 +36,7 @@ export function AgentView({
   sourceImports,
   sourceUrl
 }: {
+  agentTurnCount: number;
   apiMessage: string;
   apiStatus: ApiStatus;
   autoScoutEnabled: boolean;
@@ -131,8 +133,8 @@ export function AgentView({
         <p className="x-mrnote">{memoryMessage}</p>
         <div className="x-usage">
           <div>
-            <p className="x-num">128</p>
-            <p className="x-lab">剩余 AI 额度</p>
+            <p className="x-num">{agentTurnCount}</p>
+            <p className="x-lab">已用 Agent 回复</p>
           </div>
           <div>
             <p className="x-num">{queuedJobCount}</p>
