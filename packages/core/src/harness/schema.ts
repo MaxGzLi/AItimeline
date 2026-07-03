@@ -27,7 +27,15 @@ const sourceTypes = [
   "manual",
   "user_note"
 ] as const satisfies readonly SourceType[];
-const threadKinds = ["explain", "example", "contrast", "extension", "quiz"] as const satisfies readonly ThreadBlockKind[];
+const threadKinds = [
+  "explain",
+  "example",
+  "contrast",
+  "extension",
+  "quiz",
+  "user_comment",
+  "agent_reply"
+] as const satisfies readonly ThreadBlockKind[];
 const edgeRelations = [
   "requires",
   "extends",

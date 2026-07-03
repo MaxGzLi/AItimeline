@@ -285,6 +285,7 @@ try {
   });
 
   assert.equal(noteResult.post.sources[0].type, "user_note", "notes should persist as user_note sources");
+  assert.equal(noteResult.post.thread[0].kind, "agent_reply", "the observer reply on a note should be an agent_reply block");
   assert.ok(noteResult.post.citations.length > 0, "note posts should cite their own registry chunk");
   assert.equal(noteResult.turn.intent, "grounded_qa", "notes touching library concepts should get grounded replies");
   assert.ok(noteResult.turn.answer.citations.length > 0, "observer replies to notes should cite source chunks");
@@ -304,6 +305,39 @@ try {
     3,
     "agent questions and notes should accumulate into user memory"
   );
+
+  // --- Inline replies: commenting on a card appends a public in-post thread ---
+  const replyResult = await requestJson(`/api/posts/${encodeURIComponent(firstPost.id)}/replies`, {
+    method: "POST",
+    body: {
+      text: `How does ${firstTopic} keep its citations grounded?`,
+      createdAt: "2026-06-10T03:00:00.000Z"
+    }
+  });
+
+  const replyKinds = replyResult.post.thread.map((block) => block.kind);
+
+  assert.ok(replyKinds.includes("user_comment"), "a reply should append the user's comment block");
+  assert.ok(replyKinds.includes("agent_reply"), "a reply should append the observer's reply block");
+  assert.equal(replyResult.turn.intent, "grounded_qa", "replies target the card and answer grounded");
+  assert.ok(replyResult.turn.answer.citations.length > 0, "observer replies to comments should cite source chunks");
+  assert.equal(replyResult.snapshotSummary.agentTurns, 4, "comment replies should be metered as agent turns");
+
+  const replyTimeline = await requestJson("/api/timeline?now=2026-06-11T00:00:00.000Z");
+  const replyTimelinePost = replyTimeline.posts.find((post) => post.id === firstPost.id);
+  const persistedCommentBlocks = replyTimelinePost.thread.filter(
+    (block) => block.kind === "user_comment" || block.kind === "agent_reply"
+  );
+
+  assert.equal(persistedCommentBlocks.length, 2, "the comment and observer reply should persist on the card thread after reload");
+
+  const missingReply = await fetch(`${baseUrl}/api/posts/does-not-exist/replies`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text: "hi" })
+  });
+
+  assert.equal(missingReply.status, 404, "replying to a missing post should 404");
 
   console.log("API smoke passed");
 } finally {

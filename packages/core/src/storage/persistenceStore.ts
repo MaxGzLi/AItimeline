@@ -106,6 +106,7 @@ export interface AITimelinePersistenceSnapshot {
 
 export interface AITimelinePersistenceStore {
   getSnapshot(): AITimelinePersistenceSnapshot;
+  savePosts(posts: KnowledgePost[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
   saveSourceImportResult(result: SourceImportWorkerResult, savedAt?: string | Date): AITimelinePersistenceSnapshot;
   saveCurationJobRecords(records: BackgroundCurationJobRecord[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
   saveReleasePlan(plan: SourcePostReleasePlan, savedAt?: string | Date): AITimelinePersistenceSnapshot;
@@ -138,6 +139,16 @@ export function createAITimelinePersistenceStore(
 
   return {
     getSnapshot() {
+      return cloneSnapshot(snapshot);
+    },
+    savePosts(posts, savedAt = new Date()) {
+      snapshot = {
+        ...snapshot,
+        updatedAt: normalizeDate(savedAt).toISOString(),
+        posts: upsertManyById(snapshot.posts, posts)
+      };
+      persist(storage, snapshot);
+
       return cloneSnapshot(snapshot);
     },
     saveSourceImportResult(result, savedAt = new Date()) {

@@ -979,6 +979,27 @@ export function App() {
     recordInteraction(card, { skippedQuickly: true, dwellTimeMs: 800, openedThread: false });
   }
 
+  // Post a public comment on a card: the API appends the user comment plus the
+  // observer's grounded reply to the card's thread, and we replace the card so
+  // the inline thread updates in place.
+  async function handleReply(card: RankedKnowledgeCard, text: string) {
+    const result = await apiRequest<{ post: KnowledgeCard }>(
+      `/api/posts/${encodeURIComponent(card.id)}/replies`,
+      {
+        method: "POST",
+        body: { text }
+      }
+    );
+
+    setImportedCards((cards) =>
+      cards.some((existing) => existing.id === result.post.id)
+        ? cards.map((existing) => (existing.id === result.post.id ? result.post : existing))
+        : cards
+    );
+    recordInteraction(card, { askedQuestion: true, openedThread: true, dwellTimeMs: 12000 });
+    void refreshFromApi({ silent: true });
+  }
+
   async function handleAgentAsk(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const question = agentQuestion.trim();
@@ -1158,6 +1179,7 @@ export function App() {
                     onOpen={handleOpenCard}
                     onOpenCardId={handleOpenCardId}
                     onOpenConcept={handleOpenConcept}
+                    onReply={handleReply}
                     onSave={handleSave}
                     onSkip={handleSkip}
                     quoteText={quoteByCard[card.id]}

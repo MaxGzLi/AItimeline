@@ -346,6 +346,19 @@ export function createApiServer(options = {}) {
         return;
       }
 
+      if (request.method === "POST" && /^\/api\/posts\/[^/]+\/replies$/.test(url.pathname)) {
+        const postId = decodeURIComponent(
+          url.pathname.replace(/^\/api\/posts\//, "").replace(/\/replies$/, "")
+        );
+        const body = await readJsonBody(request);
+        requireString(body.text, "text");
+        const userId = typeof body.userId === "string" && body.userId.trim() ? body.userId : "local-user";
+        const result = await handlePostReply(postId, body, userId, persistenceStore, askModelClient, searchProvider);
+
+        sendJson(response, 200, result);
+        return;
+      }
+
       if (request.method === "POST" && url.pathname === "/api/memory") {
         const body = await readJsonBody(request);
         const userId = body.userId ?? "local-user";
@@ -531,7 +544,7 @@ async function handleUserNote(body, userId, persistenceStore, client, searchProv
       ? [
           {
             id: `${note.post.id}-agent-reply-1`,
-            kind: "extension",
+            kind: "agent_reply",
             title: replySourceTitle ? `知识观察员 · 来源:${replySourceTitle}` : "知识观察员",
             body: replyBody
           }
@@ -603,6 +616,119 @@ async function handleUserNote(body, userId, persistenceStore, client, searchProv
 
   return {
     post: notePost,
+    turn,
+    turnRecord,
+    discoveredCandidates,
+    snapshotSummary: summarizeSnapshot(finalSnapshot)
+  };
+}
+
+// A comment on a knowledge card becomes a public in-post thread: the user's
+// comment and the observer's grounded reply are both appended to the card's
+// thread and persisted, and the reply is metered as an agent turn.
+async function handlePostReply(postId, body, userId, persistenceStore, client, searchProvider) {
+  const snapshot = persistenceStore.getSnapshot();
+  const post = snapshot.posts.find((candidate) => candidate.id === postId);
+
+  if (!post) {
+    throw new HttpError(404, `No post found for id ${postId}.`);
+  }
+
+  const now = typeof body.createdAt === "string" ? body.createdAt : new Date().toISOString();
+  const memory = snapshot.userMemories.find((record) => record.userId === userId)?.memory;
+  const registry = mergeSourceRegistries(...snapshot.sourceRegistries.map((record) => record.registry));
+  const commentText = body.text.trim();
+
+  // Ground the reply against this specific card, so the observer answers from
+  // the card's own sources instead of routing by concept overlap.
+  const turn = await runConversationTurn(
+    {
+      question: commentText,
+      postId,
+      posts: snapshot.posts,
+      registry,
+      memory,
+      userSignals: toUserSignals(snapshot.interactionSignals),
+      now
+    },
+    { client }
+  );
+
+  const replyBody = turn.answer ? turn.answer.answer : turn.notes.join(" ");
+  const replySourceTitle = turn.answer?.citations?.[0]?.sourceTitle;
+  const commentBlock = {
+    id: `${post.id}-user-comment-${hashText(`${commentText}|${now}`)}`,
+    kind: "user_comment",
+    title: "你",
+    body: commentText
+  };
+  const replyBlock = replyBody
+    ? {
+        id: `${post.id}-agent-reply-${hashText(`${replyBody}|${now}`)}`,
+        kind: "agent_reply",
+        title: replySourceTitle ? `知识观察员 · 来源:${replySourceTitle}` : "知识观察员",
+        body: replyBody
+      }
+    : null;
+  const updatedPost = {
+    ...post,
+    thread: [...post.thread, commentBlock, ...(replyBlock ? [replyBlock] : [])]
+  };
+
+  persistenceStore.savePosts([updatedPost], now);
+
+  const discoveredCandidates = await executeDiscoveryAction(
+    turn,
+    snapshot,
+    memory,
+    searchProvider,
+    persistenceStore,
+    now
+  );
+
+  if (turn.signal) {
+    persistenceStore.saveInteractionSignalRecords(
+      [
+        {
+          id: buildInteractionSignalRecordId(turn.signal),
+          signal: turn.signal,
+          feedback: evaluateInteraction(turn.signal, deriveTopicState(turn.signal)),
+          createdAt: now
+        }
+      ],
+      now
+    );
+  }
+
+  const memoryEditResult = applyUserMemoryEdits(
+    memory ?? createEmptyUserMemory(),
+    [
+      {
+        kind: "add",
+        field: "interaction.recentQuestions",
+        value: turn.question,
+        reason: "User commented on a knowledge card."
+      }
+    ],
+    now
+  );
+
+  persistenceStore.saveUserMemory(userId, memoryEditResult.memory, memoryEditResult.events, now);
+
+  const turnRecord = {
+    id: `agent-turn-${hashText(`${userId}|reply|${postId}|${turn.question}|${now}`)}`,
+    userId,
+    question: turn.question,
+    intent: turn.intent,
+    tier: turn.tier,
+    zone: turn.zone,
+    answerCardId: turn.answerCardId,
+    createdAt: now
+  };
+  const finalSnapshot = persistenceStore.saveAgentTurnRecords([turnRecord], now);
+
+  return {
+    post: updatedPost,
     turn,
     turnRecord,
     discoveredCandidates,

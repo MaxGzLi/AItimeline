@@ -188,7 +188,9 @@ export function formatThreadKind(value: NonNullable<KnowledgeCard["thread"]>[num
     example: "例子",
     contrast: "对比",
     extension: "延伸",
-    quiz: "小测"
+    quiz: "小测",
+    user_comment: "评论",
+    agent_reply: "回复"
   };
 
   return labels[value];

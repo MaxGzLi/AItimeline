@@ -68,6 +68,11 @@ export function SourceDetailDrawer({
   const citation = card.citations?.[0];
   const source = card.sources[0];
   const drawerRef = useRef<HTMLElement>(null);
+  // Comment threads live inline on the post; the drawer keeps only the
+  // knowledge blocks (explain/example/…).
+  const knowledgeBlocks = (card.thread ?? []).filter(
+    (block) => block.kind !== "user_comment" && block.kind !== "agent_reply"
+  );
 
   // Modal focus management: move focus into the dialog on open and return it to
   // the element that opened it on close, so keyboard/screen-reader users are taken
@@ -126,14 +131,14 @@ export function SourceDetailDrawer({
         <p>{card.keyTakeaway}</p>
       </section>
 
-      {card.thread?.length ? (
+      {knowledgeBlocks.length ? (
         <section className="drawer-section">
           <div className="drawer-section-heading">
             <MessageCircle size={18} />
             <h3>延展</h3>
           </div>
           <div className="thread-block-list">
-            {card.thread.map((block) => (
+            {knowledgeBlocks.map((block) => (
               <div className="thread-block" key={block.id}>
                 <span>{formatThreadKind(block.kind)}</span>
                 <h4>{block.title}</h4>
