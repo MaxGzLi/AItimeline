@@ -1145,6 +1145,24 @@ assert.equal(appSnapshot.topicStates.length, 1, "persistence should store topic 
 assert.equal(appSnapshot.sourceCandidates.length, 1, "persistence should store source candidates");
 assert.equal(appSnapshot.sourceCandidates[0]?.status, "pending", "source candidates should preserve status");
 
+// --- User notes: self-grounded source + post ---
+const { transformUserNote } = await import("../packages/core/dist/transform/noteImport.js");
+const noteResult = transformUserNote("RAG depends on retrieval quality.\n后半句是我的想法。", {
+  createdAt: "2026-06-10T00:00:00.000Z",
+  libraryConcepts: ["RAG", "Evaluation"]
+});
+
+assert.equal(noteResult.source.type, "user_note", "notes should become user_note sources");
+assert.equal(noteResult.post.citations?.[0]?.chunkId, noteResult.chunks[0].id, "note posts must cite their own chunk");
+assert.equal(
+  noteResult.sourceRegistry.chunks.some((chunk) => chunk.id === noteResult.chunks[0].id),
+  true,
+  "the note chunk must land in the source registry"
+);
+assert.deepEqual(noteResult.post.concepts, ["RAG"], "notes should only tag concepts they actually mention");
+assert.equal(noteResult.importRecord.status, "ready", "note imports are ready immediately");
+assert.throws(() => transformUserNote("   "), /needs some text/, "empty notes should be rejected");
+
 console.log(
   JSON.stringify(
     {

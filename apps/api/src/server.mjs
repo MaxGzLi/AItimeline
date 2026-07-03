@@ -23,6 +23,7 @@ import {
   runDueBackgroundCurationJobs,
   runSourceDiscovery,
   transformArticleUrl,
+  transformUserNote,
   transformYouTubeUrl
 } from "../../../packages/core/dist/index.js";
 import { createEvidenceLedger } from "../../../packages/core/dist/harness/evidenceLedger.js";
@@ -335,6 +336,16 @@ export function createApiServer(options = {}) {
         return;
       }
 
+      if (request.method === "POST" && url.pathname === "/api/notes") {
+        const body = await readJsonBody(request);
+        requireString(body.text, "text");
+        const userId = typeof body.userId === "string" && body.userId.trim() ? body.userId : "local-user";
+        const result = await handleUserNote(body, userId, persistenceStore, askModelClient, searchProvider);
+
+        sendJson(response, 200, result);
+        return;
+      }
+
       if (request.method === "POST" && url.pathname === "/api/memory") {
         const body = await readJsonBody(request);
         const userId = body.userId ?? "local-user";
@@ -402,27 +413,14 @@ async function handleAgentAsk(body, userId, persistenceStore, client, searchProv
     { client }
   );
 
-  // Execute the discovery proposal inline when a provider is configured;
-  // otherwise the proposal is returned for the client to display.
-  let discoveredCandidates = [];
-  const discoverAction = turn.actions.find((action) => action.kind === "discover_sources");
-
-  if (discoverAction && searchProvider) {
-    const discovery = await runSourceDiscovery({
-      provider: searchProvider,
-      concepts: discoverAction.concepts,
-      queries: discoverAction.queries,
-      goals: memory?.profile.goals,
-      existingUrls: collectKnownSourceUrls(snapshot),
-      existingTitles: collectKnownSourceTitles(snapshot),
-      now
-    });
-
-    if (discovery.candidates.length) {
-      persistDiscoveredCandidates(persistenceStore, discovery.candidates, now);
-      discoveredCandidates = discovery.candidates;
-    }
-  }
+  const discoveredCandidates = await executeDiscoveryAction(
+    turn,
+    snapshot,
+    memory,
+    searchProvider,
+    persistenceStore,
+    now
+  );
 
   if (turn.signal) {
     persistenceStore.saveInteractionSignalRecords(
@@ -469,6 +467,145 @@ async function handleAgentAsk(body, userId, persistenceStore, client, searchProv
     turn,
     discoveredCandidates,
     turnRecord,
+    snapshotSummary: summarizeSnapshot(finalSnapshot)
+  };
+}
+
+// Execute the discovery proposal inline when a provider is configured;
+// otherwise the proposal is returned for the client to display.
+async function executeDiscoveryAction(turn, snapshot, memory, searchProvider, persistenceStore, now) {
+  const discoverAction = turn.actions.find((action) => action.kind === "discover_sources");
+
+  if (!discoverAction || !searchProvider) {
+    return [];
+  }
+
+  const discovery = await runSourceDiscovery({
+    provider: searchProvider,
+    concepts: discoverAction.concepts,
+    queries: discoverAction.queries,
+    goals: memory?.profile.goals,
+    existingUrls: collectKnownSourceUrls(snapshot),
+    existingTitles: collectKnownSourceTitles(snapshot),
+    now
+  });
+
+  if (discovery.candidates.length) {
+    persistDiscoveredCandidates(persistenceStore, discovery.candidates, now);
+  }
+
+  return discovery.candidates;
+}
+
+// A user note becomes a first-class post (self-grounded source) and the
+// observer replies against the existing library, metered as an agent turn.
+async function handleUserNote(body, userId, persistenceStore, client, searchProvider) {
+  const snapshot = persistenceStore.getSnapshot();
+  const now = typeof body.createdAt === "string" ? body.createdAt : new Date().toISOString();
+  const memory = snapshot.userMemories.find((record) => record.userId === userId)?.memory;
+  const libraryPosts = snapshot.posts;
+  const libraryConcepts = Array.from(new Set(libraryPosts.flatMap((post) => post.concepts)));
+  const note = transformUserNote(body.text, { createdAt: now, libraryConcepts });
+
+  // Reply from the pre-note library only, so the observer grounds its answer
+  // in imported sources instead of echoing the note back.
+  const registry = mergeSourceRegistries(...snapshot.sourceRegistries.map((record) => record.registry));
+  const turn = await runConversationTurn(
+    {
+      question: note.post.summary,
+      posts: libraryPosts,
+      registry,
+      memory,
+      userSignals: toUserSignals(snapshot.interactionSignals),
+      now
+    },
+    { client }
+  );
+
+  // Persist the observer's reply on the note itself so the thread survives reloads.
+  const replyBody = turn.answer ? turn.answer.answer : turn.notes.join(" ");
+  const replySourceTitle = turn.answer?.citations?.[0]?.sourceTitle;
+  const notePost = {
+    ...note.post,
+    thread: replyBody
+      ? [
+          {
+            id: `${note.post.id}-agent-reply-1`,
+            kind: "extension",
+            title: replySourceTitle ? `知识观察员 · 来源:${replySourceTitle}` : "知识观察员",
+            body: replyBody
+          }
+        ]
+      : []
+  };
+
+  persistenceStore.saveSourceImportResult(
+    {
+      importRecord: note.importRecord,
+      source: note.source,
+      assets: [note.asset],
+      chunks: note.chunks,
+      sourceRegistry: note.sourceRegistry,
+      posts: [notePost]
+    },
+    now
+  );
+
+  const discoveredCandidates = await executeDiscoveryAction(
+    turn,
+    snapshot,
+    memory,
+    searchProvider,
+    persistenceStore,
+    now
+  );
+
+  if (turn.signal) {
+    persistenceStore.saveInteractionSignalRecords(
+      [
+        {
+          id: buildInteractionSignalRecordId(turn.signal),
+          signal: turn.signal,
+          feedback: evaluateInteraction(turn.signal, deriveTopicState(turn.signal)),
+          createdAt: now
+        }
+      ],
+      now
+    );
+  }
+
+  const memoryEditResult = applyUserMemoryEdits(
+    memory ?? createEmptyUserMemory(),
+    [
+      {
+        kind: "add",
+        field: "interaction.recentQuestions",
+        value: turn.question,
+        reason: "User posted a note to the timeline."
+      }
+    ],
+    now
+  );
+
+  persistenceStore.saveUserMemory(userId, memoryEditResult.memory, memoryEditResult.events, now);
+
+  const turnRecord = {
+    id: `agent-turn-${hashText(`${userId}|note|${turn.question}|${now}`)}`,
+    userId,
+    question: turn.question,
+    intent: turn.intent,
+    tier: turn.tier,
+    zone: turn.zone,
+    answerCardId: turn.answerCardId,
+    createdAt: now
+  };
+  const finalSnapshot = persistenceStore.saveAgentTurnRecords([turnRecord], now);
+
+  return {
+    post: notePost,
+    turn,
+    turnRecord,
+    discoveredCandidates,
     snapshotSummary: summarizeSnapshot(finalSnapshot)
   };
 }
@@ -1136,7 +1273,8 @@ function isSourceType(value) {
     value === "repo" ||
     value === "pdf" ||
     value === "audio" ||
-    value === "manual"
+    value === "manual" ||
+    value === "user_note"
   );
 }
 

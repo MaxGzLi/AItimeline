@@ -29,6 +29,7 @@ export * from "./source/sourceRegistry.js";
 export * from "./storage/persistenceStore.js";
 export * from "./transform/articleImport.js";
 export * from "./transform/mockYoutubeImport.js";
+export * from "./transform/noteImport.js";
 export * from "./transform/transcriptToCards.js";
 export * from "./transform/youtubeImport.js";
 export * from "./types.js";

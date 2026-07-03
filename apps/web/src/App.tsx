@@ -993,9 +993,11 @@ export function App() {
     setAgentQuestion("");
 
     try {
-      const result = await apiRequest<AgentAskApiResponse>("/api/agent/ask", {
+      // 发布即笔记:内容成为一条 user_note 帖子进时间线,观察员的回复
+      // 由 API 有出处地生成并计入 Agent 用量。
+      const result = await apiRequest<AgentAskApiResponse>("/api/notes", {
         method: "POST",
-        body: { question }
+        body: { text: question }
       });
 
       setAgentResponse(result);
