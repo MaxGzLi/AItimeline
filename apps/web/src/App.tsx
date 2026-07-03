@@ -1,6 +1,7 @@
 import {
   buildCardConnections,
   buildConceptDigest,
+  buildKnowledgeBoundary,
   buildKnowledgeGraph,
   createReviewQueue,
   demoCards,
@@ -20,35 +21,21 @@ import {
   type SourceImport,
   type TopicState
 } from "@aitimeline/core";
-import {
-  ArrowUp,
-  Bell,
-  Bot,
-  Brain,
-  CheckCircle2,
-  Compass,
-  FileText,
-  GitBranch,
-  Home,
-  LoaderCircle,
-  Moon,
-  MoreHorizontal,
-  RefreshCw,
-  Search,
-  Settings,
-  Sun,
-  XCircle
-} from "lucide-react";
+import { ArrowUp, Bot, Brain, CheckCircle2, Compass, GitBranch, Home, PenLine, Settings, XCircle } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { AgentAskPanel } from "./components/AgentAskPanel";
+import { AgentReplyThread } from "./components/AgentReplyThread";
+import { AskComposer } from "./components/AskComposer";
 import { ConceptDigestPanel } from "./components/ConceptDigestPanel";
-import { ImportRow } from "./components/ImportRow";
-import { KnowledgeCardView } from "./components/KnowledgeCardView";
-import { SourceCandidatePanel } from "./components/SourceCandidatePanel";
+import { ContextRail } from "./components/ContextRail";
+import { PostView } from "./components/PostView";
 import { SourceDetailDrawer } from "./components/SourceDetailDrawer";
-import { SourceImportPanel } from "./components/SourceImportPanel";
+import { DiscoverView } from "./views/DiscoverView";
+import { AgentView } from "./views/AgentView";
+import { GraphView } from "./views/GraphView";
+import { ReviewView } from "./views/ReviewView";
+import { SettingsView } from "./views/SettingsView";
 import { apiBaseUrl, apiRequest, isYouTubeUrl, sampleSourceUrl } from "./lib/api";
-import { buildGroundedAnswer, formatAskAnswer, formatDueDate, getTopicId, scrollMotion, slugConcept } from "./lib/format";
+import { buildGroundedAnswer, formatAskAnswer, getTopicId, scrollMotion, slugConcept } from "./lib/format";
 import {
   createInteractionSignal,
   createSignalSignature,
@@ -82,14 +69,25 @@ import type {
   SourceCandidateRecord
 } from "./lib/types";
 
-const navItems = [
-  { label: "时间线", icon: Home, active: true },
-  { label: "发现", icon: Compass },
-  { label: "图谱", icon: GitBranch },
-  { label: "复习", icon: Brain },
-  { label: "智能体", icon: Bot },
-  { label: "设置", icon: Settings }
+type ViewKey = "timeline" | "discover" | "graph" | "review" | "agent" | "settings";
+
+const navItems: Array<{ key: ViewKey; label: string; icon: typeof Home }> = [
+  { key: "timeline", label: "时间线", icon: Home },
+  { key: "discover", label: "发现", icon: Compass },
+  { key: "graph", label: "图谱", icon: GitBranch },
+  { key: "review", label: "复习", icon: Brain },
+  { key: "agent", label: "智能体", icon: Bot },
+  { key: "settings", label: "设置", icon: Settings }
 ];
+
+const viewTitles: Record<ViewKey, { title: string; sub?: string }> = {
+  timeline: { title: "时间线" },
+  discover: { title: "发现", sub: "观察员找到的候选来源" },
+  graph: { title: "图谱", sub: "你的知识边界" },
+  review: { title: "复习", sub: "到期的间隔复习" },
+  agent: { title: "智能体", sub: "观察员机器房" },
+  settings: { title: "设置" }
+};
 
 export function App() {
   const [sourceUrl, setSourceUrl] = useState(sampleSourceUrl);
@@ -118,10 +116,10 @@ export function App() {
   const [candidateMessage, setCandidateMessage] = useState("还没有排队的候选源");
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
   const [conceptView, setConceptView] = useState<string | null>(null);
-  const [feedTab, setFeedTab] = useState<"foryou" | "latest">("foryou");
-  const [searchOpen, setSearchOpen] = useState(false);
+  const [activeView, setActiveView] = useState<ViewKey>("timeline");
+  const [feedTab, setFeedTab] = useState<"foryou" | "latest" | "saved">("foryou");
+  const [agentAskedQuestion, setAgentAskedQuestion] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
-  const [activeTopic, setActiveTopic] = useState<string | null>(null);
   const [focusedIndex, setFocusedIndex] = useState(-1);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [showScrollTop, setShowScrollTop] = useState(false);
@@ -145,6 +143,7 @@ export function App() {
   // Mirror of interactionSignals so stable callbacks (e.g. handleDwell) can read
   // the latest signals without stale closures and without impure state updaters.
   const interactionSignalsRef = useRef<InteractionSignals>({});
+  const composerInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     interactionSignalsRef.current = interactionSignals;
@@ -205,42 +204,39 @@ export function App() {
     [demoRankedCards, rankedImportedCards]
   );
   // "For you" keeps the personalized ranking; "Latest" re-sorts the same cards
-  // newest-first by createdAt so users can switch between relevance and recency.
-  const displayedCards = useMemo(
-    () =>
-      feedTab === "latest"
-        ? [...rankedCards].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-        : rankedCards,
-    [feedTab, rankedCards]
-  );
-  // Free-text filter over the active tab's cards so the header search narrows
+  // newest-first by createdAt; "Saved" narrows to bookmarked cards.
+  const displayedCards = useMemo(() => {
+    if (feedTab === "latest") {
+      return [...rankedCards].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    }
+
+    if (feedTab === "saved") {
+      return rankedCards.filter((card) => interactionSignals[card.id]?.saved);
+    }
+
+    return rankedCards;
+  }, [feedTab, interactionSignals, rankedCards]);
+  // Free-text filter over the active tab's cards so the rail search narrows
   // the feed in place instead of leaving the page.
   const visibleCards = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    const topic = activeTopic?.toLowerCase() ?? null;
-    if (!q && !topic) return displayedCards;
+    if (!q) return displayedCards;
     return displayedCards.filter((card) => {
-      if (topic && !card.concepts.some((concept) => concept.toLowerCase() === topic)) {
-        return false;
-      }
-      if (q) {
-        const haystack = [
-          card.title,
-          card.summary,
-          card.keyTakeaway,
-          card.hook,
-          card.thesis,
-          card.shortBody,
-          ...card.concepts
-        ]
-          .filter(Boolean)
-          .join(" ")
-          .toLowerCase();
-        if (!haystack.includes(q)) return false;
-      }
-      return true;
+      const haystack = [
+        card.title,
+        card.summary,
+        card.keyTakeaway,
+        card.hook,
+        card.thesis,
+        card.shortBody,
+        ...card.concepts
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(q);
     });
-  }, [displayedCards, searchQuery, activeTopic]);
+  }, [displayedCards, searchQuery]);
   const allCards = useMemo(() => rankedCards, [rankedCards]);
   const connectionsByCard = useMemo(() => {
     const byCard: Record<string, CardConnection[]> = {};
@@ -255,6 +251,40 @@ export function App() {
     () => (conceptView ? buildConceptDigest(conceptView, allCards) : null),
     [conceptView, allCards]
   );
+  const cardsById = useMemo(() => {
+    const byId: Record<string, RankedKnowledgeCard> = {};
+
+    for (const card of allCards) {
+      byId[card.id] = card;
+    }
+
+    return byId;
+  }, [allCards]);
+  const cardCountByConcept = useMemo(() => {
+    const byConcept: Record<string, number> = {};
+
+    for (const card of allCards) {
+      for (const concept of card.concepts) {
+        byConcept[concept] = (byConcept[concept] ?? 0) + 1;
+      }
+    }
+
+    return byConcept;
+  }, [allCards]);
+  // The X-style quote box under each post: the cited chunk's original text.
+  const quoteByCard = useMemo(() => {
+    const byCard: Record<string, string | undefined> = {};
+
+    for (const card of allCards) {
+      const chunkId = card.citations?.[0]?.chunkId;
+      const chunk = chunkId
+        ? sourceChunks.find((candidate) => candidate.id === chunkId)
+        : sourceChunks.find((candidate) => candidate.sourceId === card.sources[0]?.id);
+      byCard[card.id] = chunk?.content;
+    }
+
+    return byCard;
+  }, [allCards, sourceChunks]);
 
   // Keyboard navigation (X-style): j/k move a focus highlight between cards,
   // Enter opens the focused card, "/" jumps to search, Escape clears.
@@ -268,7 +298,6 @@ export function App() {
       if (typing) {
         if (event.key === "Escape") {
           target.blur();
-          setSearchOpen(false);
           setSearchQuery("");
         }
         return;
@@ -290,9 +319,9 @@ export function App() {
           break;
         case "/":
           event.preventDefault();
-          setSearchOpen(true);
+          setActiveView("timeline");
           requestAnimationFrame(() =>
-            document.querySelector<HTMLInputElement>(".header-search input")?.focus()
+            document.querySelector<HTMLInputElement>(".x-search input")?.focus()
           );
           break;
         case "Enter":
@@ -337,7 +366,7 @@ export function App() {
   // Keep the focused card scrolled into view; clamp when the filtered list shrinks.
   useEffect(() => {
     if (focusedIndex < 0) return;
-    const nodes = document.querySelectorAll<HTMLElement>(".feed-list .knowledge-card");
+    const nodes = document.querySelectorAll<HTMLElement>(".x-feedlist > .x-post");
     nodes[focusedIndex]?.scrollIntoView({ block: "center", behavior: scrollMotion() });
   }, [focusedIndex]);
   useEffect(() => {
@@ -382,6 +411,10 @@ export function App() {
   const graph = useMemo(() => buildKnowledgeGraph(allCards, allSignals), [allCards, allSignals]);
   const reviewQueue = useMemo(
     () => createReviewQueue(allCards, allSignals, new Date("2026-06-08T08:00:00.000Z")),
+    [allCards, allSignals]
+  );
+  const boundary = useMemo(
+    () => buildKnowledgeBoundary({ cards: allCards, signals: allSignals }),
     [allCards, allSignals]
   );
   const selectedThread = selectedCard ? aiThreads[selectedCard.id] ?? [] : [];
@@ -956,6 +989,8 @@ export function App() {
 
     setIsAgentAsking(true);
     setAgentMessage("");
+    setAgentAskedQuestion(question);
+    setAgentQuestion("");
 
     try {
       const result = await apiRequest<AgentAskApiResponse>("/api/agent/ask", {
@@ -1000,328 +1035,219 @@ export function App() {
     }));
   }
 
+  const activeTitle = viewTitles[activeView];
+  const pendingDiscoverCount = sourceCandidates.filter(
+    (record) => record.status === "pending" || record.status === "queued"
+  ).length;
+
   return (
-    <div className="app-shell">
-      <aside className="left-rail" aria-label="主导航">
-        <div className="brand-mark">
-          <div className="brand-icon">AI</div>
-          <span>AITimeline</span>
-        </div>
+    <div className="x-frame">
+      <nav className="x-navrail" aria-label="主导航">
+        <button className="x-logo" onClick={() => setActiveView("timeline")} title="AITimeline" type="button">
+          AI
+        </button>
+        {navItems.map((item) => {
+          const showDot =
+            (item.key === "discover" && pendingDiscoverCount > 0) ||
+            (item.key === "review" && reviewQueue.length > 0);
 
-        <nav className="nav-list">
-          {navItems.map((item) => (
+          return (
             <button
-              aria-current={item.active ? "page" : undefined}
+              aria-current={activeView === item.key ? "page" : undefined}
               aria-label={item.label}
-              className={`nav-item ${item.active ? "active" : ""}`}
-              key={item.label}
+              className={`x-navbtn${activeView === item.key ? " active" : ""}`}
+              key={item.key}
+              onClick={() => setActiveView(item.key)}
+              title={item.label}
+              type="button"
             >
-              <item.icon size={20} strokeWidth={1.9} />
-              <span>{item.label}</span>
+              <item.icon size={24} strokeWidth={activeView === item.key ? 2.4 : 1.9} />
+              {showDot ? <span className="x-navdot" /> : null}
             </button>
-          ))}
-        </nav>
+          );
+        })}
+        <button
+          aria-label="发布想法"
+          className="x-compose"
+          onClick={() => {
+            setActiveView("timeline");
+            requestAnimationFrame(() => composerInputRef.current?.focus());
+          }}
+          title="发布想法"
+          type="button"
+        >
+          <PenLine size={22} />
+        </button>
+      </nav>
 
-        <section className="agent-brief">
-          <div className="section-label">当前智能体</div>
-          <h2>AI 知识观察员</h2>
-          <p>{curationMessage}</p>
-          <button className="primary-action" disabled={isRunningCuration} onClick={handleRunCuration} type="button">
-            {isRunningCuration ? <LoaderCircle className="spin" size={18} /> : <RefreshCw size={18} />}
-            <span>{isRunningCuration ? "运行中" : "运行观察员"}</span>
-          </button>
-        </section>
-      </aside>
-
-      <main className="timeline-column">
-        <header className="timeline-header">
-          {searchOpen ? (
-            <div className="header-search">
-              <Search size={18} />
-              <input
-                aria-label="搜索时间线"
-                autoFocus
-                onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="搜索你的时间线"
-                value={searchQuery}
-              />
-              {searchQuery ? (
+      <main className="x-main">
+        <header className="x-colhead">
+          <div className="x-coltitle">
+            <div>
+              <h1>{activeTitle.title}</h1>
+              {activeTitle.sub ? <p className="x-colsub">{activeTitle.sub}</p> : null}
+            </div>
+          </div>
+          {activeView === "timeline" ? (
+            <div className="x-tabs" role="tablist" aria-label="信息流视图">
+              {(
+                [
+                  ["foryou", "推荐"],
+                  ["latest", "最新"],
+                  ["saved", "已收藏"]
+                ] as const
+              ).map(([tabKey, tabLabel]) => (
                 <button
-                  aria-label="清除搜索"
-                  className="header-search-clear"
-                  onClick={() => setSearchQuery("")}
+                  aria-selected={feedTab === tabKey}
+                  className={`x-tab${feedTab === tabKey ? " active" : ""}`}
+                  key={tabKey}
+                  onClick={() => setFeedTab(tabKey)}
+                  role="tab"
                   type="button"
                 >
-                  <XCircle size={18} />
+                  {tabLabel}
                 </button>
-              ) : null}
+              ))}
             </div>
-          ) : (
-            <div>
-              <p className="section-label">今天</p>
-              <h1>知识时间线</h1>
-            </div>
-          )}
-          <div className="header-actions">
-            <button
-              className={`icon-button${searchOpen ? " selected" : ""}`}
-              onClick={() => {
-                if (searchOpen) {
-                  setSearchOpen(false);
-                  setSearchQuery("");
-                } else {
-                  setSearchOpen(true);
-                }
-              }}
-              title="搜索"
-              type="button"
-            >
-              <Search size={19} />
-            </button>
-            <button
-              aria-label={theme === "dark" ? "切换到浅色模式" : "切换到深色模式"}
-              className="icon-button"
-              onClick={() => setTheme((value) => (value === "dark" ? "light" : "dark"))}
-              title={theme === "dark" ? "切换到浅色模式" : "切换到深色模式"}
-              type="button"
-            >
-              {theme === "dark" ? <Sun size={19} /> : <Moon size={19} />}
-            </button>
-            <button className="icon-button" title="通知" type="button">
-              <Bell size={19} />
-            </button>
-          </div>
+          ) : null}
         </header>
 
-        <div className="feed-tabs" role="tablist" aria-label="信息流视图">
-          <button
-            aria-selected={feedTab === "foryou"}
-            className={`feed-tab${feedTab === "foryou" ? " active" : ""}`}
-            onClick={() => setFeedTab("foryou")}
-            role="tab"
-            type="button"
-          >
-            推荐
-          </button>
-          <button
-            aria-selected={feedTab === "latest"}
-            className={`feed-tab${feedTab === "latest" ? " active" : ""}`}
-            onClick={() => setFeedTab("latest")}
-            role="tab"
-            type="button"
-          >
-            最新
-          </button>
-        </div>
+        {activeView === "timeline" ? (
+          <>
+            <AskComposer
+              isAsking={isAgentAsking}
+              onQuestionChange={setAgentQuestion}
+              onSubmit={handleAgentAsk}
+              question={agentQuestion}
+              ref={composerInputRef}
+            />
 
-        <div className="topic-strip" aria-label="话题">
-          <button
-            aria-pressed={activeTopic === null}
-            className={`topic-pill${activeTopic === null ? " active" : ""}`}
-            onClick={() => setActiveTopic(null)}
-            type="button"
-          >
-            全部
-          </button>
-          {demoProfile.interests.map((interest) => (
-            <button
-              aria-pressed={activeTopic === interest}
-              className={`topic-pill${activeTopic === interest ? " active" : ""}`}
-              key={interest}
-              onClick={() => setActiveTopic((current) => (current === interest ? null : interest))}
-              type="button"
-            >
-              {interest}
-            </button>
-          ))}
-        </div>
-
-        <SourceImportPanel
-          apiMessage={apiMessage}
-          apiStatus={apiStatus}
-          cardCount={importedCards.length}
-          error={importError}
-          isImporting={isImporting}
-          latestImport={sourceImports[0]}
-          onSubmit={handleImport}
-          onUrlChange={setSourceUrl}
-          url={sourceUrl}
-        />
-
-        <section className="feed-list" aria-label="知识卡片">
-          {visibleCards.length === 0 && (searchQuery.trim() || activeTopic) ? (
-            <p className="feed-empty">
-              {searchQuery.trim()
-                ? `没有匹配「${searchQuery.trim()}」的卡片。`
-                : `「${activeTopic}」下还没有卡片。`}
-            </p>
-          ) : (
-            visibleCards.map((card, index) => (
-              <KnowledgeCardView
-                card={card}
-                connections={connectionsByCard[card.id] ?? []}
-                feedback={learningFeedback[card.id]}
-                isFocused={index === focusedIndex}
-                key={card.id}
-                onDwell={handleDwell}
-                onLike={handleLike}
-                onOpen={handleOpenCard}
+            {agentMessage ? <p className="x-empty">{agentMessage}</p> : null}
+            {agentResponse && agentAskedQuestion ? (
+              <AgentReplyThread
+                onDismiss={() => {
+                  setAgentResponse(null);
+                  setAgentAskedQuestion("");
+                }}
                 onOpenCardId={handleOpenCardId}
-                onOpenConcept={handleOpenConcept}
-                onSave={handleSave}
-                onSkip={handleSkip}
-                signal={interactionSignals[card.id]}
+                question={agentAskedQuestion}
+                response={agentResponse}
               />
-            ))
-          )}
-          {visibleCards.length > 0 && (
-            <div className="feed-end" role="status">
-              <CheckCircle2 aria-hidden="true" className="feed-end-icon" size={22} />
-              <p className="feed-end-title">已经看完啦</p>
-              <p className="feed-end-sub">你已经刷到时间线的底部了。</p>
-            </div>
-          )}
-        </section>
+            ) : null}
+
+            <section className="x-feedlist" aria-label="知识卡片">
+              {visibleCards.length === 0 ? (
+                <p className="x-empty">
+                  {searchQuery.trim()
+                    ? `没有匹配「${searchQuery.trim()}」的卡片。`
+                    : feedTab === "saved"
+                      ? "还没有收藏的卡片，点书签图标收藏。"
+                      : "时间线是空的，去「智能体」导入一个来源吧。"}
+                </p>
+              ) : (
+                visibleCards.map((card, index) => (
+                  <PostView
+                    card={card}
+                    connections={connectionsByCard[card.id] ?? []}
+                    isFocused={index === focusedIndex}
+                    key={card.id}
+                    onDwell={handleDwell}
+                    onLike={handleLike}
+                    onOpen={handleOpenCard}
+                    onOpenCardId={handleOpenCardId}
+                    onOpenConcept={handleOpenConcept}
+                    onSave={handleSave}
+                    onSkip={handleSkip}
+                    quoteText={quoteByCard[card.id]}
+                    signal={interactionSignals[card.id]}
+                  />
+                ))
+              )}
+              {visibleCards.length > 0 ? (
+                <p className="x-empty" role="status">
+                  <CheckCircle2 aria-hidden="true" size={16} style={{ verticalAlign: "-3px", marginRight: 6 }} />
+                  已经看完啦，你刷到时间线的底部了。
+                </p>
+              ) : null}
+            </section>
+          </>
+        ) : null}
+
+        {activeView === "discover" ? (
+          <DiscoverView
+            isRunning={isRunningCuration}
+            message={curationMessage}
+            onRunCuration={handleRunCuration}
+            records={sourceCandidates}
+          />
+        ) : null}
+
+        {activeView === "graph" ? (
+          <GraphView boundary={boundary} cardCountByConcept={cardCountByConcept} onOpenConcept={handleOpenConcept} />
+        ) : null}
+
+        {activeView === "review" ? (
+          <ReviewView
+            cardsById={cardsById}
+            onReviewed={(card) => recordInteraction(card, { reviewed: true, skippedQuickly: false })}
+            queue={reviewQueue}
+          />
+        ) : null}
+
+        {activeView === "agent" ? (
+          <AgentView
+            apiMessage={apiMessage}
+            apiStatus={apiStatus}
+            autoScoutEnabled={autoScoutEnabled}
+            candidateConcept={candidateConcept}
+            candidateMessage={candidateMessage}
+            candidateUrl={candidateUrl}
+            cardCount={importedCards.length}
+            curationMessage={curationMessage}
+            hasQueuedScoutWork={hasQueuedScoutWork}
+            importError={importError}
+            isImporting={isImporting}
+            isRunningCuration={isRunningCuration}
+            isSavingCandidate={isSavingCandidate}
+            lastScoutAt={lastScoutAt}
+            memoryMessage={memoryMessage}
+            onAutoScoutChange={setAutoScoutEnabled}
+            onCandidateConceptChange={setCandidateConcept}
+            onCandidateUrlChange={setCandidateUrl}
+            onImportSubmit={handleImport}
+            onRunCuration={handleRunCuration}
+            onSaveCandidate={handleSaveCandidate}
+            onSourceUrlChange={setSourceUrl}
+            queuedJobCount={queuedJobCount}
+            sourceCandidates={sourceCandidates}
+            sourceImports={sourceImports}
+            sourceUrl={sourceUrl}
+          />
+        ) : null}
+
+        {activeView === "settings" ? (
+          <SettingsView
+            apiMessage={apiMessage}
+            apiStatus={apiStatus}
+            onShowShortcuts={() => setShortcutsOpen(true)}
+            onToggleTheme={() => setTheme((value) => (value === "dark" ? "light" : "dark"))}
+            theme={theme}
+          />
+        ) : null}
       </main>
 
-      <aside className="right-rail" aria-label="上下文">
-        <AgentAskPanel
-          isAsking={isAgentAsking}
-          message={agentMessage}
-          onOpenCard={handleOpenCardId}
-          onQuestionChange={setAgentQuestion}
-          onSubmit={handleAgentAsk}
-          question={agentQuestion}
-          response={agentResponse}
+      {activeView === "timeline" ? (
+        <ContextRail
+          boundary={boundary}
+          graph={graph}
+          onOpenConcept={handleOpenConcept}
+          onOpenGraph={() => setActiveView("graph")}
+          onOpenReview={() => setActiveView("review")}
+          onSearchChange={setSearchQuery}
+          reviewQueue={reviewQueue}
+          searchQuery={searchQuery}
         />
-
-        <SourceCandidatePanel
-          autoScoutEnabled={autoScoutEnabled}
-          candidateConcept={candidateConcept}
-          candidateUrl={candidateUrl}
-          curationMessage={curationMessage}
-          hasQueuedScoutWork={hasQueuedScoutWork}
-          isSaving={isSavingCandidate}
-          isRunningCuration={isRunningCuration}
-          lastScoutAt={lastScoutAt}
-          message={candidateMessage}
-          onConceptChange={setCandidateConcept}
-          onAutoScoutChange={setAutoScoutEnabled}
-          onRunCuration={handleRunCuration}
-          onSubmit={handleSaveCandidate}
-          onUrlChange={setCandidateUrl}
-          queuedJobCount={queuedJobCount}
-          records={sourceCandidates}
-        />
-
-        <section className="context-section">
-          <div className="rail-heading">
-            <div>
-              <p className="section-label">来源</p>
-              <h2>导入</h2>
-            </div>
-            <button className="icon-button compact" title="来源导入">
-              <FileText size={18} />
-            </button>
-          </div>
-
-          <div className="import-list">
-            {sourceImports.length > 0 ? (
-              sourceImports.map((sourceImport) => <ImportRow item={sourceImport} key={sourceImport.id} />)
-            ) : (
-              <div className="empty-state">还没有导入</div>
-            )}
-          </div>
-        </section>
-
-        <section className="context-section">
-          <div className="rail-heading">
-            <div>
-              <p className="section-label">图谱</p>
-              <h2>沉淀的概念</h2>
-            </div>
-            <button className="icon-button compact" title="打开图谱">
-              <GitBranch size={18} />
-            </button>
-          </div>
-
-          <div className="graph-list">
-            {graph.nodes.slice(0, 6).map((node) => (
-              <button
-                className="graph-row"
-                key={node.id}
-                onClick={() => handleOpenConcept(node.label)}
-                title={`查看「${node.label}」的全部碎片`}
-                type="button"
-              >
-                <span>{node.label}</span>
-                <strong>{node.weight}</strong>
-              </button>
-            ))}
-          </div>
-        </section>
-
-        <section className="context-section">
-          <div className="rail-heading">
-            <div>
-              <p className="section-label">记忆</p>
-              <h2>用户信号</h2>
-            </div>
-            <button className="icon-button compact" title="记忆">
-              <Brain size={18} />
-            </button>
-          </div>
-
-          <div className="memory-status">{memoryMessage}</div>
-        </section>
-
-        <section className="context-section">
-          <div className="rail-heading">
-            <div>
-              <p className="section-label">复习</p>
-              <h2>即将到期</h2>
-            </div>
-            <button className="icon-button compact" title="复习队列">
-              <Brain size={18} />
-            </button>
-          </div>
-
-          <div className="review-list">
-            {reviewQueue.slice(0, 4).map((item) => (
-              <button
-                className="review-row"
-                key={`${item.cardId}-${item.concept}`}
-                onClick={() => setSelectedCardId(item.cardId)}
-                title={`打开「${item.concept}」复习`}
-                type="button"
-              >
-                <span>{item.concept}</span>
-                <time>{formatDueDate(item.dueAt)}</time>
-              </button>
-            ))}
-          </div>
-        </section>
-
-        <section className="context-section">
-          <div className="rail-heading">
-            <div>
-              <p className="section-label">用量</p>
-              <h2>AI 额度</h2>
-            </div>
-            <button className="icon-button compact" title="用量详情">
-              <MoreHorizontal size={18} />
-            </button>
-          </div>
-
-          <div className="usage-meter">
-            <div className="usage-fill" />
-          </div>
-          <div className="usage-copy">
-            <span>剩余 128</span>
-            <span>Pro 内测</span>
-          </div>
-        </section>
-      </aside>
+      ) : null}
 
       {selectedCard ? (
         <SourceDetailDrawer
