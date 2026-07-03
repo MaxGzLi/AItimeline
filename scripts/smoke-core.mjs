@@ -1163,6 +1163,146 @@ assert.deepEqual(noteResult.post.concepts, ["RAG"], "notes should only tag conce
 assert.equal(noteResult.importRecord.status, "ready", "note imports are ready immediately");
 assert.throws(() => transformUserNote("   "), /needs some text/, "empty notes should be rejected");
 
+// --- Obsidian-style wikilinks: parse, resolve, backlinks, linked graph ---
+const { parseWikilinks, resolveWikilink, buildBacklinkIndex, buildLinkedKnowledgeGraph } = await import(
+  "../packages/core/dist/graph/wikilinks.js"
+);
+
+const parsedPlain = parseWikilinks("see [[RAG]] first");
+assert.equal(parsedPlain.length, 1, "a plain wikilink should parse");
+assert.equal(parsedPlain[0].target, "RAG", "the target should be extracted");
+assert.equal("see [[RAG]] first".slice(parsedPlain[0].start, parsedPlain[0].end), "[[RAG]]", "start/end should bracket the token");
+
+assert.equal(parseWikilinks("聊聊 [[ 检索增强 ]] 吧").length, 1, "a Chinese wikilink should parse");
+assert.equal(parseWikilinks("聊聊 [[ 检索增强 ]] 吧")[0].target, "检索增强", "wikilink targets are trimmed");
+
+const parsedMany = parseWikilinks("[[A]] 和 [[B]],还有句中的 [[C]] 概念");
+assert.equal(parsedMany.length, 3, "multiple inline wikilinks should all parse");
+assert.deepEqual(parsedMany.map((link) => link.target), ["A", "B", "C"], "inline wikilinks keep source order");
+
+assert.equal(parseWikilinks("this [[is unclosed").length, 0, "an unclosed wikilink must not match");
+assert.equal(parseWikilinks("empty [[]] token").length, 0, "an empty target must not match");
+
+const wikiCards = [
+  {
+    id: "card-rag",
+    title: "RAG 入门",
+    summary: "检索增强生成的基础。",
+    keyTakeaway: "先检索再生成。",
+    concepts: ["RAG", "检索"],
+    sources: [{ id: "s-rag", title: "RAG 来源", url: "https://example.com/rag", type: "article" }],
+    createdAt: "2026-01-01T00:00:00.000Z"
+  },
+  {
+    id: "card-eval",
+    title: "评估方法",
+    summary: "如何衡量质量。",
+    keyTakeaway: "没有评估就无法迭代。",
+    concepts: ["评估"],
+    sources: [{ id: "s-eval", title: "评估来源", url: "https://example.com/eval", type: "article" }],
+    createdAt: "2026-01-02T00:00:00.000Z"
+  }
+];
+
+// Resolve precedence: a concept wins over a same-named card title; ghost is the fallback.
+assert.equal(resolveWikilink("rag", { cards: wikiCards }).kind, "concept", "a known concept resolves to a concept (case-insensitive)");
+assert.equal(resolveWikilink("rag", { cards: wikiCards }).label, "RAG", "the concept keeps its library spelling");
+assert.equal(resolveWikilink("评估方法", { cards: wikiCards }).kind, "card", "an exact card title resolves to a card");
+assert.equal(resolveWikilink("评估方法", { cards: wikiCards }).targetId, "card-eval", "a card link targets the card id");
+assert.equal(resolveWikilink("不存在的东西", { cards: wikiCards }).kind, "ghost", "an unmatched target is a ghost");
+
+const conceptVsCardCards = [
+  { id: "c-hub", title: "记忆", summary: "s", keyTakeaway: "k", concepts: ["记忆"], sources: [], createdAt: "2026-01-01T00:00:00.000Z" },
+  { id: "c-other", title: "别的", summary: "s", keyTakeaway: "k", concepts: ["记忆"], sources: [], createdAt: "2026-01-02T00:00:00.000Z" }
+];
+assert.equal(resolveWikilink("记忆", { cards: conceptVsCardCards }).kind, "concept", "concept precedence beats a card whose title equals the concept");
+
+// Backlinks: note bodies and public comments both count; the snippet frames the link.
+const backlinkCards = [
+  {
+    id: "note-1",
+    title: "我的笔记",
+    summary: "今天在读 [[RAG]],它依赖检索质量。",
+    keyTakeaway: "k",
+    concepts: [],
+    sources: [{ id: "s-note", title: "我的笔记", url: "local://notes/1", type: "user_note" }],
+    createdAt: "2026-01-03T00:00:00.000Z",
+    thread: []
+  },
+  {
+    id: "card-rag",
+    title: "RAG 入门",
+    summary: "检索增强生成的基础。",
+    keyTakeaway: "先检索再生成。",
+    concepts: ["RAG"],
+    sources: [{ id: "s-rag", title: "RAG 来源", url: "https://example.com/rag", type: "article" }],
+    createdAt: "2026-01-01T00:00:00.000Z",
+    thread: [
+      { id: "b1", kind: "user_comment", title: "你", body: "对比一下 [[评估方法]] 会更清楚。" },
+      { id: "b2", kind: "agent_reply", title: "AI", body: "同意 [[RAG]] 的看法。" }
+    ]
+  },
+  {
+    id: "card-eval",
+    title: "评估方法",
+    summary: "如何衡量质量。",
+    keyTakeaway: "没有评估就无法迭代。",
+    concepts: ["评估"],
+    sources: [{ id: "s-eval", title: "评估来源", url: "https://example.com/eval", type: "article" }],
+    createdAt: "2026-01-02T00:00:00.000Z",
+    thread: []
+  }
+];
+const backlinkIndex = buildBacklinkIndex(backlinkCards);
+const ragBacklinks = backlinkIndex.get("rag") ?? [];
+assert.equal(ragBacklinks.length, 1, "only user-authored text (note body) backlinks the concept, not the agent reply");
+assert.equal(ragBacklinks[0].fromPostId, "note-1", "the backlink points at the authoring post");
+assert.ok(ragBacklinks[0].snippet.includes("[[RAG]]"), "the snippet frames the raw link");
+assert.equal(backlinkIndex.get("card-eval")?.[0].fromPostId, "card-rag", "a public comment backlinks the card it links to");
+assert.equal(backlinkIndex.get("card-eval")?.[0].kind, "card", "the backlink records the resolved kind");
+
+// Linked graph: nodes/edges, dedupe, and stable ordering.
+const linkedSignals = [{ id: "sig-1", cardId: "card-rag", type: "save", createdAt: "2026-01-04T00:00:00.000Z" }];
+const linked = buildLinkedKnowledgeGraph({ cards: backlinkCards, signals: linkedSignals });
+assert.ok(linked.nodes.some((node) => node.id === "note-1" && node.kind === "note"), "a user note becomes a note node");
+assert.ok(linked.nodes.some((node) => node.id === "card-rag" && node.kind === "card"), "an imported card becomes a card node");
+assert.ok(linked.nodes.some((node) => node.id === "rag" && node.kind === "concept"), "an interacted concept becomes a concept hub node");
+assert.ok(
+  linked.edges.some((edge) => edge.source === "note-1" && edge.target === "rag" && edge.kind === "wikilink"),
+  "a note's wikilink becomes a wikilink edge"
+);
+assert.ok(
+  linked.edges.some((edge) => edge.source === "card-rag" && edge.target === "rag" && edge.kind === "mentions"),
+  "a card mentioning a hub concept gets a mentions edge"
+);
+const linkedAgain = buildLinkedKnowledgeGraph({ cards: backlinkCards, signals: linkedSignals });
+assert.deepEqual(
+  linkedAgain.nodes.map((node) => node.id),
+  linked.nodes.map((node) => node.id),
+  "node order is deterministic across runs"
+);
+assert.deepEqual(
+  linkedAgain.edges.map((edge) => edge.id),
+  linked.edges.map((edge) => edge.id),
+  "edge order is deterministic across runs"
+);
+assert.equal(new Set(linked.edges.map((edge) => edge.id)).size, linked.edges.length, "edges are de-duplicated by id");
+
+const ghostCards = [
+  {
+    id: "note-ghost",
+    title: "带幽灵链接的笔记",
+    summary: "想了解 [[还没有的概念]]。",
+    keyTakeaway: "k",
+    concepts: [],
+    sources: [{ id: "s-g", title: "n", url: "local://notes/g", type: "user_note" }],
+    createdAt: "2026-01-05T00:00:00.000Z",
+    thread: []
+  }
+];
+const ghostGraph = buildLinkedKnowledgeGraph({ cards: ghostCards, signals: [] });
+assert.ok(ghostGraph.nodes.some((node) => node.kind === "ghost"), "an unresolved wikilink target becomes a ghost node");
+
 console.log(
   JSON.stringify(
     {

@@ -1,17 +1,20 @@
 import type {
   CardConnection,
   InteractionSignal,
+  KnowledgeCard,
   KnowledgeChunk,
   LearningFeedback,
   RankedKnowledgeCard,
   SourceAsset
 } from "@aitimeline/core";
+import type { Backlink } from "@aitimeline/core";
 import {
   Brain,
   CheckCircle2,
   FileText,
   GitBranch,
   GraduationCap,
+  Link2,
   ListChecks,
   MessageCircle,
   Quote,
@@ -35,10 +38,13 @@ import {
   formatTimestamp
 } from "../lib/format";
 import type { AiMessage, EvidenceLedger } from "../lib/types";
+import { renderWithWikilinks } from "../lib/wikilinks";
 
 export function SourceDetailDrawer({
   asset,
+  backlinks,
   card,
+  cards,
   chunks,
   connections,
   evidenceLedger,
@@ -47,12 +53,15 @@ export function SourceDetailDrawer({
   onAsk,
   onClose,
   onOpenCardId,
+  onOpenConcept,
   onPromptChange,
   prompt,
   signal
 }: {
   asset?: SourceAsset;
+  backlinks: Backlink[];
   card: RankedKnowledgeCard;
+  cards: KnowledgeCard[];
   chunks: KnowledgeChunk[];
   connections: CardConnection[];
   evidenceLedger?: EvidenceLedger | null;
@@ -61,10 +70,12 @@ export function SourceDetailDrawer({
   onAsk: (event: FormEvent<HTMLFormElement>) => void;
   onClose: () => void;
   onOpenCardId: (cardId: string) => void;
+  onOpenConcept: (concept: string) => void;
   onPromptChange: (value: string) => void;
   prompt: string;
   signal?: InteractionSignal;
 }) {
+  const handlers = { onOpenConcept, onOpenCardId };
   const citation = card.citations?.[0];
   const source = card.sources[0];
   const drawerRef = useRef<HTMLElement>(null);
@@ -128,7 +139,7 @@ export function SourceDetailDrawer({
           <Sparkles size={18} />
           <h3>智能体要点</h3>
         </div>
-        <p>{card.keyTakeaway}</p>
+        <p>{renderWithWikilinks(card.keyTakeaway, cards, handlers)}</p>
       </section>
 
       {knowledgeBlocks.length ? (
@@ -142,7 +153,7 @@ export function SourceDetailDrawer({
               <div className="x-drawer-block" key={block.id}>
                 <span>{formatThreadKind(block.kind)}</span>
                 <h4>{block.title}</h4>
-                <p>{block.body}</p>
+                <p>{renderWithWikilinks(block.body, cards, handlers)}</p>
               </div>
             ))}
           </div>
@@ -258,6 +269,30 @@ export function SourceDetailDrawer({
                 <span className={`x-drawer-connkind ${connection.kind}`}>{formatConnectionKind(connection.kind)}</span>
                 <strong>{connection.title}</strong>
                 <small>通过「{connection.concept}」</small>
+              </button>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {backlinks.length > 0 ? (
+        <section className="x-drawer-sec">
+          <div className="x-drawer-sechead">
+            <Link2 size={18} />
+            <h3>反向链接</h3>
+          </div>
+          <p className="x-muted-copy">哪些笔记和评论用 [[…]] 提到了这张卡或它的概念。</p>
+          <div className="x-backlinks">
+            {backlinks.map((backlink) => (
+              <button
+                className="x-backlink"
+                key={`${backlink.fromPostId}-${backlink.snippet}`}
+                onClick={() => onOpenCardId(backlink.fromPostId)}
+                title={`打开「${backlink.fromTitle}」`}
+                type="button"
+              >
+                <span className="x-backlink-from">{backlink.fromTitle}</span>
+                <span className="x-backlink-snip">{backlink.snippet}</span>
               </button>
             ))}
           </div>

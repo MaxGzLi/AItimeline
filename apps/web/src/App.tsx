@@ -1,8 +1,10 @@
 import {
+  buildBacklinkIndex,
   buildCardConnections,
   buildConceptDigest,
   buildKnowledgeBoundary,
   buildKnowledgeGraph,
+  buildLinkedKnowledgeGraph,
   createReviewQueue,
   demoCards,
   demoProfile,
@@ -10,6 +12,7 @@ import {
   evaluateInteraction,
   rankKnowledgeCards,
   transformMockYouTubeUrl,
+  type Backlink,
   type CardConnection,
   type ConceptDigest,
   type InteractionSignal,
@@ -410,6 +413,12 @@ export function App() {
     [selectedSourceId, sourceAssets]
   );
   const graph = useMemo(() => buildKnowledgeGraph(allCards, allSignals), [allCards, allSignals]);
+  const linkedGraph = useMemo(
+    () => buildLinkedKnowledgeGraph({ cards: allCards, signals: allSignals }),
+    [allCards, allSignals]
+  );
+  // Wikilink backlinks, keyed by concept slug and card id (see buildBacklinkIndex).
+  const backlinkIndex = useMemo(() => buildBacklinkIndex(allCards), [allCards]);
   const reviewQueue = useMemo(
     () => createReviewQueue(allCards, allSignals),
     [allCards, allSignals]
@@ -422,6 +431,40 @@ export function App() {
   const selectedFeedback = selectedCard ? learningFeedback[selectedCard.id] : undefined;
   const selectedSignal = selectedCard ? interactionSignals[selectedCard.id] : undefined;
   const selectedEvidenceLedger = selectedCard ? evidenceLedgers[selectedCard.id] : undefined;
+  // Backlinks that point at the open card's id or any of its concepts, minus
+  // links authored on the card itself.
+  const selectedBacklinks = useMemo<Backlink[]>(() => {
+    if (!selectedCard) {
+      return [];
+    }
+
+    const seen = new Set<string>();
+    const results: Backlink[] = [];
+    const collect = (key: string) => {
+      for (const backlink of backlinkIndex.get(key) ?? []) {
+        if (backlink.fromPostId === selectedCard.id) {
+          continue;
+        }
+        const signature = `${backlink.fromPostId}::${backlink.snippet}`;
+        if (seen.has(signature)) {
+          continue;
+        }
+        seen.add(signature);
+        results.push(backlink);
+      }
+    };
+
+    collect(selectedCard.id);
+    for (const concept of selectedCard.concepts) {
+      collect(slugConcept(concept));
+    }
+
+    return results;
+  }, [backlinkIndex, selectedCard]);
+  const conceptBacklinks = useMemo<Backlink[]>(
+    () => (conceptView ? backlinkIndex.get(slugConcept(conceptView)) ?? [] : []),
+    [backlinkIndex, conceptView]
+  );
   const hasQueuedScoutWork = useMemo(
     () => queuedJobCount > 0 || sourceCandidates.some((record) => record.status === "queued"),
     [queuedJobCount, sourceCandidates]
@@ -1173,6 +1216,7 @@ export function App() {
                 visibleCards.map((card, index) => (
                   <PostView
                     card={card}
+                    cards={allCards}
                     connections={connectionsByCard[card.id] ?? []}
                     isFocused={index === focusedIndex}
                     key={card.id}
@@ -1209,7 +1253,13 @@ export function App() {
         ) : null}
 
         {activeView === "graph" ? (
-          <GraphView boundary={boundary} cardCountByConcept={cardCountByConcept} onOpenConcept={handleOpenConcept} />
+          <GraphView
+            boundary={boundary}
+            cardCountByConcept={cardCountByConcept}
+            linkedGraph={linkedGraph}
+            onOpenCardId={handleOpenCardId}
+            onOpenConcept={handleOpenConcept}
+          />
         ) : null}
 
         {activeView === "review" ? (
@@ -1279,7 +1329,9 @@ export function App() {
       {selectedCard ? (
         <SourceDetailDrawer
           asset={selectedAsset}
+          backlinks={selectedBacklinks}
           card={selectedCard}
+          cards={allCards}
           chunks={selectedChunks}
           connections={connectionsByCard[selectedCard.id] ?? []}
           evidenceLedger={selectedEvidenceLedger}
@@ -1288,6 +1340,7 @@ export function App() {
           onAsk={handleAskAi}
           onClose={() => setSelectedCardId(null)}
           onOpenCardId={handleOpenCardId}
+          onOpenConcept={handleOpenConcept}
           onPromptChange={setAiPrompt}
           prompt={aiPrompt}
           signal={selectedSignal}
@@ -1296,6 +1349,7 @@ export function App() {
 
       {conceptDigest && conceptDigest.cardCount > 0 ? (
         <ConceptDigestPanel
+          backlinks={conceptBacklinks}
           digest={conceptDigest}
           onClose={() => setConceptView(null)}
           onOpenCardId={handleOpenCardFromConcept}
