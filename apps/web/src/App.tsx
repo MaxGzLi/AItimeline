@@ -189,6 +189,28 @@ type ApiCurationJobsResponse = {
 
 type MemoryAction = "like" | "save" | "ask";
 
+type AgentBoundaryZone = "inside" | "learning" | "frontier" | "dark";
+
+type AgentAskApiResponse = {
+  turn: {
+    question: string;
+    intent: string;
+    tier: string;
+    zone: AgentBoundaryZone;
+    matchedConcepts: string[];
+    answer: {
+      answer: string;
+      citations: Array<{ sourceTitle: string; quote: string }>;
+      grounded: boolean;
+      runnerKind: "model" | "deterministic";
+    } | null;
+    answerCardId?: string;
+    actions: Array<{ kind: string; label: string; concepts: string[]; queries?: string[] }>;
+    notes: string[];
+  };
+  discoveredCandidates: Array<{ id: string }>;
+};
+
 type SourceCandidateRecord = {
   id: string;
   candidate: BackgroundSourceCandidate;
@@ -208,6 +230,10 @@ export function App() {
   const [sourceChunks, setSourceChunks] = useState<KnowledgeChunk[]>([]);
   const [sourceCandidates, setSourceCandidates] = useState<SourceCandidateRecord[]>([]);
   const [aiThreads, setAiThreads] = useState<AiThreads>({});
+  const [agentQuestion, setAgentQuestion] = useState("");
+  const [agentResponse, setAgentResponse] = useState<AgentAskApiResponse | null>(null);
+  const [agentMessage, setAgentMessage] = useState("");
+  const [isAgentAsking, setIsAgentAsking] = useState(false);
   const [interactionSignals, setInteractionSignals] = useState<InteractionSignals>({});
   const [learningFeedback, setLearningFeedback] = useState<LearningFeedbackByPost>({});
   const [evidenceLedgers, setEvidenceLedgers] = useState<Record<string, EvidenceLedger | null>>({});
@@ -243,6 +269,14 @@ export function App() {
   const syncedSignalSignatures = useRef<Record<string, string>>(loadSyncedSignalSignatures());
   const pendingSignalSignatures = useRef<Record<string, string>>({});
   const curationRunInFlight = useRef(false);
+  const refreshSequence = useRef(0);
+  // Mirror of interactionSignals so stable callbacks (e.g. handleDwell) can read
+  // the latest signals without stale closures and without impure state updaters.
+  const interactionSignalsRef = useRef<InteractionSignals>({});
+
+  useEffect(() => {
+    interactionSignalsRef.current = interactionSignals;
+  }, [interactionSignals]);
 
   const importedSignals = useMemo(
     () =>
@@ -653,6 +687,8 @@ export function App() {
   }, []);
 
   async function refreshFromApi(options: { silent?: boolean } = {}) {
+    const requestId = ++refreshSequence.current;
+
     if (!options.silent) {
       setApiStatus("checking");
       setApiMessage("Refreshing local API state");
@@ -666,6 +702,12 @@ export function App() {
         apiRequest<ApiSnapshot>("/api/snapshot"),
         apiRequest<ApiCurationJobsResponse>("/api/curation/jobs?status=queued")
       ]);
+
+      // A newer refresh started while this one was in flight; drop the stale result.
+      if (requestId !== refreshSequence.current) {
+        return;
+      }
+
       const registryAssets = snapshot.sourceRegistries.flatMap((record) => record.registry.assets);
       const registryChunks = snapshot.sourceRegistries.flatMap((record) => record.registry.chunks);
 
@@ -678,6 +720,10 @@ export function App() {
       setApiStatus("connected");
       setApiMessage("Connected to local API");
     } catch (error) {
+      if (requestId !== refreshSequence.current) {
+        return;
+      }
+
       setApiStatus("offline");
       setApiMessage(error instanceof Error ? error.message : "Start npm run dev:api to use source imports");
     }
@@ -1012,31 +1058,58 @@ export function App() {
     recordInteraction(card, { skippedQuickly: true, dwellTimeMs: 800, openedThread: false });
   }
 
+  async function handleAgentAsk(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const question = agentQuestion.trim();
+
+    if (!question || isAgentAsking) {
+      return;
+    }
+
+    setIsAgentAsking(true);
+    setAgentMessage("");
+
+    try {
+      const result = await apiRequest<AgentAskApiResponse>("/api/agent/ask", {
+        method: "POST",
+        body: { question }
+      });
+
+      setAgentResponse(result);
+      void refreshFromApi({ silent: true });
+    } catch (error) {
+      setAgentMessage(
+        error instanceof Error ? error.message : "Agent request failed. Start npm run dev:api first."
+      );
+    } finally {
+      setIsAgentAsking(false);
+    }
+  }
+
   function recordInteraction(card: KnowledgeCard, patch: Partial<InteractionSignal>) {
-    setInteractionSignals((signals) => {
-      const currentSignal = signals[card.id] ?? createInteractionSignal(card);
-      const dwellTimeMs = Math.max(currentSignal.dwellTimeMs, patch.dwellTimeMs ?? 0);
-      const nextSignal = {
-        ...currentSignal,
-        ...patch,
-        impression: true,
-        conceptIds: card.concepts,
-        topicId: getTopicId(card),
-        dwellTimeMs,
-        createdAt: new Date().toISOString()
-      };
-      const feedback = evaluateInteraction(nextSignal, deriveTopicState(nextSignal));
+    const signals = interactionSignalsRef.current;
+    const currentSignal = signals[card.id] ?? createInteractionSignal(card);
+    const dwellTimeMs = Math.max(currentSignal.dwellTimeMs, patch.dwellTimeMs ?? 0);
+    const nextSignal = {
+      ...currentSignal,
+      ...patch,
+      impression: true,
+      conceptIds: card.concepts,
+      topicId: getTopicId(card),
+      dwellTimeMs,
+      createdAt: new Date().toISOString()
+    };
+    const feedback = evaluateInteraction(nextSignal, deriveTopicState(nextSignal));
 
-      setLearningFeedback((feedbackByPost) => ({
-        ...feedbackByPost,
-        [card.id]: feedback
-      }));
-
-      return {
-        ...signals,
-        [card.id]: nextSignal
-      };
-    });
+    interactionSignalsRef.current = {
+      ...signals,
+      [card.id]: nextSignal
+    };
+    setInteractionSignals(interactionSignalsRef.current);
+    setLearningFeedback((feedbackByPost) => ({
+      ...feedbackByPost,
+      [card.id]: feedback
+    }));
   }
 
   return (
@@ -1223,6 +1296,16 @@ export function App() {
       </main>
 
       <aside className="right-rail" aria-label="Context">
+        <AgentAskPanel
+          isAsking={isAgentAsking}
+          message={agentMessage}
+          onOpenCard={handleOpenCardId}
+          onQuestionChange={setAgentQuestion}
+          onSubmit={handleAgentAsk}
+          question={agentQuestion}
+          response={agentResponse}
+        />
+
         <SourceCandidatePanel
           autoScoutEnabled={autoScoutEnabled}
           candidateConcept={candidateConcept}
@@ -1451,6 +1534,127 @@ export function App() {
       ) : null}
     </div>
   );
+}
+
+function AgentAskPanel({
+  isAsking,
+  message,
+  onOpenCard,
+  onQuestionChange,
+  onSubmit,
+  question,
+  response
+}: {
+  isAsking: boolean;
+  message: string;
+  onOpenCard: (cardId: string) => void;
+  onQuestionChange: (value: string) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  question: string;
+  response: AgentAskApiResponse | null;
+}) {
+  const turn = response?.turn ?? null;
+
+  return (
+    <section className="context-section agent-ask-section">
+      <div className="rail-heading">
+        <div>
+          <p className="section-label">Agent</p>
+          <h2>Ask Your Knowledge</h2>
+        </div>
+        <button className="icon-button compact" title="Agent entry">
+          <Bot size={18} />
+        </button>
+      </div>
+
+      <form className="candidate-form" onSubmit={onSubmit}>
+        <label className="candidate-input">
+          <Sparkles size={16} />
+          <input
+            aria-label="Ask the agent a question"
+            onChange={(event) => onQuestionChange(event.target.value)}
+            placeholder="Ask about anything you are learning"
+            value={question}
+          />
+        </label>
+        <button className="primary-action candidate-submit" disabled={isAsking} type="submit">
+          {isAsking ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}
+          <span>{isAsking ? "Asking" : "Ask"}</span>
+        </button>
+      </form>
+
+      {message ? <div className="candidate-message">{message}</div> : null}
+
+      {turn ? (
+        <div className="agent-turn">
+          <div className="signal-chip-list">
+            <span>{formatBoundaryZone(turn.zone)}</span>
+            {turn.matchedConcepts.slice(0, 3).map((concept) => (
+              <span key={concept}>{concept}</span>
+            ))}
+          </div>
+
+          {turn.answer ? (
+            <>
+              <p className="agent-answer">{turn.answer.answer}</p>
+              {turn.answer.citations.slice(0, 2).map((citation) => (
+                <p className="agent-citation" key={`${citation.sourceTitle}-${citation.quote.slice(0, 24)}`}>
+                  {citation.sourceTitle}: “{citation.quote}”
+                </p>
+              ))}
+              {turn.answerCardId ? (
+                <button
+                  className="secondary-action agent-open-card"
+                  onClick={() => onOpenCard(turn.answerCardId as string)}
+                  type="button"
+                >
+                  <FileText size={16} />
+                  <span>Open the cited card</span>
+                </button>
+              ) : null}
+            </>
+          ) : (
+            turn.notes.map((note) => (
+              <p className="agent-answer" key={note}>
+                {note}
+              </p>
+            ))
+          )}
+
+          {response && response.discoveredCandidates.length > 0 ? (
+            <div className="candidate-message">
+              {pluralize(response.discoveredCandidates.length, "source candidate", "source candidates")} queued for
+              discovery.
+            </div>
+          ) : null}
+
+          {turn.actions.length > 0 ? (
+            <div className="signal-chip-list agent-actions">
+              {turn.actions.map((action) => (
+                <span key={action.kind}>{action.label}</span>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function formatBoundaryZone(zone: AgentBoundaryZone): string {
+  if (zone === "inside") {
+    return "Inside your boundary";
+  }
+
+  if (zone === "learning") {
+    return "In your learning zone";
+  }
+
+  if (zone === "frontier") {
+    return "On your frontier";
+  }
+
+  return "Outside your knowledge base";
 }
 
 function SourceCandidatePanel({
@@ -2701,7 +2905,11 @@ function loadStoredState(): PersistedMvpState | null {
 }
 
 function saveStoredState(state: PersistedMvpState): void {
-  window.localStorage.setItem(storageKey, JSON.stringify(state));
+  try {
+    window.localStorage.setItem(storageKey, JSON.stringify(state));
+  } catch (error) {
+    console.warn("Failed to persist timeline state to local storage.", error);
+  }
 }
 
 function loadSyncedSignalSignatures(): Record<string, string> {
@@ -2716,7 +2924,11 @@ function loadSyncedSignalSignatures(): Record<string, string> {
 }
 
 function saveSyncedSignalSignatures(signatures: Record<string, string>): void {
-  window.localStorage.setItem(syncedSignalsStorageKey, JSON.stringify(signatures));
+  try {
+    window.localStorage.setItem(syncedSignalsStorageKey, JSON.stringify(signatures));
+  } catch (error) {
+    console.warn("Failed to persist synced signal signatures to local storage.", error);
+  }
 }
 
 function isStringRecord(value: unknown): value is Record<string, string> {

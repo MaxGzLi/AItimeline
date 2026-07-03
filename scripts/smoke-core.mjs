@@ -1,10 +1,20 @@
 import assert from "node:assert/strict";
 
 const { createBackgroundCurationPlan } = await import("../packages/core/dist/agents/backgroundCuration.js");
+const { runConversationTurn } = await import("../packages/core/dist/agents/conversationAgent.js");
+const { createStaticSearchProvider } = await import("../packages/core/dist/discovery/searchProvider.js");
+const { planDiscoveryQueries, runSourceDiscovery } = await import(
+  "../packages/core/dist/discovery/sourceDiscovery.js"
+);
+const { buildKnowledgeBoundary, classifyConceptZone } = await import(
+  "../packages/core/dist/graph/knowledgeBoundary.js"
+);
 const { createPersistentBackgroundCurationJobStore, runDueBackgroundCurationJobs } = await import(
   "../packages/core/dist/agents/backgroundCurationQueue.js"
 );
 const { createEvidenceLedger } = await import("../packages/core/dist/harness/evidenceLedger.js");
+const { validateGrounding } = await import("../packages/core/dist/harness/groundingGate.js");
+const { validateKnowledgePost } = await import("../packages/core/dist/harness/schema.js");
 const { createModelKnowledgePostRunner } = await import("../packages/core/dist/harness/modelRunner.js");
 const { evaluateInteraction } = await import("../packages/core/dist/harness/feedbackPolicy.js");
 const { createFollowupGenerationProtocol, validateFollowupGenerationProtocol } = await import(
@@ -228,6 +238,80 @@ assert.equal(evidenceLedger.postId, result.cards[0].id, "evidence ledger should 
 assert.ok(evidenceLedger.summary.totalClaims > 0, "evidence ledger should include grounded claims");
 assert.equal(evidenceLedger.summary.failed, 0, "deterministic posts should have no failed source-fact claims");
 assert.ok(evidenceLedger.claims[0]?.evidence.length > 0, "evidence ledger claims should resolve source chunks");
+
+// Harness contract: citations must be chunk-level, weight 0 edges are legal, acronym claims still ground.
+const contractCard = result.cards[0];
+const chunklessCitationCard = {
+  ...contractCard,
+  citations: contractCard.citations.map(({ chunkId: _chunkId, ...rest }) => rest)
+};
+
+assert.equal(
+  validateKnowledgePost(chunklessCitationCard).valid,
+  false,
+  "citations without a chunkId should fail schema validation"
+);
+assert.equal(
+  validateGrounding(chunklessCitationCard, result.sourceRegistry).valid,
+  false,
+  "grounding gate should reject citations without a chunkId"
+);
+assert.ok(contractCard.graphEdges.length > 0, "contract card should include graph edges");
+assert.equal(
+  validateKnowledgePost({
+    ...contractCard,
+    graphEdges: contractCard.graphEdges.map((edge, index) => (index === 0 ? { ...edge, weight: 0 } : edge))
+  }).valid,
+  true,
+  "graph edges with weight 0 should pass validation (schema minimum is 0)"
+);
+
+const acronymSourceCard = result.cards.find((card) =>
+  card.citations.some(
+    (citation) =>
+      result.sourceRegistry.chunks.find((chunk) => chunk.id === citation.chunkId)?.content.includes("RAG")
+  )
+);
+
+assert.ok(acronymSourceCard, "mock import should include a card grounded in the RAG chunk");
+
+const acronymGrounding = validateGrounding({ ...acronymSourceCard, summary: "RAG" }, result.sourceRegistry);
+const acronymSummaryCheck = acronymGrounding.checks.find((check) => check.fieldPath === "$.summary");
+
+assert.equal(
+  acronymSummaryCheck?.status,
+  "passed",
+  "short acronym claims should still ground against cited evidence"
+);
+
+// Numeric hard gate: fabricated figures must fail even when lexical overlap stays high.
+const fabricatedNumberGrounding = validateGrounding(
+  { ...contractCard, summary: `${contractCard.summary} In 2031 this covered 87% of cases.` },
+  result.sourceRegistry
+);
+const fabricatedNumberCheck = fabricatedNumberGrounding.checks.find((check) => check.fieldPath === "$.summary");
+
+assert.equal(fabricatedNumberCheck?.status, "failed", "source facts with fabricated numbers should fail grounding");
+assert.match(
+  fabricatedNumberCheck?.reason ?? "",
+  /2031/,
+  "numeric grounding failures should name the ungrounded numbers"
+);
+
+const citedChunkContent = result.sourceRegistry.chunks.find(
+  (chunk) => chunk.id === contractCard.citations[0]?.chunkId
+)?.content;
+const evidenceNumber = citedChunkContent?.match(/\d+/)?.[0];
+
+if (evidenceNumber) {
+  const groundedNumberGrounding = validateGrounding(
+    { ...contractCard, summary: `${contractCard.summary} The source mentions ${evidenceNumber}.` },
+    result.sourceRegistry
+  );
+  const groundedNumberCheck = groundedNumberGrounding.checks.find((check) => check.fieldPath === "$.summary");
+
+  assert.equal(groundedNumberCheck?.status, "passed", "numbers present in cited evidence should pass grounding");
+}
 
 let repairCalls = 0;
 const repairRunner = createModelKnowledgePostRunner({
@@ -531,6 +615,222 @@ assert.equal(
   false,
   "background curation should not import sources for skipped topics"
 );
+
+const secondSkipSignal = {
+  ...skipSignal,
+  postId: result.cards[1].id,
+  topicId: "vector-db-basics",
+  conceptIds: ["Vector DB"]
+};
+const secondFatiguedTopicState = { ...fatiguedTopicState, topicId: "vector-db-basics" };
+const concurrencyPlan = createBackgroundCurationPlan({
+  signals: [skipSignal, secondSkipSignal],
+  feedback: [skipFeedback, evaluateInteraction(secondSkipSignal, secondFatiguedTopicState)],
+  topicStates: [fatiguedTopicState, secondFatiguedTopicState],
+  generatedAt: "2026-06-10T00:00:00.000Z"
+});
+
+assert.equal(
+  concurrencyPlan.jobs.filter((job) => job.kind === "cooldown_topic").length,
+  2,
+  "concurrency fixture should queue two cooldown jobs"
+);
+
+let persistedConcurrencyJobs = "";
+const concurrencyStore = createPersistentBackgroundCurationJobStore({
+  read: () => persistedConcurrencyJobs,
+  write: (serialized) => {
+    persistedConcurrencyJobs = serialized;
+  }
+});
+
+concurrencyStore.enqueuePlan(concurrencyPlan);
+
+const cooldownExecutionsByTopic = new Map();
+const concurrencyHandlers = {
+  cooldownTopic: async (job) => {
+    cooldownExecutionsByTopic.set(job.topicId, (cooldownExecutionsByTopic.get(job.topicId) ?? 0) + 1);
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
+
+    return { kind: job.kind, message: "Topic cooldown recorded." };
+  }
+};
+// Cooldown jobs get a runAfter ~36h out, so run once both are due.
+const concurrentBatches = await Promise.all([
+  runDueBackgroundCurationJobs(concurrencyStore, concurrencyHandlers, {
+    now: "2026-06-12T00:00:00.000Z",
+    kinds: ["cooldown_topic"]
+  }),
+  runDueBackgroundCurationJobs(concurrencyStore, concurrencyHandlers, {
+    now: "2026-06-12T00:00:00.000Z",
+    kinds: ["cooldown_topic"]
+  })
+]);
+
+assert.equal(
+  concurrentBatches.flatMap((batch) => batch.records).length,
+  2,
+  "concurrent curation runs should execute each job exactly once"
+);
+assert.ok(
+  Array.from(cooldownExecutionsByTopic.values()).every((count) => count === 1),
+  "concurrent curation runs should never execute the same job twice"
+);
+
+// --- Source discovery: query planning, candidate gate, provider failure isolation ---
+const discoveryQueries = planDiscoveryQueries({
+  concepts: ["Knowledge Graph"],
+  nextAction: "expand_broader",
+  goals: ["ship an agent product"]
+});
+
+assert.equal(
+  discoveryQueries[0],
+  "Knowledge Graph applications and comparisons",
+  "broaden intent should shape the discovery query"
+);
+assert.ok(
+  discoveryQueries.some((query) => query.includes("ship an agent product")),
+  "user goals should add a goal-flavored discovery query"
+);
+
+const staticProvider = createStaticSearchProvider({}, [
+  {
+    url: "https://example.com/kg-guide?utm_source=feed#intro",
+    title: "Knowledge Graph guide for memory systems",
+    snippet: "A long-form guide about how knowledge graph structure supports memory, review and recommendation."
+  },
+  {
+    url: "https://example.com/kg-guide",
+    title: "Knowledge Graph guide for memory systems",
+    snippet: "Duplicate of the same page after URL normalization."
+  },
+  {
+    url: result.source.url,
+    title: "Already imported source",
+    snippet: "Should be filtered out as a known URL."
+  }
+]);
+const discoveryRun = await runSourceDiscovery({
+  provider: staticProvider,
+  concepts: ["Knowledge Graph"],
+  nextAction: "expand_broader",
+  existingUrls: [result.source.url],
+  maxQueries: 1,
+  now: "2026-06-10T00:30:00.000Z"
+});
+
+assert.equal(discoveryRun.queries.length, 1, "discovery should respect the query cap");
+assert.equal(
+  discoveryRun.candidates.length,
+  1,
+  "the candidate gate should dedupe normalized URLs and drop known sources"
+);
+assert.equal(
+  discoveryRun.candidates[0].source.url.includes("utm_source"),
+  false,
+  "discovered URLs should be normalized"
+);
+assert.ok(discoveryRun.candidates[0].relevanceScore > 0.5, "matching concepts should score relevant");
+assert.ok(discoveryRun.candidates[0].id.startsWith("candidate-article-"), "candidates should carry stable ids");
+
+const flakyRun = await runSourceDiscovery({
+  provider: {
+    id: "flaky",
+    async search() {
+      throw new Error("provider offline");
+    }
+  },
+  concepts: ["Knowledge Graph"]
+});
+
+assert.equal(flakyRun.candidates.length, 0, "a failing provider should yield no candidates");
+assert.ok(flakyRun.errors.length > 0, "provider failures should be recorded, not fatal");
+
+// --- Knowledge boundary + conversation agent ---
+const allConcepts = Array.from(new Set(result.cards.flatMap((card) => card.concepts)));
+const knownConcept = allConcepts[0];
+const weakConcept = allConcepts.find((concept) => concept !== knownConcept) ?? knownConcept;
+const boundaryMemory = applyUserMemoryEdits(
+  createEmptyUserMemory(),
+  [
+    { kind: "add", field: "knowledge.knownConcepts", value: knownConcept },
+    { kind: "add", field: "knowledge.weakConcepts", value: weakConcept }
+  ],
+  "2026-06-10T00:00:00.000Z"
+).memory;
+const likedCard = result.cards[result.cards.length - 1];
+const boundarySignals = [
+  { id: "boundary-like", cardId: likedCard.id, type: "like", createdAt: "2026-06-10T00:00:00.000Z" }
+];
+const boundaryView = buildKnowledgeBoundary({
+  cards: result.cards,
+  signals: boundarySignals,
+  memory: boundaryMemory
+});
+
+assert.equal(classifyConceptZone(boundaryView, knownConcept), "inside", "known concepts should be inside");
+assert.equal(classifyConceptZone(boundaryView, weakConcept), "learning", "weak concepts should be learning");
+assert.equal(
+  classifyConceptZone(boundaryView, "Quantum Chromodynamics"),
+  "dark",
+  "unseen concepts should be dark"
+);
+
+const frontierConcept = allConcepts.find(
+  (concept) => concept !== knownConcept && concept !== weakConcept && !likedCard.concepts.includes(concept)
+);
+
+if (frontierConcept) {
+  assert.equal(
+    classifyConceptZone(boundaryView, frontierConcept),
+    "frontier",
+    "library concepts without signals should be frontier"
+  );
+}
+
+const conversationTurn = await runConversationTurn({
+  question: `How does ${weakConcept} relate to what I already know?`,
+  posts: result.cards,
+  registry: result.sourceRegistry,
+  memory: boundaryMemory,
+  userSignals: boundarySignals,
+  now: "2026-06-10T00:30:00.000Z"
+});
+
+assert.equal(conversationTurn.intent, "grounded_qa", "questions covered by the library should get grounded answers");
+assert.equal(conversationTurn.answer?.grounded, true, "conversation answers should be grounded");
+assert.equal(conversationTurn.answer?.runnerKind, "deterministic", "without a model the agent stays deterministic");
+assert.ok(conversationTurn.matchedConcepts.includes(weakConcept), "the turn should report matched concepts");
+assert.notEqual(conversationTurn.zone, "dark", "matched concepts should place the turn on the boundary");
+assert.equal(conversationTurn.signal?.askedQuestion, true, "grounded turns should emit an ask signal");
+assert.ok(conversationTurn.actions.length > 0, "turns should propose next actions");
+
+const darkTurn = await runConversationTurn({
+  question: "What is quantum chromodynamics?",
+  posts: result.cards,
+  registry: result.sourceRegistry,
+  memory: boundaryMemory,
+  now: "2026-06-10T00:31:00.000Z"
+});
+
+assert.equal(darkTurn.zone, "dark", "questions outside the library should be dark");
+assert.equal(darkTurn.intent, "discovery_proposal", "dark questions should propose discovery instead of answering");
+assert.equal(darkTurn.answer, null, "the agent must not answer dark questions from model memory");
+assert.equal(darkTurn.actions[0]?.kind, "discover_sources", "dark turns should propose source discovery");
+assert.ok(darkTurn.actions[0]?.queries?.length, "dark turns should carry discovery queries");
+
+const scopedTurn = await runConversationTurn({
+  question: "What is the key claim here?",
+  postId: result.cards[0].id,
+  posts: result.cards,
+  registry: result.sourceRegistry,
+  now: "2026-06-10T00:32:00.000Z"
+});
+
+assert.equal(scopedTurn.intent, "grounded_qa", "card-scoped questions should answer from that card");
+assert.equal(scopedTurn.answerCardId, result.cards[0].id, "card-scoped turns should target the given card");
+assert.ok(scopedTurn.answer?.citations.length, "card-scoped answers should cite source chunks");
 
 let persistedCurationJobs = "";
 const curationJobStorage = {

@@ -153,12 +153,18 @@ function applyListEdit(previousValue: string[], edit: UserMemoryEdit): string[] 
 }
 
 function reconcileKnowledgeConcepts(memory: UserMemory, field: UserMemoryListField, value: string[]): void {
+  const loweredValues = new Set(value.map((concept) => concept.toLowerCase()));
+
   if (field === "knowledge.knownConcepts") {
-    memory.knowledge.weakConcepts = memory.knowledge.weakConcepts.filter((concept) => !value.includes(concept));
+    memory.knowledge.weakConcepts = memory.knowledge.weakConcepts.filter(
+      (concept) => !loweredValues.has(concept.toLowerCase())
+    );
   }
 
   if (field === "knowledge.weakConcepts") {
-    memory.knowledge.knownConcepts = memory.knowledge.knownConcepts.filter((concept) => !value.includes(concept));
+    memory.knowledge.knownConcepts = memory.knowledge.knownConcepts.filter(
+      (concept) => !loweredValues.has(concept.toLowerCase())
+    );
   }
 }
 

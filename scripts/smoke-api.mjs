@@ -6,13 +6,29 @@ import { join } from "node:path";
 import { createApiServer, listen } from "../apps/api/src/server.mjs";
 
 const tempDir = await mkdtemp(join(tmpdir(), "aitimeline-api-"));
+let discoveryBaseUrl = "";
+const fakeSearchProvider = {
+  id: "smoke",
+  async search(query) {
+    return [
+      {
+        url: `${discoveryBaseUrl}/fixtures/article-background?query=${encodeURIComponent(query)}`,
+        title: `Background source for ${query}`,
+        snippet:
+          "A discovered background source that prepares related knowledge with citations, concepts and review hooks."
+      }
+    ];
+  }
+};
 const server = createApiServer({
   dataPath: join(tempDir, "aitimeline.json"),
   curationDataPath: join(tempDir, "curation-jobs.json"),
-  enableFixtures: true
+  enableFixtures: true,
+  searchProvider: fakeSearchProvider
 });
 const address = await listen(server, 0);
 const baseUrl = `http://${address.address}:${address.port}`;
+discoveryBaseUrl = baseUrl;
 
 try {
   const health = await requestJson("/health");
@@ -179,6 +195,94 @@ try {
   assert.equal(snapshot.topicStates.length, 1, "snapshot should persist topic states");
   assert.equal(snapshot.sourceCandidates.length, 1, "snapshot should persist source candidates");
   assert.equal(snapshot.sourceCandidates[0].status, "imported", "imported source candidate should be marked imported");
+
+  // --- Background source discovery: interest without candidates -> discover job -> pending inbox ---
+  const secondPost = importResult.posts.find((post) => post.id !== firstPost.id) ?? firstPost;
+  const secondTopic = secondPost.concepts[0] ?? "agentic-learning";
+  const discoverySignal = await requestJson("/api/signals", {
+    method: "POST",
+    body: {
+      generatedAt: "2026-06-10T01:00:00.000Z",
+      signal: {
+        postId: secondPost.id,
+        topicId: secondTopic,
+        conceptIds: secondPost.concepts,
+        impression: true,
+        dwellTimeMs: 16000,
+        openedThread: true,
+        liked: true,
+        saved: false,
+        askedQuestion: false,
+        reviewed: false,
+        skippedQuickly: false,
+        createdAt: "2026-06-10T01:00:00.000Z"
+      }
+    }
+  });
+
+  assert.ok(
+    discoverySignal.records.some((record) => record.job.kind === "discover_sources"),
+    "strong interest without matching candidates should enqueue source discovery"
+  );
+
+  const discoveryRun = await requestJson("/api/curation/run", {
+    method: "POST",
+    body: {
+      now: "2026-06-10T02:00:00.000Z",
+      kinds: ["discover_sources"]
+    }
+  });
+
+  assert.ok(
+    discoveryRun.records.some(
+      (record) => record.status === "succeeded" && record.result?.discoveredSourceCandidates?.length
+    ),
+    "discovery jobs should return candidates from the configured search provider"
+  );
+
+  const discoveredInbox = await requestJson("/api/source-candidates?status=pending");
+
+  assert.ok(
+    discoveredInbox.records.some(
+      (record) => record.intakeKind === "agent_discovery" && record.candidate.reason.startsWith("Discovered")
+    ),
+    "discovered candidates should land in the pending inbox"
+  );
+
+  // --- Agent entry: grounded turn, dark turn with inline discovery, metering ---
+  const agentGrounded = await requestJson("/api/agent/ask", {
+    method: "POST",
+    body: { question: `Tell me more about ${firstTopic}` }
+  });
+
+  assert.equal(agentGrounded.turn.intent, "grounded_qa", "library-covered questions should get grounded answers");
+  assert.equal(agentGrounded.turn.answer.grounded, true, "agent answers should be grounded");
+  assert.ok(agentGrounded.turn.answer.citations.length > 0, "agent answers should cite source chunks");
+  assert.notEqual(agentGrounded.turn.zone, "dark", "matched concepts should place the turn on the boundary");
+  assert.equal(agentGrounded.turnRecord.tier, "free", "deterministic turns should meter as free");
+
+  const agentDark = await requestJson("/api/agent/ask", {
+    method: "POST",
+    body: { question: "What is quantum chromodynamics?" }
+  });
+
+  assert.equal(agentDark.turn.zone, "dark", "out-of-library questions should be dark");
+  assert.equal(agentDark.turn.intent, "discovery_proposal", "dark turns should propose discovery, not answer");
+  assert.equal(agentDark.turn.answer, null, "the agent must not answer dark questions from model memory");
+  assert.ok(
+    agentDark.discoveredCandidates.length > 0,
+    "dark turns should trigger inline discovery when a provider is configured"
+  );
+  assert.equal(agentDark.snapshotSummary.agentTurns, 2, "agent turns should be metered in the snapshot");
+
+  const finalSnapshot = await requestJson("/api/snapshot");
+  const localUserMemory = finalSnapshot.userMemories.find((record) => record.userId === "local-user");
+
+  assert.equal(
+    localUserMemory?.memory.interaction.recentQuestions.length,
+    2,
+    "agent questions should accumulate into user memory"
+  );
 
   console.log("API smoke passed");
 } finally {

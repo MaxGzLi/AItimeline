@@ -10,3 +10,4 @@ coverage/
 *.tsbuildinfo
 apps/api/data/*.json
 apps/api/data/*.tmp
+.claude/

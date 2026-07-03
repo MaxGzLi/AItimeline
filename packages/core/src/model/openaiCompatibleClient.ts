@@ -105,7 +105,7 @@ async function completeChat(
       raw: parsed
     };
   } catch (error) {
-    if (controller.signal.aborted) {
+    if (controller.signal.aborted && error instanceof Error && error.name === "AbortError") {
       throw new Error(`model request timed out after ${timeoutMs}ms`);
     }
 

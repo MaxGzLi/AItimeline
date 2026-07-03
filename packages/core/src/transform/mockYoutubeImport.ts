@@ -63,7 +63,16 @@ export function parseYouTubeVideoId(url: string): string | null {
     }
 
     if (host === "youtube.com" || host === "m.youtube.com") {
-      return normalizeVideoId(parsedUrl.searchParams.get("v") ?? parsedUrl.pathname.split("/").pop() ?? "");
+      const videoParam = parsedUrl.searchParams.get("v");
+
+      if (videoParam) {
+        return normalizeVideoId(videoParam);
+      }
+
+      // Only known video path shapes count; /results, /playlist etc. are not videos.
+      const pathMatch = parsedUrl.pathname.match(/^\/(?:embed|shorts|live)\/([^/]+)/);
+
+      return pathMatch ? normalizeVideoId(pathMatch[1]) : null;
     }
   } catch {
     return null;
