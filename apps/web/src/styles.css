@@ -3759,3 +3759,30 @@ button.concept-entry:hover {
       0 0 0 4px var(--blue);
   }
 }
+
+.agent-turn {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.agent-answer {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.agent-citation {
+  margin: 0;
+  padding-left: 10px;
+  border-left: 2px solid currentColor;
+  font-size: 12px;
+  line-height: 1.45;
+  opacity: 0.72;
+}
+
+.agent-open-card {
+  align-self: flex-start;
+}

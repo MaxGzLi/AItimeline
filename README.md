@@ -67,6 +67,8 @@ AITIMELINE_MODEL_API_KEY=your-api-key
 
 Do not call model providers directly from the browser with a user or product API key. Use the adapter from a server, worker, CLI, or self-hosted runtime.
 
+Source discovery is optional and off by default: set `AITIMELINE_SEARCH_API_KEY` (Tavily) to let `discover_sources` jobs and dark-zone agent questions pull real source candidates. Without a key the app stays network-free and discovery proposals are surfaced to the user instead of executed.
+
 The local API auto-selects the import runner from the environment: when `AITIMELINE_MODEL_NAME` (or `OPENAI_MODEL`) is set it imports articles and YouTube transcripts through the model-backed runner; otherwise it falls back to the deterministic template runner, so the default setup stays network-free. Both `transformArticleUrl` and `transformYouTubeUrl` also accept a `runner` option for callers that wire their own model client.
 
 ## Verification
@@ -81,7 +83,7 @@ npm run smoke:model
 
 `smoke:core` builds `@aitimeline/core`, imports the compiled `dist` output in Node, and checks source import, YouTube transcript import, article import, model repair, grounding validation, cross-card connections, the concept whole-view digest and background curation execution.
 
-`smoke:api` starts the local API on a temporary port and checks article import, timeline reads, memory edits, interaction signals, queued curation jobs, background source import persistence and grounded card Q&A (`POST /api/ask`).
+`smoke:api` starts the local API on a temporary port and checks article import, timeline reads, memory edits, interaction signals, queued curation jobs, background source import persistence, grounded card Q&A (`POST /api/ask`), background source discovery through an injected search provider, and the agent entry (`POST /api/agent/ask`: grounded turns, dark-zone discovery proposals and turn metering).
 
 `smoke:model` injects a fake model client and checks that the article and YouTube transforms run the model-backed runner when given one (the model output reaches the card and passes schema + grounding), that grounded card Q&A (`askGrounded`) answers from the post's cited source chunks, and that all paths fall back to deterministic behavior when no model is configured. `npm test` runs the core, API and model smokes together.
 
@@ -105,3 +107,6 @@ The local API now exposes the first backend loop: import article or YouTube sour
 - [docs/agent-harness.md](./docs/agent-harness.md): Agent Harness v0，定义知识帖、thread、图谱、复习和反馈策略。
 - [docs/roadmap.md](./docs/roadmap.md): 前后端、agent、知识库、记忆和推荐系统的阶段路线。
 - [docs/knowledge-transformation.md](./docs/knowledge-transformation.md): YouTube、文章、论文等来源如何被 agent 转化成 timeline 知识卡。
+- [docs/knowledge-loops.md](./docs/knowledge-loops.md): 供给闭环（知识源源不断）与掌握闭环（细化、保留、复习到学会）的设计，以及后续功能优先级。
+- [docs/groundedness.md](./docs/groundedness.md): 正确性保障体系——已有防线、已知局限和 L1-L7 分层加固路线。
+- [docs/agent-entry.md](./docs/agent-entry.md): 产品级 Agent 入口——知识边界模型、回答协议、发散拓展机制与计量收费。

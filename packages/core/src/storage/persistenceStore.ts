@@ -61,6 +61,17 @@ export type SourceCandidateRecordStatus = "pending" | "queued" | "imported" | "d
 
 export type SourceCandidateIntakeKind = "user_paste" | "browser_share" | "agent_discovery" | "manual";
 
+export interface AgentTurnRecord {
+  id: string;
+  userId: string;
+  question: string;
+  intent: string;
+  tier: string;
+  zone: string;
+  answerCardId?: string;
+  createdAt: string;
+}
+
 export interface SourceCandidateRecord {
   id: string;
   candidate: BackgroundSourceCandidate;
@@ -90,6 +101,7 @@ export interface AITimelinePersistenceSnapshot {
   interactionSignals: InteractionSignalRecord[];
   topicStates: TopicStateRecord[];
   sourceCandidates: SourceCandidateRecord[];
+  agentTurns: AgentTurnRecord[];
 }
 
 export interface AITimelinePersistenceStore {
@@ -106,6 +118,7 @@ export interface AITimelinePersistenceStore {
     savedAt?: string | Date
   ): AITimelinePersistenceSnapshot;
   saveTopicStateRecords(records: TopicStateRecord[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
+  saveAgentTurnRecords(records: AgentTurnRecord[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
   saveUserMemory(
     userId: string,
     memory: UserMemory,
@@ -202,6 +215,16 @@ export function createAITimelinePersistenceStore(
 
       return cloneSnapshot(snapshot);
     },
+    saveAgentTurnRecords(records, savedAt = new Date()) {
+      snapshot = {
+        ...snapshot,
+        updatedAt: normalizeDate(savedAt).toISOString(),
+        agentTurns: upsertManyById(snapshot.agentTurns, records)
+      };
+      persist(storage, snapshot);
+
+      return cloneSnapshot(snapshot);
+    },
     saveUserMemory(userId, memory, events = [], savedAt = new Date()) {
       const updatedAt = normalizeDate(savedAt).toISOString();
 
@@ -259,7 +282,8 @@ function createSnapshot(input: Partial<AITimelinePersistenceSnapshot> = {}): AIT
     memoryEvents: input.memoryEvents ?? [],
     interactionSignals: input.interactionSignals ?? [],
     topicStates: input.topicStates ?? [],
-    sourceCandidates: input.sourceCandidates ?? []
+    sourceCandidates: input.sourceCandidates ?? [],
+    agentTurns: input.agentTurns ?? []
   };
 }
 
@@ -269,7 +293,7 @@ function createValidationRecords(
   createdAt: string
 ): HarnessValidationRecord[] {
   return validation.map((result, index) => ({
-    id: `${run.id}-validation-${result.postId ?? index + 1}`,
+    id: `${run.id}-validation-${index + 1}-${result.postId ?? "post"}`,
     runId: run.id,
     postId: result.postId,
     result,
@@ -318,10 +342,25 @@ function upsertTopicStateRecords(items: TopicStateRecord[], nextItems: TopicStat
 }
 
 function withReleasePlanId(plan: SourcePostReleasePlan): SourcePostReleasePlan & { id: string } {
+  const itemKey = plan.items
+    .map((item) => item.postId)
+    .sort()
+    .join("|");
+
   return {
     ...plan,
-    id: `release-plan-${plan.generatedAt}`
+    id: `release-plan-${plan.generatedAt}-${hashText(itemKey)}`
   };
+}
+
+function hashText(value: string): string {
+  let hash = 0;
+
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+
+  return hash.toString(16);
 }
 
 function withoutReleasePlanId(plan: SourcePostReleasePlan & { id: string }): SourcePostReleasePlan {

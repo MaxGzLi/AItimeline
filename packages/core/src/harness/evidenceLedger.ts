@@ -208,10 +208,16 @@ function calculateOverlapScore(claim: string, evidence: string): number {
 
 function tokenize(value: string): string[] {
   return value
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
+    .split(/[^a-zA-Z0-9]+/)
     .map((token) => token.trim())
-    .filter((token) => token.length > 3 && !stopwords.has(token));
+    .filter((token) => token.length > 3 || isShortSignalToken(token))
+    .map((token) => token.toLowerCase())
+    .filter((token) => !stopwords.has(token));
+}
+
+// Keep short all-caps tokens ("AI", "RAG", "LLM") that carry meaning; drop other short words.
+function isShortSignalToken(token: string): boolean {
+  return token.length >= 2 && /^[A-Z0-9]+$/.test(token) && /[A-Z]/.test(token);
 }
 
 function trimQuote(value: string): string {

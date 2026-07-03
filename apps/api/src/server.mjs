@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
@@ -13,12 +13,15 @@ import {
   createPersistentBackgroundCurationJobStore,
   createSourceImportWorker,
   createSourcePostReleasePlan,
+  createTavilySearchProvider,
   evaluateInteraction,
   fetchArticle,
   fetchYouTubeTranscript,
   mergeSourceRegistries,
   rankPersonalizedTimeline,
+  runConversationTurn,
   runDueBackgroundCurationJobs,
+  runSourceDiscovery,
   transformArticleUrl,
   transformYouTubeUrl
 } from "../../../packages/core/dist/index.js";
@@ -34,11 +37,18 @@ export function createApiServer(options = {}) {
   const curationDataPath =
     options.curationDataPath ?? process.env.AITIMELINE_CURATION_DATA_PATH ?? defaultCurationDataPath;
   const enableFixtures = options.enableFixtures ?? process.env.AITIMELINE_ENABLE_FIXTURES === "1";
-  const persistenceStore = createAITimelinePersistenceStore(createFileStorageAdapter(dataPath));
-  const curationStore = createPersistentBackgroundCurationJobStore(createFileStorageAdapter(curationDataPath));
+  const persistenceStore = createStoreWithRecovery(
+    () => createAITimelinePersistenceStore(createFileStorageAdapter(dataPath)),
+    dataPath
+  );
+  const curationStore = createStoreWithRecovery(
+    () => createPersistentBackgroundCurationJobStore(createFileStorageAdapter(curationDataPath)),
+    curationDataPath
+  );
   const sourceImportWorker = createConfiguredSourceImportWorker(process.env);
   const importRunner = sourceImportWorker.runner;
   const askModelClient = createConfiguredAskModelClient(process.env);
+  const searchProvider = options.searchProvider ?? createConfiguredSearchProvider(process.env);
 
   return createServer(async (request, response) => {
     response.setHeader("Access-Control-Allow-Origin", "*");
@@ -191,6 +201,7 @@ export function createApiServer(options = {}) {
 
       if (request.method === "POST" && url.pathname === "/api/signals") {
         const body = await readJsonBody(request);
+        requireInteractionSignal(body.signal);
         const generatedAt = body.generatedAt ?? new Date().toISOString();
         const currentSnapshot = persistenceStore.getSnapshot();
         const persistedCandidates = findMatchingSourceCandidateRecords(currentSnapshot, body.signal);
@@ -258,7 +269,7 @@ export function createApiServer(options = {}) {
           {
             sourceImportWorker,
             ingestSourceCandidate: (candidate) => ingestSourceCandidate(candidate),
-            discoverSources: () => [],
+            discoverSources: (job) => discoverSourcesForJob(job, searchProvider, persistenceStore),
             loadSeedPost: (job) => persistenceStore.getSnapshot().posts.find((post) => post.id === job.postId),
             cooldownTopic: (job) => ({
               kind: job.kind,
@@ -274,6 +285,14 @@ export function createApiServer(options = {}) {
         let snapshot = persistenceStore.saveCurationJobRecords(batch.records);
 
         for (const record of batch.records) {
+          if (record.result?.discoveredSourceCandidates?.length) {
+            snapshot = persistDiscoveredCandidates(
+              persistenceStore,
+              record.result.discoveredSourceCandidates,
+              record.completedAt ?? batch.completedAt
+            );
+          }
+
           if (record.result?.sourceImport) {
             persistenceStore.saveSourceImportResult(record.result.sourceImport);
             snapshot = persistenceStore.saveReleasePlan(
@@ -306,6 +325,16 @@ export function createApiServer(options = {}) {
         return;
       }
 
+      if (request.method === "POST" && url.pathname === "/api/agent/ask") {
+        const body = await readJsonBody(request);
+        requireString(body.question, "question");
+        const userId = typeof body.userId === "string" && body.userId.trim() ? body.userId : "local-user";
+        const result = await handleAgentAsk(body, userId, persistenceStore, askModelClient, searchProvider);
+
+        sendJson(response, 200, result);
+        return;
+      }
+
       if (request.method === "POST" && url.pathname === "/api/memory") {
         const body = await readJsonBody(request);
         const userId = body.userId ?? "local-user";
@@ -324,7 +353,12 @@ export function createApiServer(options = {}) {
 
       sendJson(response, 404, { error: "Not found" });
     } catch (error) {
-      sendJson(response, 500, {
+      if (response.headersSent) {
+        response.end();
+        return;
+      }
+
+      sendJson(response, error instanceof HttpError ? error.statusCode : 500, {
         error: error instanceof Error ? error.message : "Unknown API error."
       });
     }
@@ -350,6 +384,195 @@ function createConfiguredAskModelClient(env) {
   return modelName ? createOpenAICompatibleModelClientFromEnv(env) : undefined;
 }
 
+async function handleAgentAsk(body, userId, persistenceStore, client, searchProvider) {
+  const snapshot = persistenceStore.getSnapshot();
+  const now = new Date().toISOString();
+  const memory = snapshot.userMemories.find((record) => record.userId === userId)?.memory;
+  const registry = mergeSourceRegistries(...snapshot.sourceRegistries.map((record) => record.registry));
+  const turn = await runConversationTurn(
+    {
+      question: body.question,
+      postId: typeof body.postId === "string" ? body.postId : undefined,
+      posts: snapshot.posts,
+      registry,
+      memory,
+      userSignals: toUserSignals(snapshot.interactionSignals),
+      now
+    },
+    { client }
+  );
+
+  // Execute the discovery proposal inline when a provider is configured;
+  // otherwise the proposal is returned for the client to display.
+  let discoveredCandidates = [];
+  const discoverAction = turn.actions.find((action) => action.kind === "discover_sources");
+
+  if (discoverAction && searchProvider) {
+    const discovery = await runSourceDiscovery({
+      provider: searchProvider,
+      concepts: discoverAction.concepts,
+      queries: discoverAction.queries,
+      goals: memory?.profile.goals,
+      existingUrls: collectKnownSourceUrls(snapshot),
+      existingTitles: collectKnownSourceTitles(snapshot),
+      now
+    });
+
+    if (discovery.candidates.length) {
+      persistDiscoveredCandidates(persistenceStore, discovery.candidates, now);
+      discoveredCandidates = discovery.candidates;
+    }
+  }
+
+  if (turn.signal) {
+    persistenceStore.saveInteractionSignalRecords(
+      [
+        {
+          id: buildInteractionSignalRecordId(turn.signal),
+          signal: turn.signal,
+          feedback: evaluateInteraction(turn.signal, deriveTopicState(turn.signal)),
+          createdAt: now
+        }
+      ],
+      now
+    );
+  }
+
+  const memoryEditResult = applyUserMemoryEdits(
+    memory ?? createEmptyUserMemory(),
+    [
+      {
+        kind: "add",
+        field: "interaction.recentQuestions",
+        value: turn.question,
+        reason: "User asked the agent a question."
+      }
+    ],
+    now
+  );
+
+  persistenceStore.saveUserMemory(userId, memoryEditResult.memory, memoryEditResult.events, now);
+
+  const turnRecord = {
+    id: `agent-turn-${hashText(`${userId}|${turn.question}|${now}`)}`,
+    userId,
+    question: turn.question,
+    intent: turn.intent,
+    tier: turn.tier,
+    zone: turn.zone,
+    answerCardId: turn.answerCardId,
+    createdAt: now
+  };
+  const finalSnapshot = persistenceStore.saveAgentTurnRecords([turnRecord], now);
+
+  return {
+    turn,
+    discoveredCandidates,
+    turnRecord,
+    snapshotSummary: summarizeSnapshot(finalSnapshot)
+  };
+}
+
+async function discoverSourcesForJob(job, searchProvider, persistenceStore) {
+  if (!searchProvider) {
+    return [];
+  }
+
+  const snapshot = persistenceStore.getSnapshot();
+  const discovery = await runSourceDiscovery({
+    provider: searchProvider,
+    concepts: job.conceptIds,
+    topicId: job.topicId,
+    nextAction: job.nextAction,
+    existingUrls: collectKnownSourceUrls(snapshot),
+    existingTitles: collectKnownSourceTitles(snapshot)
+  });
+
+  return discovery.candidates;
+}
+
+function persistDiscoveredCandidates(persistenceStore, candidates, now) {
+  const snapshot = persistenceStore.getSnapshot();
+  const existingIds = new Set(snapshot.sourceCandidates.map((record) => record.id));
+  const newRecords = candidates
+    .filter((candidate) => !existingIds.has(candidate.id))
+    .map((candidate) => ({
+      id: candidate.id,
+      candidate,
+      status: "pending",
+      intakeKind: "agent_discovery",
+      createdAt: now,
+      updatedAt: now
+    }));
+
+  return newRecords.length ? persistenceStore.saveSourceCandidateRecords(newRecords, now) : snapshot;
+}
+
+function collectKnownSourceUrls(snapshot) {
+  return [
+    ...snapshot.posts.flatMap((post) => post.sources.map((source) => source.url)),
+    ...snapshot.sourceRegistries.flatMap((record) => record.registry.sources.map((source) => source.url)),
+    ...snapshot.sourceCandidates.map((record) => record.candidate.source.url)
+  ];
+}
+
+function collectKnownSourceTitles(snapshot) {
+  return [
+    ...snapshot.posts.map((post) => post.title),
+    ...snapshot.sourceCandidates.map((record) => record.candidate.source.title)
+  ];
+}
+
+function toUserSignals(interactionSignalRecords) {
+  return interactionSignalRecords.flatMap((record) => {
+    const signals = [];
+    const push = (type) =>
+      signals.push({
+        id: `${record.id}-${type}`,
+        cardId: record.signal.postId,
+        type,
+        createdAt: record.signal.createdAt
+      });
+
+    if (record.signal.liked) {
+      push("like");
+    }
+
+    if (record.signal.saved) {
+      push("save");
+    }
+
+    if (record.signal.askedQuestion) {
+      push("ask");
+    }
+
+    if (record.signal.reviewed) {
+      push("review");
+    }
+
+    return signals;
+  });
+}
+
+function createConfiguredSearchProvider(env) {
+  const apiKey = env.AITIMELINE_SEARCH_API_KEY;
+
+  if (!apiKey) {
+    return undefined;
+  }
+
+  const provider = env.AITIMELINE_SEARCH_PROVIDER ?? "tavily";
+
+  if (provider !== "tavily") {
+    console.warn(`[aitimeline] unsupported search provider "${provider}"; source discovery stays disabled.`);
+    return undefined;
+  }
+
+  console.log("[aitimeline] source discovery using tavily search.");
+
+  return createTavilySearchProvider({ apiKey, baseUrl: env.AITIMELINE_SEARCH_BASE_URL });
+}
+
 async function handleAsk(body, persistenceStore, client) {
   requireString(body.postId, "postId");
   requireString(body.question, "question");
@@ -358,7 +581,7 @@ async function handleAsk(body, persistenceStore, client) {
   const post = snapshot.posts.find((candidate) => candidate.id === body.postId);
 
   if (!post) {
-    throw new Error(`No post found for id ${body.postId}.`);
+    throw new HttpError(404, `No post found for id ${body.postId}.`);
   }
 
   const sourceIds = new Set(post.sources.map((source) => source.id));
@@ -623,7 +846,8 @@ function summarizeSnapshot(snapshot) {
     memories: snapshot.userMemories.length,
     interactionSignals: snapshot.interactionSignals.length,
     topicStates: snapshot.topicStates.length,
-    sourceCandidates: snapshot.sourceCandidates.length
+    sourceCandidates: snapshot.sourceCandidates.length,
+    agentTurns: snapshot.agentTurns.length
   };
 }
 
@@ -762,6 +986,26 @@ function hashText(value) {
   return hash.toString(16);
 }
 
+function createStoreWithRecovery(createStore, filePath) {
+  try {
+    return createStore();
+  } catch (error) {
+    if (!existsSync(filePath)) {
+      throw error;
+    }
+
+    const backupPath = `${filePath}.corrupt-${Date.now()}`;
+    renameSync(filePath, backupPath);
+    console.warn(
+      `[aitimeline] data file was invalid; moved it to ${backupPath} and starting fresh (${
+        error instanceof Error ? error.message : "unknown error"
+      }).`
+    );
+
+    return createStore();
+  }
+}
+
 function createFileStorageAdapter(filePath) {
   return {
     read() {
@@ -769,27 +1013,59 @@ function createFileStorageAdapter(filePath) {
     },
     write(serialized) {
       mkdirSync(dirname(filePath), { recursive: true });
-      writeFileSync(filePath, `${serialized}\n`, "utf8");
+      const tempPath = `${filePath}.tmp`;
+      writeFileSync(tempPath, `${serialized}\n`, "utf8");
+      renameSync(tempPath, filePath);
     }
   };
 }
 
+class HttpError extends Error {
+  constructor(statusCode, message) {
+    super(message);
+    this.statusCode = statusCode;
+  }
+}
+
+const maxJsonBodyBytes = 1024 * 1024;
+
 async function readJsonBody(request) {
   const chunks = [];
+  let totalBytes = 0;
 
   for await (const chunk of request) {
+    totalBytes += chunk.length;
+
+    if (totalBytes > maxJsonBodyBytes) {
+      request.destroy();
+      throw new HttpError(413, "Request body is too large.");
+    }
+
     chunks.push(chunk);
   }
 
   const rawBody = Buffer.concat(chunks).toString("utf8");
 
-  return rawBody ? JSON.parse(rawBody) : {};
+  try {
+    return rawBody ? JSON.parse(rawBody) : {};
+  } catch {
+    throw new HttpError(400, "Request body is not valid JSON.");
+  }
 }
 
 function requireString(value, fieldName) {
   if (typeof value !== "string" || value.trim() === "") {
-    throw new Error(`${fieldName} is required.`);
+    throw new HttpError(400, `${fieldName} is required.`);
   }
+}
+
+function requireInteractionSignal(signal) {
+  if (typeof signal !== "object" || signal === null) {
+    throw new HttpError(400, "signal is required.");
+  }
+
+  requireString(signal.postId, "signal.postId");
+  requireString(signal.topicId, "signal.topicId");
 }
 
 function parseHttpUrl(url) {
@@ -797,16 +1073,16 @@ function parseHttpUrl(url) {
     const parsedUrl = new URL(url);
 
     if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
-      throw new Error("URL must use http or https.");
+      throw new HttpError(400, "URL must use http or https.");
     }
 
     return parsedUrl;
   } catch (error) {
-    if (error instanceof Error && error.message === "URL must use http or https.") {
+    if (error instanceof HttpError) {
       throw error;
     }
 
-    throw new Error("Please enter a valid URL.");
+    throw new HttpError(400, "Please enter a valid URL.");
   }
 }
 

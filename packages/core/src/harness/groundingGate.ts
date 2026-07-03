@@ -113,7 +113,13 @@ function validateCitationsAgainstRegistry(citations: Citation[] | undefined, reg
       });
     }
 
-    if (citation.chunkId && !getRegistryChunk(registry, citation.chunkId)) {
+    if (!citation.chunkId) {
+      issues.push({
+        path: `$.citations[${index}].chunkId`,
+        message: "citation must include a chunkId so claims can be grounded at chunk level.",
+        severity: "error"
+      });
+    } else if (!getRegistryChunk(registry, citation.chunkId)) {
       issues.push({
         path: `$.citations[${index}].chunkId`,
         message: "citation chunkId is not registered in SourceRegistry.",
@@ -157,6 +163,24 @@ function validateClaimGrounding(
       overlapScore: bestOverlap,
       reason: "Source fact does not overlap enough with cited evidence."
     };
+  }
+
+  // Numbers are the highest-risk hallucination surface: a fabricated or altered
+  // figure keeps high lexical overlap, so it needs an exact-match gate of its own.
+  if (claim.kind === "source_fact") {
+    const ungroundedNumbers = findUngroundedNumericTokens(claim.claim, evidence);
+
+    if (ungroundedNumbers.length) {
+      return {
+        claimId: claim.id,
+        fieldPath: claim.fieldPath,
+        kind: claim.kind,
+        status: "failed",
+        evidenceChunkIds,
+        overlapScore: bestOverlap,
+        reason: `Source fact contains numbers that do not appear in cited evidence: ${ungroundedNumbers.join(", ")}.`
+      };
+    }
   }
 
   if (claim.kind === "interpretation" && bestOverlap < options.minInterpretationOverlap) {
@@ -253,6 +277,24 @@ function threadKindToClaimKind(kind: KnowledgePost["thread"][number]["kind"]): S
   return "interpretation";
 }
 
+function findUngroundedNumericTokens(claim: string, evidence: EvidenceSpan[]): string[] {
+  const claimNumbers = extractNumericTokens(claim);
+
+  if (!claimNumbers.length) {
+    return [];
+  }
+
+  const evidenceNumbers = new Set(evidence.flatMap((span) => extractNumericTokens(span.quote)));
+
+  return Array.from(new Set(claimNumbers.filter((token) => !evidenceNumbers.has(token))));
+}
+
+function extractNumericTokens(value: string): string[] {
+  const matches = value.match(/\d+(?:[.,]\d+)*%?/g) ?? [];
+
+  return matches.map((token) => token.replace(/,/g, "").replace(/%$/, ""));
+}
+
 function calculateOverlapScore(claim: string, evidence: string): number {
   const claimTokens = tokenize(claim);
   const evidenceTokens = new Set(tokenize(evidence));
@@ -268,8 +310,14 @@ function calculateOverlapScore(claim: string, evidence: string): number {
 
 function tokenize(value: string): string[] {
   return value
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
+    .split(/[^a-zA-Z0-9]+/)
     .map((token) => token.trim())
-    .filter((token) => token.length > 3 && !stopwords.has(token));
+    .filter((token) => token.length > 3 || isShortSignalToken(token))
+    .map((token) => token.toLowerCase())
+    .filter((token) => !stopwords.has(token));
+}
+
+// Keep short all-caps tokens ("AI", "RAG", "LLM") that carry meaning; drop other short words.
+function isShortSignalToken(token: string): boolean {
+  return token.length >= 2 && /^[A-Z0-9]+$/.test(token) && /[A-Z]/.test(token);
 }

@@ -84,7 +84,11 @@ export function createExpansionPlan(input: CreateExpansionPlanInput): AgentExpan
   };
 }
 
-export function shouldContinueSeries(signal: InteractionSignal, feedback?: LearningFeedback): boolean {
+export function shouldContinueSeries(
+  signal: InteractionSignal,
+  feedback?: LearningFeedback,
+  config: Pick<AgentExpansionPolicyConfig, "softInterestDwellTimeMs"> = defaultAgentExpansionPolicyConfig
+): boolean {
   if (signal.skippedQuickly) {
     return false;
   }
@@ -93,7 +97,7 @@ export function shouldContinueSeries(signal: InteractionSignal, feedback?: Learn
     return true;
   }
 
-  if (signal.dwellTimeMs >= defaultAgentExpansionPolicyConfig.softInterestDwellTimeMs) {
+  if (signal.dwellTimeMs >= config.softInterestDwellTimeMs) {
     return true;
   }
 

@@ -192,6 +192,28 @@ type ApiCurationJobsResponse = {
 
 type MemoryAction = "like" | "save" | "ask";
 
+type AgentBoundaryZone = "inside" | "learning" | "frontier" | "dark";
+
+type AgentAskApiResponse = {
+  turn: {
+    question: string;
+    intent: string;
+    tier: string;
+    zone: AgentBoundaryZone;
+    matchedConcepts: string[];
+    answer: {
+      answer: string;
+      citations: Array<{ sourceTitle: string; quote: string }>;
+      grounded: boolean;
+      runnerKind: "model" | "deterministic";
+    } | null;
+    answerCardId?: string;
+    actions: Array<{ kind: string; label: string; concepts: string[]; queries?: string[] }>;
+    notes: string[];
+  };
+  discoveredCandidates: Array<{ id: string }>;
+};
+
 type SourceCandidateRecord = {
   id: string;
   candidate: BackgroundSourceCandidate;
@@ -211,6 +233,10 @@ export function App() {
   const [sourceChunks, setSourceChunks] = useState<KnowledgeChunk[]>([]);
   const [sourceCandidates, setSourceCandidates] = useState<SourceCandidateRecord[]>([]);
   const [aiThreads, setAiThreads] = useState<AiThreads>({});
+  const [agentQuestion, setAgentQuestion] = useState("");
+  const [agentResponse, setAgentResponse] = useState<AgentAskApiResponse | null>(null);
+  const [agentMessage, setAgentMessage] = useState("");
+  const [isAgentAsking, setIsAgentAsking] = useState(false);
   const [interactionSignals, setInteractionSignals] = useState<InteractionSignals>({});
   const [learningFeedback, setLearningFeedback] = useState<LearningFeedbackByPost>({});
   const [evidenceLedgers, setEvidenceLedgers] = useState<Record<string, EvidenceLedger | null>>({});
@@ -247,6 +273,14 @@ export function App() {
   const syncedSignalSignatures = useRef<Record<string, string>>(loadSyncedSignalSignatures());
   const pendingSignalSignatures = useRef<Record<string, string>>({});
   const curationRunInFlight = useRef(false);
+  const refreshSequence = useRef(0);
+  // Mirror of interactionSignals so stable callbacks (e.g. handleDwell) can read
+  // the latest signals without stale closures and without impure state updaters.
+  const interactionSignalsRef = useRef<InteractionSignals>({});
+
+  useEffect(() => {
+    interactionSignalsRef.current = interactionSignals;
+  }, [interactionSignals]);
 
   const importedSignals = useMemo(
     () =>
@@ -662,6 +696,8 @@ export function App() {
   }, []);
 
   async function refreshFromApi(options: { silent?: boolean } = {}) {
+    const requestId = ++refreshSequence.current;
+
     if (!options.silent) {
       setApiStatus("checking");
       setApiMessage("正在刷新本地 API 状态");
@@ -675,6 +711,12 @@ export function App() {
         apiRequest<ApiSnapshot>("/api/snapshot"),
         apiRequest<ApiCurationJobsResponse>("/api/curation/jobs?status=queued")
       ]);
+
+      // A newer refresh started while this one was in flight; drop the stale result.
+      if (requestId !== refreshSequence.current) {
+        return;
+      }
+
       const registryAssets = snapshot.sourceRegistries.flatMap((record) => record.registry.assets);
       const registryChunks = snapshot.sourceRegistries.flatMap((record) => record.registry.chunks);
 
@@ -687,6 +729,10 @@ export function App() {
       setApiStatus("connected");
       setApiMessage("已连接本地 API");
     } catch (error) {
+      if (requestId !== refreshSequence.current) {
+        return;
+      }
+
       setApiStatus("offline");
       setApiMessage(error instanceof Error ? error.message : "运行 npm run dev:api 才能使用来源导入");
     }
@@ -1032,31 +1078,58 @@ export function App() {
     recordInteraction(card, { skippedQuickly: true, dwellTimeMs: 800, openedThread: false });
   }
 
+  async function handleAgentAsk(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const question = agentQuestion.trim();
+
+    if (!question || isAgentAsking) {
+      return;
+    }
+
+    setIsAgentAsking(true);
+    setAgentMessage("");
+
+    try {
+      const result = await apiRequest<AgentAskApiResponse>("/api/agent/ask", {
+        method: "POST",
+        body: { question }
+      });
+
+      setAgentResponse(result);
+      void refreshFromApi({ silent: true });
+    } catch (error) {
+      setAgentMessage(
+        error instanceof Error ? error.message : "Agent 请求失败，请先运行 npm run dev:api。"
+      );
+    } finally {
+      setIsAgentAsking(false);
+    }
+  }
+
   function recordInteraction(card: KnowledgeCard, patch: Partial<InteractionSignal>) {
-    setInteractionSignals((signals) => {
-      const currentSignal = signals[card.id] ?? createInteractionSignal(card);
-      const dwellTimeMs = Math.max(currentSignal.dwellTimeMs, patch.dwellTimeMs ?? 0);
-      const nextSignal = {
-        ...currentSignal,
-        ...patch,
-        impression: true,
-        conceptIds: card.concepts,
-        topicId: getTopicId(card),
-        dwellTimeMs,
-        createdAt: new Date().toISOString()
-      };
-      const feedback = evaluateInteraction(nextSignal, deriveTopicState(nextSignal));
+    const signals = interactionSignalsRef.current;
+    const currentSignal = signals[card.id] ?? createInteractionSignal(card);
+    const dwellTimeMs = Math.max(currentSignal.dwellTimeMs, patch.dwellTimeMs ?? 0);
+    const nextSignal = {
+      ...currentSignal,
+      ...patch,
+      impression: true,
+      conceptIds: card.concepts,
+      topicId: getTopicId(card),
+      dwellTimeMs,
+      createdAt: new Date().toISOString()
+    };
+    const feedback = evaluateInteraction(nextSignal, deriveTopicState(nextSignal));
 
-      setLearningFeedback((feedbackByPost) => ({
-        ...feedbackByPost,
-        [card.id]: feedback
-      }));
-
-      return {
-        ...signals,
-        [card.id]: nextSignal
-      };
-    });
+    interactionSignalsRef.current = {
+      ...signals,
+      [card.id]: nextSignal
+    };
+    setInteractionSignals(interactionSignalsRef.current);
+    setLearningFeedback((feedbackByPost) => ({
+      ...feedbackByPost,
+      [card.id]: feedback
+    }));
   }
 
   return (
@@ -1244,6 +1317,16 @@ export function App() {
       </main>
 
       <aside className="right-rail" aria-label="上下文">
+        <AgentAskPanel
+          isAsking={isAgentAsking}
+          message={agentMessage}
+          onOpenCard={handleOpenCardId}
+          onQuestionChange={setAgentQuestion}
+          onSubmit={handleAgentAsk}
+          question={agentQuestion}
+          response={agentResponse}
+        />
+
         <SourceCandidatePanel
           autoScoutEnabled={autoScoutEnabled}
           candidateConcept={candidateConcept}
@@ -1477,6 +1560,126 @@ export function App() {
       ) : null}
     </div>
   );
+}
+
+function AgentAskPanel({
+  isAsking,
+  message,
+  onOpenCard,
+  onQuestionChange,
+  onSubmit,
+  question,
+  response
+}: {
+  isAsking: boolean;
+  message: string;
+  onOpenCard: (cardId: string) => void;
+  onQuestionChange: (value: string) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  question: string;
+  response: AgentAskApiResponse | null;
+}) {
+  const turn = response?.turn ?? null;
+
+  return (
+    <section className="context-section agent-ask-section">
+      <div className="rail-heading">
+        <div>
+          <p className="section-label">Agent</p>
+          <h2>问你的知识库</h2>
+        </div>
+        <button className="icon-button compact" title="Agent 入口">
+          <Bot size={18} />
+        </button>
+      </div>
+
+      <form className="candidate-form" onSubmit={onSubmit}>
+        <label className="candidate-input">
+          <Sparkles size={16} />
+          <input
+            aria-label="向 Agent 提问"
+            onChange={(event) => onQuestionChange(event.target.value)}
+            placeholder="问任何你正在学的内容"
+            value={question}
+          />
+        </label>
+        <button className="primary-action candidate-submit" disabled={isAsking} type="submit">
+          {isAsking ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}
+          <span>{isAsking ? "提问中" : "提问"}</span>
+        </button>
+      </form>
+
+      {message ? <div className="candidate-message">{message}</div> : null}
+
+      {turn ? (
+        <div className="agent-turn">
+          <div className="signal-chip-list">
+            <span>{formatBoundaryZone(turn.zone)}</span>
+            {turn.matchedConcepts.slice(0, 3).map((concept) => (
+              <span key={concept}>{concept}</span>
+            ))}
+          </div>
+
+          {turn.answer ? (
+            <>
+              <p className="agent-answer">{turn.answer.answer}</p>
+              {turn.answer.citations.slice(0, 2).map((citation) => (
+                <p className="agent-citation" key={`${citation.sourceTitle}-${citation.quote.slice(0, 24)}`}>
+                  {citation.sourceTitle}: “{citation.quote}”
+                </p>
+              ))}
+              {turn.answerCardId ? (
+                <button
+                  className="secondary-action agent-open-card"
+                  onClick={() => onOpenCard(turn.answerCardId as string)}
+                  type="button"
+                >
+                  <FileText size={16} />
+                  <span>打开引用的卡片</span>
+                </button>
+              ) : null}
+            </>
+          ) : (
+            turn.notes.map((note) => (
+              <p className="agent-answer" key={note}>
+                {note}
+              </p>
+            ))
+          )}
+
+          {response && response.discoveredCandidates.length > 0 ? (
+            <div className="candidate-message">
+              已发现 {response.discoveredCandidates.length} 个来源候选，等待后台整理。
+            </div>
+          ) : null}
+
+          {turn.actions.length > 0 ? (
+            <div className="signal-chip-list agent-actions">
+              {turn.actions.map((action) => (
+                <span key={action.kind}>{action.label}</span>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function formatBoundaryZone(zone: AgentBoundaryZone): string {
+  if (zone === "inside") {
+    return "已在你的知识边界内";
+  }
+
+  if (zone === "learning") {
+    return "在你的学习区";
+  }
+
+  if (zone === "frontier") {
+    return "在你的知识前沿";
+  }
+
+  return "在你的知识库之外";
 }
 
 function SourceCandidatePanel({
@@ -2301,11 +2504,6 @@ function upsertImport(imports: SourceImport[], nextImport: SourceImport): Source
   return [nextImport, ...imports.filter((item) => item.id !== nextImport.id)];
 }
 
-// Count + noun with correct singular/plural (reply→replies is irregular, so no naive "+s").
-function pluralize(count: number, singular: string, plural: string): string {
-  return `${count} ${count === 1 ? singular : plural}`;
-}
-
 function getTimelineThreadPreview(card: KnowledgeCard): NonNullable<KnowledgeCard["thread"]> {
   return (
     card.thread
@@ -2824,7 +3022,11 @@ function loadStoredState(): PersistedMvpState | null {
 }
 
 function saveStoredState(state: PersistedMvpState): void {
-  window.localStorage.setItem(storageKey, JSON.stringify(state));
+  try {
+    window.localStorage.setItem(storageKey, JSON.stringify(state));
+  } catch (error) {
+    console.warn("Failed to persist timeline state to local storage.", error);
+  }
 }
 
 function loadSyncedSignalSignatures(): Record<string, string> {
@@ -2839,7 +3041,11 @@ function loadSyncedSignalSignatures(): Record<string, string> {
 }
 
 function saveSyncedSignalSignatures(signatures: Record<string, string>): void {
-  window.localStorage.setItem(syncedSignalsStorageKey, JSON.stringify(signatures));
+  try {
+    window.localStorage.setItem(syncedSignalsStorageKey, JSON.stringify(signatures));
+  } catch (error) {
+    console.warn("Failed to persist synced signal signatures to local storage.", error);
+  }
 }
 
 function isStringRecord(value: unknown): value is Record<string, string> {

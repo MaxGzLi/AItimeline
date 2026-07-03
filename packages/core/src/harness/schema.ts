@@ -98,7 +98,7 @@ export const knowledgePostJsonSchema = {
       minItems: 1,
       items: {
         type: "object",
-        required: ["sourceId"],
+        required: ["sourceId", "chunkId"],
         properties: {
           sourceId: { type: "string" },
           chunkId: { type: "string" }
@@ -239,6 +239,7 @@ function validateCitations(value: unknown, issues: HarnessValidationIssue[]): vo
     }
 
     requireString(citation, "sourceId", issues, `$.citations[${index}]`);
+    requireString(citation, "chunkId", issues, `$.citations[${index}]`);
   });
 }
 
@@ -278,9 +279,9 @@ function validateGraphEdges(value: unknown, issues: HarnessValidationIssue[]): v
     requireEnum(edge, "relation", edgeRelations, issues, `$.graphEdges[${index}]`);
     requireString(edge, "targetConcept", issues, `$.graphEdges[${index}]`);
     requireString(edge, "evidence", issues, `$.graphEdges[${index}]`);
-    requirePositiveNumber(edge, "weight", issues, `$.graphEdges[${index}]`);
+    requireNonNegativeNumber(edge, "weight", issues, `$.graphEdges[${index}]`);
 
-    if (typeof edge.weight === "number" && (edge.weight < 0 || edge.weight > 1)) {
+    if (typeof edge.weight === "number" && edge.weight > 1) {
       issues.push({
         path: `$.graphEdges[${index}].weight`,
         message: "edge weight should be between 0 and 1.",
@@ -391,6 +392,17 @@ function requirePositiveNumber(
 ): void {
   if (typeof record[key] !== "number" || !Number.isFinite(record[key]) || record[key] <= 0) {
     issues.push({ path: `${basePath}.${key}`, message: `${key} must be a positive number.`, severity: "error" });
+  }
+}
+
+function requireNonNegativeNumber(
+  record: Record<string, unknown>,
+  key: string,
+  issues: HarnessValidationIssue[],
+  basePath = "$"
+): void {
+  if (typeof record[key] !== "number" || !Number.isFinite(record[key]) || record[key] < 0) {
+    issues.push({ path: `${basePath}.${key}`, message: `${key} must be a non-negative number.`, severity: "error" });
   }
 }
 

@@ -189,10 +189,18 @@ export async function runDueBackgroundCurationJobs(
   const records: BackgroundCurationJobRecord[] = [];
 
   for (const record of dueJobs) {
+    // Re-check before claiming: a concurrent run may have taken this job
+    // while we were awaiting an earlier one.
+    const current = store.get(record.id) ?? record;
+
+    if (current.status !== "queued") {
+      continue;
+    }
+
     const runningRecord = store.update({
-      ...record,
+      ...current,
       status: "running",
-      attempts: record.attempts + 1,
+      attempts: current.attempts + 1,
       startedAt,
       updatedAt: startedAt,
       lastError: undefined
