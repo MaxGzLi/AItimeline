@@ -1,7 +1,13 @@
 // 根组件:装配 Provider 与导航。底部四个 tab(时间线/发现/复习/设置),
 // 时间线内嵌一个 native-stack 承载帖子详情页。
 import { Feather } from "@expo/vector-icons";
-import { DarkTheme, DefaultTheme, NavigationContainer, type Theme as NavTheme } from "@react-navigation/native";
+import {
+  DarkTheme,
+  DefaultTheme,
+  NavigationContainer,
+  type LinkingOptions,
+  type Theme as NavTheme
+} from "@react-navigation/native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { StatusBar } from "expo-status-bar";
@@ -44,6 +50,20 @@ const tabLabels: Record<keyof RootTabParamList, string> = {
   SettingsTab: "设置"
 };
 
+// Web deep-linking: give each tab (and the post detail) a real URL so the app
+// is shareable/bookmarkable in a browser. On native these paths are inert.
+const linking: LinkingOptions<RootTabParamList> = {
+  prefixes: [],
+  config: {
+    screens: {
+      TimelineTab: { screens: { TimelineList: "", PostDetail: "post/:cardId" } },
+      DiscoverTab: "discover",
+      ReviewTab: "review",
+      SettingsTab: "settings"
+    }
+  }
+};
+
 function Navigation() {
   const { theme, themeName } = useSettings();
 
@@ -60,7 +80,7 @@ function Navigation() {
   };
 
   return (
-    <NavigationContainer theme={navTheme}>
+    <NavigationContainer linking={linking} theme={navTheme}>
       <StatusBar style={themeName === "dark" ? "light" : "dark"} />
       <Tab.Navigator
         screenOptions={({ route }) => ({

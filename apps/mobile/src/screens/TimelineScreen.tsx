@@ -58,6 +58,8 @@ export function TimelineScreen({ navigation }: Props) {
       />
 
       <Pressable
+        accessibilityLabel="写笔记"
+        accessibilityRole="button"
         onPress={() => setComposeOpen(true)}
         style={[styles.fab, { backgroundColor: theme.blue }]}
       >

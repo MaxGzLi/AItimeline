@@ -125,6 +125,8 @@ export function PostCard({
 
           <View style={styles.acts}>
             <Pressable
+              accessibilityLabel="回复"
+              accessibilityRole="button"
               hitSlop={6}
               onPress={() => setThreadOpen((open) => !open)}
               style={styles.act}
@@ -136,6 +138,8 @@ export function PostCard({
             </Pressable>
 
             <Pressable
+              accessibilityLabel="赞"
+              accessibilityRole="button"
               disabled={!onLike}
               hitSlop={6}
               onPress={() => onLike?.(card)}
@@ -145,6 +149,8 @@ export function PostCard({
             </Pressable>
 
             <Pressable
+              accessibilityLabel="收藏"
+              accessibilityRole="button"
               disabled={!onSave}
               hitSlop={6}
               onPress={() => onSave?.(card)}
