@@ -540,13 +540,12 @@ export function LinkedGraphCanvas({
 
     buildNodes();
 
-    if (reducedMotionRef.current) {
-      // Defer until the ResizeObserver has centered the view.
-      requestAnimationFrame(() => settle());
-    } else {
-      alphaRef.current = 1;
-      ensureRunning();
-    }
+    // Converge off-screen and draw the final layout in one shot — never play
+    // the fling-into-place animation at the user (the graph regrows whenever
+    // background curation adds cards, so it would replay mid-read). Drag
+    // interactions still animate through reheat(). Deferred one frame so the
+    // ResizeObserver has centered the view first.
+    requestAnimationFrame(() => settle());
 
     canvas.addEventListener("pointerdown", onPointerDown);
     canvas.addEventListener("pointermove", onPointerMove);
