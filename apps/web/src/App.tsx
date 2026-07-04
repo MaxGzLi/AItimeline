@@ -38,7 +38,11 @@ import {
   XCircle
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { AgentReplyThread } from "./components/AgentReplyThread";
+import {
+  AgentReplyThread,
+  type AgentReplyAction,
+  type DiscoveryRunState
+} from "./components/AgentReplyThread";
 import { AskComposer } from "./components/AskComposer";
 import { ConceptDigestPanel } from "./components/ConceptDigestPanel";
 import { ContextRail } from "./components/ContextRail";
@@ -118,6 +122,7 @@ export function App() {
   const [aiThreads, setAiThreads] = useState<AiThreads>({});
   const [agentQuestion, setAgentQuestion] = useState("");
   const [agentResponse, setAgentResponse] = useState<AgentAskApiResponse | null>(null);
+  const [discoveryRun, setDiscoveryRun] = useState<DiscoveryRunState>({ status: "idle" });
   const [agentMessage, setAgentMessage] = useState("");
   const [isAgentAsking, setIsAgentAsking] = useState(false);
   const [interactionSignals, setInteractionSignals] = useState<InteractionSignals>({});
@@ -1109,6 +1114,39 @@ export function App() {
     void refreshFromApi({ silent: true });
   }
 
+  async function handleDiscoverSources(action: AgentReplyAction) {
+    if (discoveryRun.status === "searching") {
+      return;
+    }
+
+    setDiscoveryRun({ status: "searching" });
+
+    try {
+      const result = await apiRequest<{ configured: boolean; candidates: Array<{ id: string }> }>(
+        "/api/discovery/run",
+        { method: "POST", body: { queries: action.queries ?? [], concepts: action.concepts } }
+      );
+
+      if (!result.configured) {
+        setDiscoveryRun({ status: "unconfigured" });
+        return;
+      }
+
+      if (result.candidates.length === 0) {
+        setDiscoveryRun({ status: "empty" });
+        return;
+      }
+
+      setDiscoveryRun({ status: "found", count: result.candidates.length });
+      void refreshFromApi({ silent: true });
+    } catch (error) {
+      setDiscoveryRun({
+        status: "error",
+        message: error instanceof Error ? error.message : "找来源失败,请稍后再试。"
+      });
+    }
+  }
+
   async function handleAgentAsk(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const question = agentQuestion.trim();
@@ -1131,6 +1169,7 @@ export function App() {
       });
 
       setAgentResponse(result);
+      setDiscoveryRun({ status: "idle" });
       void refreshFromApi({ silent: true });
     } catch (error) {
       setAgentMessage(
@@ -1309,11 +1348,16 @@ export function App() {
             {agentMessage ? <p className="x-empty">{agentMessage}</p> : null}
             {agentResponse && agentAskedQuestion ? (
               <AgentReplyThread
+                discovery={discoveryRun}
+                onDiscover={handleDiscoverSources}
                 onDismiss={() => {
                   setAgentResponse(null);
                   setAgentAskedQuestion("");
+                  setDiscoveryRun({ status: "idle" });
                 }}
                 onOpenCardId={handleOpenCardId}
+                onOpenDiscover={() => setActiveView("discover")}
+                onOpenImport={() => setActiveView("agent")}
                 question={agentAskedQuestion}
                 response={agentResponse}
               />
