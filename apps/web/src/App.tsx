@@ -24,14 +24,26 @@ import {
   type SourceImport,
   type TopicState
 } from "@aitimeline/core";
-import { ArrowUp, Bot, Brain, CheckCircle2, Compass, GitBranch, Home, PenLine, Settings, XCircle } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowUp,
+  Bot,
+  Brain,
+  CheckCircle2,
+  Compass,
+  GitBranch,
+  Home,
+  PenLine,
+  Settings,
+  XCircle
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { AgentReplyThread } from "./components/AgentReplyThread";
 import { AskComposer } from "./components/AskComposer";
 import { ConceptDigestPanel } from "./components/ConceptDigestPanel";
 import { ContextRail } from "./components/ContextRail";
+import { PostDetailView } from "./components/PostDetailView";
 import { PostView } from "./components/PostView";
-import { SourceDetailDrawer } from "./components/SourceDetailDrawer";
 import { buildWikilinkAutocompleteCandidates } from "./components/WikilinkAutocomplete";
 import { DiscoverView } from "./views/DiscoverView";
 import { AgentView } from "./views/AgentView";
@@ -40,6 +52,7 @@ import { ReviewView } from "./views/ReviewView";
 import { SettingsView } from "./views/SettingsView";
 import { apiBaseUrl, apiRequest, isYouTubeUrl, sampleSourceUrl } from "./lib/api";
 import { buildGroundedAnswer, formatAskAnswer, getTopicId, scrollMotion, slugConcept } from "./lib/format";
+import { buildCardNeighborhoodGraph } from "./lib/localGraph";
 import {
   createInteractionSignal,
   createSignalSignature,
@@ -149,6 +162,7 @@ export function App() {
   // the latest signals without stale closures and without impure state updaters.
   const interactionSignalsRef = useRef<InteractionSignals>({});
   const composerInputRef = useRef<HTMLInputElement | null>(null);
+  const detailReturnScrollY = useRef(0);
 
   useEffect(() => {
     interactionSignalsRef.current = interactionSignals;
@@ -309,6 +323,29 @@ export function App() {
         return;
       }
       if (event.metaKey || event.ctrlKey || event.altKey) return;
+      if (selectedCardId) {
+        switch (event.key) {
+          case "Escape":
+            event.preventDefault();
+            if (shortcutsOpen) {
+              setShortcutsOpen(false);
+            } else {
+              handleCloseDetail();
+            }
+            break;
+          case "t":
+            event.preventDefault();
+            setTheme((value) => (value === "dark" ? "light" : "dark"));
+            break;
+          case "?":
+            event.preventDefault();
+            setShortcutsOpen((open) => !open);
+            break;
+          default:
+            break;
+        }
+        return;
+      }
       switch (event.key) {
         case "j":
           event.preventDefault();
@@ -367,7 +404,7 @@ export function App() {
     };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [visibleCount, focusedIndex, visibleCards]);
+  }, [visibleCount, focusedIndex, visibleCards, selectedCardId, shortcutsOpen]);
 
   // Keep the focused card scrolled into view; clamp when the filtered list shrinks.
   useEffect(() => {
@@ -421,6 +458,11 @@ export function App() {
   );
   // Wikilink backlinks, keyed by concept slug and card id (see buildBacklinkIndex).
   const backlinkIndex = useMemo(() => buildBacklinkIndex(allCards), [allCards]);
+  // One-hop patch of the linked graph around the open post, for the rail.
+  const selectedLocalGraph = useMemo(
+    () => (selectedCardId ? buildCardNeighborhoodGraph(linkedGraph, selectedCardId) : null),
+    [linkedGraph, selectedCardId]
+  );
   const reviewQueue = useMemo(
     () => createReviewQueue(allCards, allSignals),
     [allCards, allSignals]
@@ -825,7 +867,7 @@ export function App() {
       await refreshFromApi({ silent: true });
 
       if (result.posts?.[0]) {
-        setSelectedCardId(result.posts[0].id);
+        showDetail(result.posts[0].id);
         recordInteraction(result.posts[0], { openedThread: true, dwellTimeMs: 9000 });
       }
     } catch (error) {
@@ -838,7 +880,9 @@ export function App() {
           chunks: result.chunks,
           posts: result.cards
         });
-        setSelectedCardId(result.cards[0]?.id ?? null);
+        if (result.cards[0]) {
+          showDetail(result.cards[0].id);
+        }
         setApiStatus("offline");
         setApiMessage("API 不可用,改用本地模拟的 YouTube 导入");
       } else {
@@ -988,8 +1032,19 @@ export function App() {
     }));
   }
 
+  function showDetail(cardId: string) {
+    if (!selectedCardId) {
+      detailReturnScrollY.current = window.scrollY;
+    }
+
+    setActiveView("timeline");
+    setSelectedCardId(cardId);
+    requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "auto" }));
+  }
+
   function handleOpenCard(card: RankedKnowledgeCard) {
-    setSelectedCardId(card.id);
+    showDetail(card.id);
+    setFocusedIndex(-1);
     recordInteraction(card, { openedThread: true, dwellTimeMs: 9000, skippedQuickly: false });
   }
 
@@ -999,8 +1054,15 @@ export function App() {
     if (target) {
       handleOpenCard(target);
     } else {
-      setSelectedCardId(cardId);
+      showDetail(cardId);
     }
+  }
+
+  function handleCloseDetail() {
+    const returnY = detailReturnScrollY.current;
+
+    setSelectedCardId(null);
+    requestAnimationFrame(() => window.scrollTo({ top: returnY, behavior: "auto" }));
   }
 
   function handleOpenConcept(concept: string) {
@@ -1113,7 +1175,15 @@ export function App() {
   return (
     <div className="x-frame">
       <nav className="x-navrail" aria-label="主导航">
-        <button className="x-logo" onClick={() => setActiveView("timeline")} title="AITimeline" type="button">
+        <button
+          className="x-logo"
+          onClick={() => {
+            setActiveView("timeline");
+            setSelectedCardId(null);
+          }}
+          title="AITimeline"
+          type="button"
+        >
           AI
         </button>
         {navItems.map((item) => {
@@ -1127,7 +1197,12 @@ export function App() {
               aria-label={item.label}
               className={`x-navbtn${activeView === item.key ? " active" : ""}`}
               key={item.key}
-              onClick={() => setActiveView(item.key)}
+              onClick={() => {
+                setActiveView(item.key);
+                if (item.key !== "timeline") {
+                  setSelectedCardId(null);
+                }
+              }}
               title={item.label}
               type="button"
             >
@@ -1141,6 +1216,7 @@ export function App() {
           className="x-compose"
           onClick={() => {
             setActiveView("timeline");
+            setSelectedCardId(null);
             requestAnimationFrame(() => composerInputRef.current?.focus());
           }}
           title="发布想法"
@@ -1152,13 +1228,25 @@ export function App() {
 
       <main className="x-main">
         <header className="x-colhead">
-          <div className="x-coltitle">
-            <div>
-              <h1>{activeTitle.title}</h1>
-              {activeTitle.sub ? <p className="x-colsub">{activeTitle.sub}</p> : null}
+          {selectedCard ? (
+            <div className="x-detail-head">
+              <button aria-label="返回时间线" className="x-detail-back" onClick={handleCloseDetail} type="button">
+                <ArrowLeft size={21} />
+              </button>
+              <div>
+                <h1>帖子</h1>
+                <p className="x-colsub">{selectedCard.title}</p>
+              </div>
             </div>
-          </div>
-          {activeView === "timeline" ? (
+          ) : (
+            <div className="x-coltitle">
+              <div>
+                <h1>{activeTitle.title}</h1>
+                {activeTitle.sub ? <p className="x-colsub">{activeTitle.sub}</p> : null}
+              </div>
+            </div>
+          )}
+          {activeView === "timeline" && !selectedCard ? (
             <div className="x-tabs" role="tablist" aria-label="信息流视图">
               {(
                 [
@@ -1182,7 +1270,32 @@ export function App() {
           ) : null}
         </header>
 
-        {activeView === "timeline" ? (
+        {activeView === "timeline" && selectedCard ? (
+          <PostDetailView
+            asset={selectedAsset}
+            backlinks={selectedBacklinks}
+            card={selectedCard}
+            cards={allCards}
+            chunks={selectedChunks}
+            connections={connectionsByCard[selectedCard.id] ?? []}
+            evidenceLedger={selectedEvidenceLedger}
+            feedback={selectedFeedback}
+            messages={selectedThread}
+            onAsk={handleAskAi}
+            onLike={handleLike}
+            onOpenCardId={handleOpenCardId}
+            onOpenConcept={handleOpenConcept}
+            onPromptChange={setAiPrompt}
+            onReply={handleReply}
+            onSave={handleSave}
+            prompt={aiPrompt}
+            quoteText={quoteByCard[selectedCard.id]}
+            signal={selectedSignal}
+            wikilinkCandidates={wikilinkCandidates}
+          />
+        ) : null}
+
+        {activeView === "timeline" && !selectedCard ? (
           <>
             <AskComposer
               isAsking={isAgentAsking}
@@ -1320,34 +1433,16 @@ export function App() {
       {activeView === "timeline" ? (
         <ContextRail
           boundary={boundary}
+          detailCard={selectedCard}
+          detailGraph={selectedLocalGraph}
           graph={graph}
+          onOpenCardId={handleOpenCardId}
           onOpenConcept={handleOpenConcept}
           onOpenGraph={() => setActiveView("graph")}
           onOpenReview={() => setActiveView("review")}
           onSearchChange={setSearchQuery}
           reviewQueue={reviewQueue}
           searchQuery={searchQuery}
-        />
-      ) : null}
-
-      {selectedCard ? (
-        <SourceDetailDrawer
-          asset={selectedAsset}
-          backlinks={selectedBacklinks}
-          card={selectedCard}
-          cards={allCards}
-          chunks={selectedChunks}
-          connections={connectionsByCard[selectedCard.id] ?? []}
-          evidenceLedger={selectedEvidenceLedger}
-          feedback={selectedFeedback}
-          messages={selectedThread}
-          onAsk={handleAskAi}
-          onClose={() => setSelectedCardId(null)}
-          onOpenCardId={handleOpenCardId}
-          onOpenConcept={handleOpenConcept}
-          onPromptChange={setAiPrompt}
-          prompt={aiPrompt}
-          signal={selectedSignal}
         />
       ) : null}
 
@@ -1395,7 +1490,7 @@ export function App() {
               </li>
               <li>
                 <kbd>Enter</kbd>
-                <span>展开卡片</span>
+                <span>打开详情</span>
               </li>
               <li>
                 <kbd>l</kbd>

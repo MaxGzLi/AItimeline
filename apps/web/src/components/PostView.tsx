@@ -1,9 +1,10 @@
 import type { CardConnection, InteractionSignal, KnowledgeCard, RankedKnowledgeCard } from "@aitimeline/core";
 import { BadgeCheck, Bookmark, Clock, Heart, MessageCircle, Plus, Repeat2, XCircle } from "lucide-react";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 import { formatConnectionKind, formatRelativeTime, getAgentInitials, getAgentName, slugConcept } from "../lib/format";
 import { renderWithWikilinks } from "../lib/wikilinks";
-import { WikilinkInput, type WikilinkAutocompleteCandidate } from "./WikilinkAutocomplete";
+import { PostReplyThread } from "./PostReplyThread";
+import type { WikilinkAutocompleteCandidate } from "./WikilinkAutocomplete";
 
 export function PostView({
   card,
@@ -39,45 +40,21 @@ export function PostView({
   wikilinkCandidates: WikilinkAutocompleteCandidate[];
 }) {
   const postRef = useRef<HTMLElement | null>(null);
+  const bodyRef = useRef<HTMLParagraphElement | null>(null);
   const visibleSince = useRef<number | null>(null);
   const reportedDwellMs = useRef(0);
   const [dismissed, setDismissed] = useState(false);
   const [threadOpen, setThreadOpen] = useState(false);
-  const [replyText, setReplyText] = useState("");
-  const [sending, setSending] = useState(false);
-  const [replyError, setReplyError] = useState<string | null>(null);
+  const [bodyOverflows, setBodyOverflows] = useState(false);
   const primaryConcept = card.concepts[0] ?? "知识";
   const source = card.sources[0];
   const isUserNote = source?.type === "user_note";
   const topConnection = connections[0];
-  // The in-post thread shows only the public comment blocks; knowledge blocks
-  // (explain/example/…) stay in the detail drawer.
   const commentBlocks = (card.thread ?? []).filter(
     (block) => block.kind === "user_comment" || block.kind === "agent_reply"
   );
   const replyCount = commentBlocks.length;
   const reviewDueDays = card.reviewPrompts?.[0]?.dueInDays;
-
-  async function handleReplySubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const text = replyText.trim();
-
-    if (!text || sending) {
-      return;
-    }
-
-    setSending(true);
-    setReplyError(null);
-
-    try {
-      await onReply(card, text);
-      setReplyText("");
-    } catch (error) {
-      setReplyError(error instanceof Error ? error.message : "回复失败,请稍后再试。");
-    } finally {
-      setSending(false);
-    }
-  }
 
   // Viewport dwell tracking: report when the post has been ≥60% visible long
   // enough, so ranking learns from real reading instead of impressions.
@@ -135,6 +112,37 @@ export function PostView({
     };
   }, [card, onDwell]);
 
+  useEffect(() => {
+    const node = bodyRef.current;
+
+    if (!node) {
+      return;
+    }
+
+    const measure = () => {
+      setBodyOverflows(node.scrollHeight > node.clientHeight + 1);
+    };
+    const frame = window.requestAnimationFrame(measure);
+
+    const ResizeObserverCtor = globalThis.ResizeObserver;
+
+    if (typeof ResizeObserverCtor === "function") {
+      const observer = new ResizeObserverCtor(measure);
+      observer.observe(node);
+
+      return () => {
+        window.cancelAnimationFrame(frame);
+        observer.disconnect();
+      };
+    }
+
+    window.addEventListener("resize", measure);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("resize", measure);
+    };
+  }, [card.id, card.shortBody, card.summary]);
+
   if (dismissed) {
     return (
       <div className="x-dismissed">
@@ -173,9 +181,10 @@ export function PostView({
 
           <button className="x-open" onClick={() => onOpen(card)} type="button">
             {isUserNote ? null : <p className="x-title">{card.title}</p>}
-            <p className="x-body">
+            <p className="x-body x-body-clamp" ref={bodyRef}>
               {renderWithWikilinks(card.shortBody ?? card.summary, cards, { onOpenConcept, onOpenCardId })}
             </p>
+            {bodyOverflows ? <span className="x-showmore">显示更多</span> : null}
           </button>
 
           <div className="x-tags">
@@ -255,48 +264,14 @@ export function PostView({
           </div>
 
           {threadOpen ? (
-            <div className="x-replies" aria-label="评论线程">
-              {commentBlocks.map((block) => {
-                const isAgent = block.kind === "agent_reply";
-
-                return (
-                  <div className="x-reply" key={block.id}>
-                    <span className={`x-avatar x-reply-avatar${isAgent ? " agent" : ""}`} aria-hidden="true">
-                      {isAgent ? "AI" : "你"}
-                    </span>
-                    <div className="x-reply-main">
-                      <div className="x-head">
-                        <span className="x-name">{block.title}</span>
-                        {isAgent ? <BadgeCheck aria-label="有出处" className="x-verified" size={15} /> : null}
-                      </div>
-                      <p className="x-body">
-                        {renderWithWikilinks(block.body, cards, { onOpenConcept, onOpenCardId })}
-                      </p>
-                    </div>
-                  </div>
-                );
-              })}
-
-              <form className="x-reply-form" onSubmit={handleReplySubmit}>
-                <span className="x-avatar x-reply-avatar" aria-hidden="true">
-                  你
-                </span>
-                <WikilinkInput
-                  aria-label="回复"
-                  candidates={wikilinkCandidates}
-                  className="x-reply-input"
-                  disabled={sending}
-                  onValueChange={setReplyText}
-                  placeholder="回复…"
-                  value={replyText}
-                />
-                <button className="x-pill" disabled={sending || !replyText.trim()} type="submit">
-                  {sending ? "发送中" : "发送"}
-                </button>
-              </form>
-
-              {replyError ? <p className="x-reply-error">{replyError}</p> : null}
-            </div>
+            <PostReplyThread
+              card={card}
+              cards={cards}
+              onOpenCardId={onOpenCardId}
+              onOpenConcept={onOpenConcept}
+              onReply={onReply}
+              wikilinkCandidates={wikilinkCandidates}
+            />
           ) : null}
         </div>
       </article>

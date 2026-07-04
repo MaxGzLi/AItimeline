@@ -1,6 +1,5 @@
-// Opens the first card's detail drawer and submits two Ask-AI questions so the
-// .chat-list renders a real user/assistant thread (offline via buildGroundedAnswer).
-// Used with docs/e2e/cdp-shot.mjs to verify the SourceDetailDrawer.
+// Opens the first card's main-column detail page and submits two Ask-AI questions
+// so the grounded user/assistant thread renders before capture.
 (async () => {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const setValue = (el, v) => {
@@ -9,13 +8,16 @@
       "value"
     ).set;
     setter.call(el, v);
+    el.focus();
+    el.dispatchEvent(new FocusEvent("focus", { bubbles: false }));
+    el.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
     el.dispatchEvent(new Event("input", { bubbles: true }));
   };
-  const open = document.querySelector(".post-open-button");
+  const open = document.querySelector(".x-post .x-open");
   if (!open) return "no-open-button";
   open.click();
   await sleep(600);
-  const input = document.querySelector(".detail-drawer .ask-form input");
+  const input = document.querySelector(".x-detail-ask input");
   if (!input) return "no-ask-input";
   const form = input.closest("form");
   const submit = () =>
@@ -33,8 +35,7 @@
   submit();
   await sleep(700);
 
-  const drawer = document.querySelector(".detail-drawer");
-  if (drawer) drawer.scrollTop = drawer.scrollHeight;
+  window.scrollTo(0, document.documentElement.scrollHeight);
   await sleep(300);
-  return "chat-messages=" + document.querySelectorAll(".chat-message").length;
+  return "detail-ai-messages=" + document.querySelectorAll(".x-detail-msg").length;
 })();
