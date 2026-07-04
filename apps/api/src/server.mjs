@@ -1454,8 +1454,11 @@ export function listen(server, port = defaultPort, host = "127.0.0.1") {
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const port = Number.parseInt(process.env.PORT ?? `${defaultPort}`, 10);
+  // Default to loopback. Set AITIMELINE_HOST=0.0.0.0 to expose the API on the
+  // local network so a phone (Expo Go) can reach it — trusted LANs only.
+  const host = process.env.AITIMELINE_HOST ?? "127.0.0.1";
   const server = createApiServer();
-  const address = await listen(server, port);
+  const address = await listen(server, port, host);
 
   console.log(`AITimeline API listening on http://${address.address}:${address.port}`);
 }
