@@ -51,13 +51,13 @@ body:has(.x-frame) {
 /* ---------- 外壳：贴左三栏 ---------- */
 .x-frame {
   display: grid;
-  grid-template-columns: 84px 600px 384px;
-  justify-content: start;
+  grid-template-columns: 275px 600px 350px;
+  justify-content: center;
   min-height: 100vh;
   background: var(--x-bg);
   color: var(--x-ink);
   font-size: 15px;
-  line-height: 1.5;
+  line-height: 1.3333;
 }
 
 /* ---------- 左栏：纯图标导航 ---------- */
@@ -68,8 +68,8 @@ body:has(.x-frame) {
   height: 100vh;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  padding: 8px 0;
+  align-items: flex-start;
+  padding: 8px 8px 16px;
   gap: 4px;
 }
 .x-logo {
@@ -88,23 +88,30 @@ body:has(.x-frame) {
 }
 .x-logo:hover { background: var(--x-hover); }
 .x-navbtn {
-  position: relative;
-  width: 50px;
-  height: 50px;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 12px;
   border-radius: 999px;
-  display: grid;
-  place-items: center;
   color: var(--x-ink);
+  font-size: 20px;
   background: none;
   border: none;
   cursor: pointer;
 }
 .x-navbtn:hover { background: var(--x-hover); }
+.x-navbtn.active { font-weight: 700; }
 .x-navbtn.active svg { stroke-width: 2.6px; }
+.x-navicon {
+  position: relative;
+  display: grid;
+  place-items: center;
+}
+.x-navlabel { padding-right: 8px; }
 .x-navdot {
   position: absolute;
-  top: 9px;
-  right: 11px;
+  top: -2px;
+  right: -3px;
   width: 8px;
   height: 8px;
   border-radius: 50%;
@@ -112,19 +119,43 @@ body:has(.x-frame) {
   border: 2px solid var(--x-bg);
 }
 .x-compose {
-  width: 50px;
-  height: 50px;
+  align-self: stretch;
+  height: 52px;
   border-radius: 999px;
-  background: var(--x-blue);
-  color: #fff;
-  display: grid;
-  place-items: center;
+  background: var(--x-btn-bg);
+  color: var(--x-btn-ink);
+  font-size: 17px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   border: none;
   cursor: pointer;
-  margin-top: 10px;
+  margin-top: 16px;
 }
-.x-compose:hover { background: var(--x-blue-hover); }
+.x-compose:hover { opacity: 0.9; }
+.x-compose svg { display: none; }
 .x-navrail .x-railend { margin-top: auto; }
+
+/* 窄屏:导航收回纯图标条(X 的响应式行为)。 */
+@media (max-width: 1300px) {
+  .x-frame { grid-template-columns: 88px 600px 350px; }
+  .x-navrail { align-items: center; padding: 8px 0 16px; }
+  .x-navbtn { padding: 13px; gap: 0; }
+  .x-navlabel { display: none; }
+  .x-compose {
+    align-self: center;
+    width: 50px;
+    height: 50px;
+    margin-top: 10px;
+  }
+  .x-compose svg { display: block; }
+}
+@media (max-width: 1120px) {
+  .x-frame { grid-template-columns: 88px minmax(0, 600px); }
+  .x-rail { display: none; }
+}
 
 /* ---------- 中栏 ---------- */
 .x-main {
@@ -137,7 +168,9 @@ body:has(.x-frame) {
   position: sticky;
   top: 0;
   z-index: 10;
-  background: var(--x-bg);
+  background: color-mix(in srgb, var(--x-bg) 65%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--x-line);
 }
 .x-coltitle {
@@ -289,8 +322,8 @@ body:has(.x-frame) {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  background: var(--x-blue);
-  color: #fff;
+  background: var(--x-btn-bg);
+  color: var(--x-btn-ink);
   font-size: 14px;
   font-weight: 700;
   padding: 7px 18px;
@@ -298,7 +331,7 @@ body:has(.x-frame) {
   border: none;
   cursor: pointer;
 }
-.x-pill:hover { background: var(--x-blue-hover); }
+.x-pill:hover { opacity: 0.9; }
 .x-pill:disabled { opacity: 0.6; cursor: default; }
 .x-pill.start { margin-left: 0; }
 
@@ -549,7 +582,7 @@ body:has(.x-frame) {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  width: 384px;
+  width: 350px;
 }
 /* 栏高固定为一屏:内容超出时必须走滚动,不许 flex 压缩模块
    (模块 overflow:hidden,被压缩就会齐底裁掉内容行)。 */
@@ -578,11 +611,19 @@ body:has(.x-frame) {
 .x-search input:focus-visible { outline: none; }
 .x-module {
   background: var(--x-module);
+  border: 1px solid transparent;
   border-radius: 16px;
   overflow: hidden;
 }
+/* X lights-out 的模块是纯黑底 + 描边;亮色保持灰底填充。 */
+:root[data-theme="dark"] .x-module {
+  background: var(--x-bg);
+  border-color: var(--x-line);
+}
+:root[data-theme="dark"] .x-search { background: #202327; }
 .x-module-head {
-  font-size: 19px;
+  margin: 0;
+  font-size: 20px;
   font-weight: 800;
   padding: 12px 16px 6px;
 }

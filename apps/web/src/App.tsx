@@ -1245,8 +1245,11 @@ export function App() {
               title={item.label}
               type="button"
             >
-              <item.icon size={24} strokeWidth={activeView === item.key ? 2.4 : 1.9} />
-              {showDot ? <span className="x-navdot" /> : null}
+              <span className="x-navicon">
+                <item.icon size={26} strokeWidth={activeView === item.key ? 2.4 : 1.9} />
+                {showDot ? <span className="x-navdot" /> : null}
+              </span>
+              <span className="x-navlabel">{item.label}</span>
             </button>
           );
         })}
@@ -1262,6 +1265,7 @@ export function App() {
           type="button"
         >
           <PenLine size={22} />
+          <span className="x-navlabel">发帖</span>
         </button>
       </nav>
 
@@ -1277,7 +1281,7 @@ export function App() {
                 <p className="x-colsub">{selectedCard.title}</p>
               </div>
             </div>
-          ) : (
+          ) : activeView === "timeline" ? null : (
             <div className="x-coltitle">
               <div>
                 <h1>{activeTitle.title}</h1>
