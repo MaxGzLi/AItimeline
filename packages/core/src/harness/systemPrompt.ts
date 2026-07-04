@@ -28,6 +28,14 @@ Output contract:
 - difficulty: beginner / intermediate / advanced
 - nextActions: each exactly one of continue_deeper / expand_broader / reframe_simpler / cooldown_topic / schedule_review / ask_clarifying_question
 
+Language policy:
+- Write all user-facing text in Simplified Chinese.
+- Keep technical terms, proper nouns, and concept names in their original English (e.g., AI Agent, RAG, LLM); do not translate them.
+- Quotes from sources must stay verbatim in the source language.
+- Numbers must match the cited evidence exactly.
+- Keep concepts and graphEdges concept names in English so graph nodes stay continuous.
+- Every source-fact field (summary, thesis, shortBody, graphEdges evidence) must retain at least one key English term or number taken from the cited evidence.
+
 Avoid:
 - generic summaries
 - empty hype

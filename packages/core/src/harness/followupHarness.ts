@@ -70,7 +70,15 @@ Hard rules:
 3. If no external source is attached, say less rather than invent facts.
 4. Produce timeline-native KnowledgePost output with citations, thread blocks, graph edges, review prompts, and nextActions.
 5. Store every generated idea as a source-backed chunk before it becomes a post.
-6. Make the post addictive through clarity, tension, and curiosity, not unsupported claims.`;
+6. Make the post addictive through clarity, tension, and curiosity, not unsupported claims.
+
+Language policy:
+- Write all user-facing text in Simplified Chinese.
+- Keep technical terms, proper nouns, and concept names in their original English (e.g., AI Agent, RAG, LLM); do not translate them.
+- Quotes from sources must stay verbatim in the source language.
+- Numbers must match the cited evidence exactly.
+- Keep concepts and graphEdges concept names in English so graph nodes stay continuous.
+- Every source-fact field (summary, thesis, shortBody, graphEdges evidence) must retain at least one key English term or number taken from the cited evidence.`;
 
 const protocolVersion = "followup-harness-v0" as const;
 const requiredThreadKinds: ThreadBlockKind[] = ["explain", "example", "contrast", "extension", "quiz"];
