@@ -339,6 +339,54 @@ try {
 
   assert.equal(missingReply.status, 404, "replying to a missing post should 404");
 
+  // --- On-demand discovery from the reply chip (/api/discovery/run) ---
+  const candidatesBefore = (await requestJson("/api/snapshot")).sourceCandidates.length;
+  const chipDiscovery = await requestJson("/api/discovery/run", {
+    method: "POST",
+    body: { queries: ["向量数据库该怎么选?"], concepts: [] }
+  });
+
+  assert.equal(chipDiscovery.configured, true, "discovery/run should report the provider as configured");
+  assert.ok(chipDiscovery.candidates.length > 0, "discovery/run should return candidates from the provider");
+
+  const candidatesAfter = (await requestJson("/api/snapshot")).sourceCandidates.length;
+
+  assert.ok(candidatesAfter > candidatesBefore, "discovery/run should persist the discovered candidates");
+
+  const emptyDiscovery = await fetch(`${baseUrl}/api/discovery/run`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ queries: [], concepts: [] })
+  });
+
+  assert.equal(emptyDiscovery.status, 400, "discovery/run without queries or concepts should 400");
+
+  if (!process.env.AITIMELINE_SEARCH_API_KEY) {
+    // A server without a provider reports the unconfigured state instead of erroring.
+    const bareServer = createApiServer({
+      dataPath: join(tempDir, "bare.json"),
+      curationDataPath: join(tempDir, "bare-jobs.json")
+    });
+    const bareAddress = await listen(bareServer, 0);
+
+    try {
+      const bareResponse = await fetch(`http://${bareAddress.address}:${bareAddress.port}/api/discovery/run`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ queries: ["anything"], concepts: [] })
+      });
+      const barePayload = await bareResponse.json();
+
+      assert.equal(bareResponse.status, 200, "unconfigured discovery/run should still respond 200");
+      assert.equal(barePayload.configured, false, "unconfigured discovery/run should report configured=false");
+      assert.deepEqual(barePayload.candidates, [], "unconfigured discovery/run should return no candidates");
+    } finally {
+      await new Promise((resolveClose, rejectClose) => {
+        bareServer.close((error) => (error ? rejectClose(error) : resolveClose()));
+      });
+    }
+  }
+
   console.log("API smoke passed");
 } finally {
   await new Promise((resolveClose, rejectClose) => {

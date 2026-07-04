@@ -336,6 +336,15 @@ export function createApiServer(options = {}) {
         return;
       }
 
+      if (request.method === "POST" && url.pathname === "/api/discovery/run") {
+        const body = await readJsonBody(request);
+        const userId = typeof body.userId === "string" && body.userId.trim() ? body.userId : "local-user";
+        const result = await handleDiscoveryRun(body, userId, persistenceStore, searchProvider);
+
+        sendJson(response, 200, result);
+        return;
+      }
+
       if (request.method === "POST" && url.pathname === "/api/notes") {
         const body = await readJsonBody(request);
         requireString(body.text, "text");
@@ -508,6 +517,47 @@ async function executeDiscoveryAction(turn, snapshot, memory, searchProvider, pe
   }
 
   return discovery.candidates;
+}
+
+// On-demand discovery for the reply chip: the user clicks "为这个问题找来源".
+// Without a configured search provider this reports configured=false instead
+// of erroring, so the UI can point at manual import.
+async function handleDiscoveryRun(body, userId, persistenceStore, searchProvider) {
+  const queries = toTrimmedStrings(body.queries).slice(0, 3);
+  const concepts = toTrimmedStrings(body.concepts).slice(0, 5);
+
+  if (!queries.length && !concepts.length) {
+    throw new HttpError(400, "discovery needs at least one query or concept.");
+  }
+
+  if (!searchProvider) {
+    return { configured: false, candidates: [] };
+  }
+
+  const snapshot = persistenceStore.getSnapshot();
+  const memory = snapshot.userMemories.find((record) => record.userId === userId)?.memory;
+  const now = new Date().toISOString();
+  const discovery = await runSourceDiscovery({
+    provider: searchProvider,
+    concepts,
+    queries,
+    goals: memory?.profile.goals,
+    existingUrls: collectKnownSourceUrls(snapshot),
+    existingTitles: collectKnownSourceTitles(snapshot),
+    now
+  });
+
+  if (discovery.candidates.length) {
+    persistDiscoveredCandidates(persistenceStore, discovery.candidates, now);
+  }
+
+  return { configured: true, candidates: discovery.candidates };
+}
+
+function toTrimmedStrings(value) {
+  return Array.isArray(value)
+    ? value.filter((item) => typeof item === "string" && item.trim()).map((item) => item.trim())
+    : [];
 }
 
 // A user note becomes a first-class post (self-grounded source) and the

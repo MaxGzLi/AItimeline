@@ -1427,3 +1427,27 @@ body:has(.x-frame) {
   border-top: none;
   border-bottom: 1px solid var(--x-line);
 }
+
+/* ---------- 回复动作 chip(可点)与找来源反馈 ---------- */
+button.x-chip {
+  background: none;
+  font-family: inherit;
+  cursor: default;
+}
+.x-chip.action {
+  color: var(--x-blue);
+  border-color: var(--x-blue);
+  cursor: pointer;
+}
+.x-chip.action:hover { background: var(--x-blue-soft, var(--x-hover)); }
+.x-chip.action:disabled {
+  color: var(--x-muted);
+  border-color: var(--x-line);
+  cursor: wait;
+}
+.x-discover-note {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--x-muted);
+}
+.x-discover-note .x-hint { margin-left: 6px; }
