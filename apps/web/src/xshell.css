@@ -217,6 +217,55 @@ body:has(.x-frame) {
 }
 .x-composer input::placeholder { color: var(--x-muted); }
 .x-composer input:focus-visible { outline: none; }
+.x-wikilink-field {
+  position: relative;
+  display: block;
+  width: 100%;
+  min-width: 0;
+}
+.x-wikilink-field input { width: 100%; }
+.x-wikilink-menu {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--x-bg);
+  border: 1px solid var(--x-line);
+  border-radius: 8px;
+}
+.x-wikilink-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 36px;
+  padding: 8px 10px;
+  background: var(--x-bg);
+  border: none;
+  border-bottom: 1px solid var(--x-line);
+  color: var(--x-ink);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+.x-wikilink-option:last-child { border-bottom: none; }
+.x-wikilink-option:hover,
+.x-wikilink-option.active { background: var(--x-hover); }
+.x-wikilink-option-main {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.x-wikilink-option-kind {
+  flex: none;
+  color: var(--x-muted);
+  font-size: 12px;
+}
 .x-composer-foot {
   display: flex;
   align-items: center;
@@ -428,6 +477,10 @@ body:has(.x-frame) {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+.x-reply-form .x-wikilink-field {
+  flex: 1;
+  min-width: 0;
 }
 .x-reply-input {
   flex: 1;
