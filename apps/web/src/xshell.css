@@ -551,6 +551,11 @@ body:has(.x-frame) {
   gap: 16px;
   width: 384px;
 }
+/* 栏高固定为一屏:内容超出时必须走滚动,不许 flex 压缩模块
+   (模块 overflow:hidden,被压缩就会齐底裁掉内容行)。 */
+.x-rail > * {
+  flex-shrink: 0;
+}
 .x-search {
   display: flex;
   align-items: center;
