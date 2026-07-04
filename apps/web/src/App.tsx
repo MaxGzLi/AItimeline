@@ -32,6 +32,7 @@ import { ConceptDigestPanel } from "./components/ConceptDigestPanel";
 import { ContextRail } from "./components/ContextRail";
 import { PostView } from "./components/PostView";
 import { SourceDetailDrawer } from "./components/SourceDetailDrawer";
+import { buildWikilinkAutocompleteCandidates } from "./components/WikilinkAutocomplete";
 import { DiscoverView } from "./views/DiscoverView";
 import { AgentView } from "./views/AgentView";
 import { GraphView } from "./views/GraphView";
@@ -242,6 +243,7 @@ export function App() {
     });
   }, [displayedCards, searchQuery]);
   const allCards = useMemo(() => rankedCards, [rankedCards]);
+  const wikilinkCandidates = useMemo(() => buildWikilinkAutocompleteCandidates(allCards), [allCards]);
   const connectionsByCard = useMemo(() => {
     const byCard: Record<string, CardConnection[]> = {};
 
@@ -1188,6 +1190,7 @@ export function App() {
               onSubmit={handleAgentAsk}
               question={agentQuestion}
               ref={composerInputRef}
+              wikilinkCandidates={wikilinkCandidates}
             />
 
             {agentMessage ? <p className="x-empty">{agentMessage}</p> : null}
@@ -1230,6 +1233,7 @@ export function App() {
                     onSkip={handleSkip}
                     quoteText={quoteByCard[card.id]}
                     signal={interactionSignals[card.id]}
+                    wikilinkCandidates={wikilinkCandidates}
                   />
                 ))
               )}

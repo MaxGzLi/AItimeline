@@ -3,6 +3,7 @@ import { BadgeCheck, Bookmark, Clock, Heart, MessageCircle, Plus, Repeat2, XCirc
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { formatConnectionKind, formatRelativeTime, getAgentInitials, getAgentName, slugConcept } from "../lib/format";
 import { renderWithWikilinks } from "../lib/wikilinks";
+import { WikilinkInput, type WikilinkAutocompleteCandidate } from "./WikilinkAutocomplete";
 
 export function PostView({
   card,
@@ -18,7 +19,8 @@ export function PostView({
   onSave,
   onSkip,
   quoteText,
-  signal
+  signal,
+  wikilinkCandidates
 }: {
   card: RankedKnowledgeCard;
   cards: KnowledgeCard[];
@@ -34,6 +36,7 @@ export function PostView({
   onSkip: (card: RankedKnowledgeCard) => void;
   quoteText?: string;
   signal?: InteractionSignal;
+  wikilinkCandidates: WikilinkAutocompleteCandidate[];
 }) {
   const postRef = useRef<HTMLElement | null>(null);
   const visibleSince = useRef<number | null>(null);
@@ -278,11 +281,12 @@ export function PostView({
                 <span className="x-avatar x-reply-avatar" aria-hidden="true">
                   你
                 </span>
-                <input
+                <WikilinkInput
                   aria-label="回复"
+                  candidates={wikilinkCandidates}
                   className="x-reply-input"
                   disabled={sending}
-                  onChange={(event) => setReplyText(event.target.value)}
+                  onValueChange={setReplyText}
                   placeholder="回复…"
                   value={replyText}
                 />
