@@ -1,0 +1,20 @@
+{
+  "expo": {
+    "name": "AITimeline",
+    "slug": "aitimeline-mobile",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "aitimeline",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "edgeToEdgeEnabled": true
+    },
+    "web": {
+      "bundler": "metro"
+    }
+  }
+}
