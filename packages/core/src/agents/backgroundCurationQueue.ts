@@ -300,11 +300,16 @@ async function runGenerateFollowupJob(
   handlers: BackgroundCurationExecutionHandlers,
   now: string
 ): Promise<BackgroundCurationJobResult> {
+  const seedPost = await handlers.loadSeedPost?.(job);
+
+  if (!seedPost) {
+    return runMissingSeedFollowupJob(job, handlers);
+  }
+
   if (!handlers.sourceImportWorker) {
     return skippedResult(job, "follow-up generation requires a sourceImportWorker.");
   }
 
-  const seedPost = await handlers.loadSeedPost?.(job);
   const plan = createFollowupSourceImportPlan({
     job,
     seedPost,
@@ -321,6 +326,27 @@ async function runGenerateFollowupJob(
     sourceImport,
     followupProtocol: plan.protocol,
     message: "Generated a grounded follow-up post for the timeline."
+  };
+}
+
+async function runMissingSeedFollowupJob(
+  job: BackgroundCurationJob,
+  handlers: BackgroundCurationExecutionHandlers
+): Promise<BackgroundCurationJobResult> {
+  if (!handlers.discoverSources) {
+    return skippedResult(job, "follow-up generation requires a seed post or a source discovery handler.");
+  }
+
+  const discoveredSourceCandidates = (await handlers.discoverSources(job)).slice(0, 1);
+
+  if (!discoveredSourceCandidates.length) {
+    return skippedResult(job, "follow-up seed post was unavailable and source discovery produced no candidates.");
+  }
+
+  return {
+    kind: job.kind,
+    discoveredSourceCandidates,
+    message: "Discovered a source candidate for follow-up grounding because the seed post is unavailable."
   };
 }
 
