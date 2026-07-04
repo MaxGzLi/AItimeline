@@ -52,6 +52,7 @@ import { ReviewView } from "./views/ReviewView";
 import { SettingsView } from "./views/SettingsView";
 import { apiBaseUrl, apiRequest, isYouTubeUrl, sampleSourceUrl } from "./lib/api";
 import { buildGroundedAnswer, formatAskAnswer, getTopicId, scrollMotion, slugConcept } from "./lib/format";
+import { buildCardNeighborhoodGraph } from "./lib/localGraph";
 import {
   createInteractionSignal,
   createSignalSignature,
@@ -457,6 +458,11 @@ export function App() {
   );
   // Wikilink backlinks, keyed by concept slug and card id (see buildBacklinkIndex).
   const backlinkIndex = useMemo(() => buildBacklinkIndex(allCards), [allCards]);
+  // One-hop patch of the linked graph around the open post, for the rail.
+  const selectedLocalGraph = useMemo(
+    () => (selectedCardId ? buildCardNeighborhoodGraph(linkedGraph, selectedCardId) : null),
+    [linkedGraph, selectedCardId]
+  );
   const reviewQueue = useMemo(
     () => createReviewQueue(allCards, allSignals),
     [allCards, allSignals]
@@ -1427,7 +1433,10 @@ export function App() {
       {activeView === "timeline" ? (
         <ContextRail
           boundary={boundary}
+          detailCard={selectedCard}
+          detailGraph={selectedLocalGraph}
           graph={graph}
+          onOpenCardId={handleOpenCardId}
           onOpenConcept={handleOpenConcept}
           onOpenGraph={() => setActiveView("graph")}
           onOpenReview={() => setActiveView("review")}

@@ -1407,3 +1407,23 @@ body:has(.x-frame) {
 .x-backlink-snip { font-size: 13px; color: var(--x-muted); }
 .x-concept-backlinks { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--x-line); }
 .x-concept-backlinks .x-concept-eyebrow { margin: 0 0 8px; color: var(--x-muted); }
+
+/* ---------- 详情页右栏:知识定位 + 局部图谱 ---------- */
+.x-zonechip {
+  flex: none;
+  padding: 3px 10px;
+  border: 1px solid var(--x-line);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.x-zonechip.inside { color: var(--x-blue); border-color: var(--x-blue); }
+.x-zonechip.learning { color: var(--x-repost); border-color: var(--x-repost); }
+.x-zonechip.frontier { color: var(--x-warn); border-color: var(--x-warn); }
+.x-zonechip.dark { color: var(--x-muted); }
+.x-localgraph .x-graphcanvas {
+  height: 320px;
+  min-height: 0;
+  border-top: none;
+  border-bottom: 1px solid var(--x-line);
+}

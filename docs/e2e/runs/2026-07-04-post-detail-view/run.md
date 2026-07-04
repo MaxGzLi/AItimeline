@@ -1,57 +1,28 @@
-# 2026-07-04 — X 式主栏帖子详情页
+# 2026-07-04 — X 式主栏帖子详情页 + 右栏联动
 
-分支 `feat/post-detail-view`。本次把右侧来源详情抽屉改为主栏帖子详情页,并给时间线长正文加 4 行折叠与「显示更多」入口。
+分支 `feat/post-detail-view`。点帖子后主栏切换为详情页(返回栏/Esc 返回,滚动位置恢复),右侧抽屉退役;时间线长正文折叠 4 行 + 「显示更多」。详情页打开时右栏联动:知识定位(概念 × 边界区域徽标)+ 局部图谱(一跳邻域)。Spec:`docs/specs/2026-07-04-post-detail-view.md`(含增量节)。
 
-## 交互脚本
+## 环境
 
-- `docs/e2e/interactions/post-detail-view.js`
-- `#feed-light` / `#feed-dark`:保留时间线,定位含 `.x-showmore` 的折叠帖。
-- `#detail-light` / `#detail-dark`:打开一张来源帖,在详情页提交评论,再提交问 AI,等待评论线程和 AI 对话渲染。
+- API:`PORT=8792 npm run dev:api`(隔离数据,截图前清空)。
+- Web:`VITE_AITIMELINE_API_URL=http://127.0.0.1:8792 npm run dev -w @aitimeline/web -- --port 5182`。
+- 截图:`docs/e2e/cdp-shot.mjs` + `docs/e2e/interactions/post-detail-view.js`(hash 选模式:无 hash=feed,`#detail`=进详情,`#darkdetail`=暗色详情;无头 focus 坑同 wikilink-autocomplete 脚本)。
+- 种子:import /fixtures/article + 两条笔记(一短一长,长的用于验证折叠)。
 
-## 种子步骤
+## 交互脚本信号
 
-建议用隔离数据文件启动 API:
+- feed:`posts=4;showMore=1`(仅长笔记出现「显示更多」)
+- detail light:`replies=2;askMessages=2;sections=10`(发评论收到观察员回复;问 AI 有来源回答)
+- detail dark:同上(replies 累计 4)
 
-```bash
-AITIMELINE_ENABLE_FIXTURES=1 \
-AITIMELINE_DATA_PATH=/private/tmp/aitimeline-post-detail-view-api.json \
-AITIMELINE_CURATION_DATA_PATH=/private/tmp/aitimeline-post-detail-view-curation.json \
-PORT=8792 node apps/api/src/server.mjs
-```
+## 截图
 
-导入 fixture 文章并发布一条长笔记:
+| 文件 | 说明 |
+| --- | --- |
+| `00-timeline-clamp-light.png` | 时间线:长笔记 4 行折叠 + 蓝色「显示更多」;短帖无该链接。 |
+| `01-detail-light.png` | 主栏详情页(明):返回栏、完整正文、出处、评论线程、问 AI、知识块等 10 个分区;右栏=知识定位(3 概念 × 学习区徽标)+ 局部图谱 + 今日复习。 |
+| `02-detail-dark.png` | 同场景(暗)。 |
 
-```bash
-curl -sS -X POST http://127.0.0.1:8792/api/import/article \
-  -H 'content-type: application/json' \
-  -d '{"url":"http://127.0.0.1:8792/fixtures/article","createdAt":"2026-07-04T01:00:00.000Z","recommendedBecause":"post detail view visual seed"}'
+## 验证
 
-curl -sS -X POST http://127.0.0.1:8792/api/notes \
-  -H 'content-type: application/json' \
-  -d '{"text":"[[Memory]] 是这条长笔记要覆盖的核心概念。为了验证时间线正文折叠,这里刻意写成多段长正文:第一段说明用户笔记会进入同一条时间线;第二段说明显示更多应该直接进入主栏详情页;第三段说明返回后滚动位置要保持;第四段补充一个 [[不存在的东西]] 作为幽灵双链。\\n\\n这段继续拉长内容,让 600px 主栏中至少超过四行,从而稳定触发 CSS line-clamp 和蓝色「显示更多」入口。"}'
-```
-
-启动 Web:
-
-```bash
-VITE_AITIMELINE_API_URL=http://127.0.0.1:8792 npx vite --host 127.0.0.1 --port 5182
-```
-
-## 预期截图
-
-```bash
-LIGHT=1 node docs/e2e/cdp-shot.mjs docs/e2e/runs/2026-07-04-post-detail-view/01-detail-light.png http://127.0.0.1:5182/#detail-light 1440 2200 docs/e2e/interactions/post-detail-view.js
-DARK=1 node docs/e2e/cdp-shot.mjs docs/e2e/runs/2026-07-04-post-detail-view/02-detail-dark.png http://127.0.0.1:5182/#detail-dark 1440 2200 docs/e2e/interactions/post-detail-view.js
-LIGHT=1 node docs/e2e/cdp-shot.mjs docs/e2e/runs/2026-07-04-post-detail-view/03-feed-fold-light.png http://127.0.0.1:5182/#feed-light 1440 1800 docs/e2e/interactions/post-detail-view.js
-DARK=1 node docs/e2e/cdp-shot.mjs docs/e2e/runs/2026-07-04-post-detail-view/04-feed-fold-dark.png http://127.0.0.1:5182/#feed-dark 1440 1800 docs/e2e/interactions/post-detail-view.js
-```
-
-## 本机执行结果
-
-当前 Codex 沙箱禁止本地监听端口,所以未能生成 PNG:
-
-- API: `PORT=8792 node apps/api/src/server.mjs` 失败,`listen EPERM 127.0.0.1:8792`。
-- Vite: `npx vite --host 127.0.0.1 --port 5182` 失败,`listen EPERM 127.0.0.1:5182`。
-- cdp-shot:在没有可访问页面的情况下执行失败,`Error: no CDP page target`。
-
-没有启动成功的长驻服务,因此无需清理进程。验收人可在允许本地监听和 Chrome CDP 的环境中按上面的命令补拍。
+`npm run typecheck && npm run build && npm test` 全绿(Codex 主体实现自验 + 验收人独立复跑;右栏联动为验收人实现)。
