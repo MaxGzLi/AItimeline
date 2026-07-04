@@ -9,7 +9,11 @@ const { planDiscoveryQueries, runSourceDiscovery } = await import(
 const { buildKnowledgeBoundary, classifyConceptZone } = await import(
   "../packages/core/dist/graph/knowledgeBoundary.js"
 );
-const { createPersistentBackgroundCurationJobStore, runDueBackgroundCurationJobs } = await import(
+const {
+  createInMemoryBackgroundCurationJobStore,
+  createPersistentBackgroundCurationJobStore,
+  runDueBackgroundCurationJobs
+} = await import(
   "../packages/core/dist/agents/backgroundCurationQueue.js"
 );
 const { createEvidenceLedger } = await import("../packages/core/dist/harness/evidenceLedger.js");
@@ -17,7 +21,11 @@ const { validateGrounding } = await import("../packages/core/dist/harness/ground
 const { validateKnowledgePost } = await import("../packages/core/dist/harness/schema.js");
 const { createModelKnowledgePostRunner } = await import("../packages/core/dist/harness/modelRunner.js");
 const { evaluateInteraction } = await import("../packages/core/dist/harness/feedbackPolicy.js");
-const { createFollowupGenerationProtocol, validateFollowupGenerationProtocol } = await import(
+const {
+  createFollowupGenerationProtocol,
+  createFollowupSourceImportPlan,
+  validateFollowupGenerationProtocol
+} = await import(
   "../packages/core/dist/harness/followupHarness.js"
 );
 const { applyUserMemoryEdits, createEmptyUserMemory } = await import(
@@ -37,6 +45,41 @@ const { createAITimelinePersistenceStore } = await import("../packages/core/dist
 const { transformArticleUrl } = await import("../packages/core/dist/transform/articleImport.js");
 const { transformMockYouTubeUrl } = await import("../packages/core/dist/transform/mockYoutubeImport.js");
 const { transformYouTubeUrl } = await import("../packages/core/dist/transform/youtubeImport.js");
+
+const followupInstructionPattern =
+  /Seed grounding|User signal reason|must cite this chunk|Deeper angle|Broader angle|Simpler angle|Review angle/i;
+
+function collectStrings(value) {
+  if (typeof value === "string") {
+    return [value];
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap(collectStrings);
+  }
+
+  if (value && typeof value === "object") {
+    return Object.values(value).flatMap(collectStrings);
+  }
+
+  return [];
+}
+
+function enqueueSingleJob(store, job) {
+  return store.enqueuePlan({
+    generatedAt: job.createdAt,
+    jobs: [job],
+    suppressions: [],
+    acceptedSourceCandidateIds: [],
+    cooledTopicIds: [],
+    expansionPlan: {
+      generatedAt: job.createdAt,
+      jobs: [],
+      suppressions: [],
+      cooledTopicIds: []
+    }
+  });
+}
 
 const result = transformMockYouTubeUrl(
   "https://www.youtube.com/watch?v=aitimeline-demo",
@@ -620,20 +663,49 @@ assert.deepEqual(
   "background curation should track accepted external sources"
 );
 const followupJob = backgroundPlan.jobs.find((job) => job.kind === "generate_followup");
+const followupSeedPost = result.cards.find((card) => card.id === interestSignal.postId);
 
 assert.ok(followupJob, "background curation should include a follow-up generation job");
+assert.ok(followupSeedPost, "follow-up smoke should have a seed post");
 assert.equal(followupJob.postId, interestSignal.postId, "follow-up job should retain the seed post id");
 assert.equal(followupJob.nextAction, "expand_broader", "follow-up job should retain the learning intent");
 
 const followupProtocol = createFollowupGenerationProtocol({
   job: followupJob,
-  seedPost: result.cards.find((card) => card.id === interestSignal.postId),
+  seedPost: followupSeedPost,
   createdAt: "2026-06-10T00:00:00.000Z"
 });
 const followupProtocolValidation = validateFollowupGenerationProtocol(followupProtocol);
+const followupSourcePlan = createFollowupSourceImportPlan({
+  job: followupJob,
+  seedPost: followupSeedPost,
+  createdAt: "2026-06-10T00:00:00.000Z"
+});
+const followupChunkContent = followupSourcePlan.input.chunks[0]?.content ?? "";
+const seedPostText = collectStrings(followupSeedPost)
+  .map((value) => value.replace(/\s+/g, " ").trim())
+  .join("\n\n");
 
 assert.equal(followupProtocol.intent, "expand_broader", "follow-up protocol should encode broaden intent");
 assert.equal(followupProtocolValidation.valid, true, "follow-up protocol should validate");
+assert.doesNotMatch(followupChunkContent, followupInstructionPattern, "follow-up chunks should not contain instructions");
+assert.equal(
+  followupChunkContent.includes(followupJob.reason),
+  false,
+  "follow-up chunks should not contain the user signal reason"
+);
+assert.equal(
+  followupChunkContent.includes(followupProtocol.learningGoal),
+  false,
+  "follow-up chunks should not contain the learning goal"
+);
+assert.ok(followupChunkContent.includes(followupSeedPost.title), "follow-up chunk should include seed title text");
+assert.ok(followupChunkContent.includes(followupSeedPost.thesis), "follow-up chunk should include seed thesis text");
+assert.ok(followupChunkContent.includes(followupSeedPost.keyTakeaway), "follow-up chunk should include seed takeaway text");
+
+for (const segment of followupChunkContent.split(/\n\n+/).filter(Boolean)) {
+  assert.ok(seedPostText.includes(segment), `follow-up chunk segment should come from seed post text: ${segment}`);
+}
 
 const skipSignal = {
   postId: result.cards[0].id,
@@ -989,11 +1061,13 @@ const followupBatch = await runDueBackgroundCurationJobs(
   }
 );
 const followupJobRecord = followupBatch.records[0];
+const followupImport = followupJobRecord.result?.sourceImport;
 
 assert.equal(followupBatch.records.length, 1, "executor should run one follow-up job");
 assert.equal(followupJobRecord.status, "succeeded", "follow-up job should succeed");
+assert.ok(followupImport, "follow-up job should include a source import result");
 assert.equal(
-  followupJobRecord.result?.sourceImport?.importRecord.status,
+  followupImport?.importRecord.status,
   "ready",
   "follow-up job should produce a ready source import"
 );
@@ -1001,6 +1075,136 @@ assert.equal(
   followupJobRecord.result?.followupProtocol?.intent,
   "expand_broader",
   "follow-up job should preserve the protocol intent"
+);
+assert.ok(followupImport?.posts.length, "follow-up job should produce a generated post when seed exists");
+assert.ok(
+  followupImport.chunks.every((chunk) => !followupInstructionPattern.test(chunk.content)),
+  "executed follow-up chunks should not contain internal instructions"
+);
+
+for (const post of followupImport.posts) {
+  assert.doesNotMatch(
+    collectStrings(post).join("\n"),
+    followupInstructionPattern,
+    "generated follow-up post text should not contain internal instructions"
+  );
+  assert.ok(post.citations.every((citation) => citation.chunkId), "follow-up posts should cite chunk-level evidence");
+}
+
+for (const validation of followupImport.validation) {
+  assert.equal(validation.valid, true, `${validation.postId} follow-up validation should pass`);
+  assert.equal(validation.grounding?.valid, true, `${validation.postId} follow-up grounding should be valid`);
+  assert.ok(
+    validation.grounding?.checks.every((check) => check.evidenceChunkIds.length > 0),
+    `${validation.postId} follow-up grounding should resolve cited chunks`
+  );
+}
+
+const missingSeedFollowupJob = {
+  id: "missing-seed-followup",
+  kind: "generate_followup",
+  postId: "missing-seed-post",
+  topicId: "latent-memory",
+  conceptIds: ["Latent Memory", "Source Discovery"],
+  nextAction: "continue_deeper",
+  priority: 0.86,
+  reason: "The original post is no longer available, so a new source is required.",
+  createdAt: "2026-06-10T00:00:00.000Z"
+};
+const missingSeedStore = createInMemoryBackgroundCurationJobStore();
+
+enqueueSingleJob(missingSeedStore, missingSeedFollowupJob);
+
+const missingSeedBatch = await runDueBackgroundCurationJobs(
+  missingSeedStore,
+  {
+    discoverSources: (job) => [
+      {
+        id: `${job.topicId}-needed-source`,
+        source: {
+          id: `${job.topicId}-article`,
+          title: "Latent memory source candidate",
+          url: "https://example.com/latent-memory-source",
+          type: "article"
+        },
+        topicId: job.topicId,
+        conceptIds: job.conceptIds,
+        relevanceScore: 0.82,
+        noveltyScore: 0.76,
+        qualityScore: 0.88,
+        reason: `A new source is needed for ${job.conceptIds[0]}.`,
+        discoveredAt: "2026-06-10T00:00:00.000Z"
+      },
+      {
+        id: `${job.topicId}-extra-source`,
+        source: {
+          id: `${job.topicId}-extra-article`,
+          title: "Extra source candidate",
+          url: "https://example.com/latent-memory-extra",
+          type: "article"
+        },
+        topicId: job.topicId,
+        conceptIds: job.conceptIds,
+        relevanceScore: 0.72,
+        noveltyScore: 0.7,
+        qualityScore: 0.8,
+        reason: "This extra candidate should not be emitted by the missing-seed follow-up branch.",
+        discoveredAt: "2026-06-10T00:00:00.000Z"
+      }
+    ]
+  },
+  {
+    now: "2026-06-10T00:00:00.000Z",
+    kinds: ["generate_followup"]
+  }
+);
+const missingSeedRecord = missingSeedBatch.records[0];
+
+assert.equal(missingSeedBatch.records.length, 1, "missing-seed follow-up should complete one job");
+assert.equal(missingSeedRecord.status, "succeeded", "missing-seed follow-up should succeed when discovery is available");
+assert.equal(
+  missingSeedRecord.result?.discoveredSourceCandidates?.length,
+  1,
+  "missing-seed follow-up should emit exactly one source discovery candidate"
+);
+assert.equal(
+  missingSeedRecord.result?.sourceImport,
+  undefined,
+  "missing-seed follow-up should not generate or import a card"
+);
+assert.equal(
+  missingSeedRecord.result?.discoveredSourceCandidates?.[0]?.reason.includes("Latent Memory"),
+  true,
+  "missing-seed follow-up candidate should explain the concept that needs a source"
+);
+
+const missingSeedSkipStore = createInMemoryBackgroundCurationJobStore();
+
+enqueueSingleJob(missingSeedSkipStore, {
+  ...missingSeedFollowupJob,
+  id: "missing-seed-followup-skip"
+});
+
+const missingSeedSkipBatch = await runDueBackgroundCurationJobs(
+  missingSeedSkipStore,
+  {},
+  {
+    now: "2026-06-10T00:00:00.000Z",
+    kinds: ["generate_followup"]
+  }
+);
+const missingSeedSkipRecord = missingSeedSkipBatch.records[0];
+
+assert.equal(missingSeedSkipRecord.status, "skipped", "missing-seed follow-up should skip without discovery");
+assert.match(
+  missingSeedSkipRecord.result?.message ?? "",
+  /seed post|source discovery handler/i,
+  "missing-seed skipped job should explain why it did not generate a card"
+);
+assert.equal(
+  missingSeedSkipRecord.result?.sourceImport,
+  undefined,
+  "missing-seed skipped job should not generate or import a card"
 );
 
 const discoveryPlan = createBackgroundCurationPlan({

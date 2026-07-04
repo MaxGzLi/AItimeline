@@ -56,6 +56,10 @@ export interface CreateFollowupGenerationProtocolInput {
   createdAt?: string | Date;
 }
 
+export interface CreateFollowupSourceImportPlanInput extends CreateFollowupGenerationProtocolInput {
+  seedPost: KnowledgePost;
+}
+
 export const followupHarnessSystemPrompt = `You are the AITimeline Follow-up Agent.
 
 Your job is to create the next timeline post after a user interaction.
@@ -178,9 +182,7 @@ export function validateFollowupGenerationProtocol(protocol: unknown): HarnessVa
   };
 }
 
-export function createFollowupSourceImportPlan(
-  input: CreateFollowupGenerationProtocolInput
-): FollowupSourceImportPlan {
+export function createFollowupSourceImportPlan(input: CreateFollowupSourceImportPlanInput): FollowupSourceImportPlan {
   const protocol = createFollowupGenerationProtocol(input);
   const source = createFollowupSource(protocol, input.seedPost);
   const chunks = createFollowupChunks(protocol, input.job, input.seedPost);
@@ -227,19 +229,10 @@ function createFollowupSource(protocol: FollowupGenerationProtocol, seedPost: Kn
 
 function createFollowupChunks(
   protocol: FollowupGenerationProtocol,
-  job: BackgroundCurationJob,
-  seedPost: KnowledgePost | undefined
+  _job: BackgroundCurationJob,
+  seedPost: KnowledgePost
 ): KnowledgeChunk[] {
-  const seedSummary = seedPost
-    ? `${seedPost.title}. ${seedPost.keyTakeaway} ${seedPost.thesis}`
-    : `No seed post was found. The only grounded inputs are topic ${job.topicId}, concepts ${job.conceptIds.join(", ")}, and job reason: ${job.reason}`;
-  const body = [
-    protocol.learningGoal,
-    `Seed grounding: ${seedSummary}`,
-    `User signal reason: ${job.reason}`,
-    buildIntentInstruction(protocol.intent, protocol.conceptIds),
-    "The generated post must cite this chunk and avoid adding external facts that are not present here."
-  ].join(" ");
+  const body = buildSeedPostGroundingContent(seedPost);
 
   return [
     {
@@ -249,6 +242,18 @@ function createFollowupChunks(
       conceptHints: enrichConcepts(protocol.conceptIds, protocol.intent)
     }
   ];
+}
+
+function buildSeedPostGroundingContent(seedPost: KnowledgePost): string {
+  return dedupeTexts([
+    seedPost.title,
+    seedPost.hook,
+    seedPost.thesis,
+    seedPost.shortBody,
+    seedPost.summary,
+    seedPost.keyTakeaway,
+    ...seedPost.thread.flatMap((block) => [block.title, block.body, block.prompt])
+  ]).join("\n\n");
 }
 
 function buildLearningGoal(
@@ -288,25 +293,6 @@ function buildUserPrompt(
     seedPost ? `Seed post: ${JSON.stringify(toSeedPostSummary(seedPost), null, 2)}` : "Seed post: not available.",
     "Return a post that can be cited to the follow-up chunk and connected back to the user's knowledge graph."
   ].join("\n");
-}
-
-function buildIntentInstruction(intent: FollowupGenerationIntent, concepts: string[]): string {
-  const primaryConcept = concepts[0] ?? "the topic";
-  const secondaryConcept = concepts[1] ?? "the adjacent idea";
-
-  if (intent === "expand_broader") {
-    return `Broader angle: connect ${primaryConcept} to ${secondaryConcept}, then explain why that adjacent concept changes what the user should explore next.`;
-  }
-
-  if (intent === "reframe_simpler") {
-    return `Simpler angle: explain ${primaryConcept} with a plain-language model, then ask a quick check to reveal whether the user is ready for depth.`;
-  }
-
-  if (intent === "review_reinforcement") {
-    return `Review angle: help the user recall ${primaryConcept}, compare it with ${secondaryConcept}, and schedule another review.`;
-  }
-
-  return `Deeper angle: explain the mechanism behind ${primaryConcept}, the prerequisite idea, and the mistake a learner should avoid.`;
 }
 
 function buildRecommendedBecause(protocol: FollowupGenerationProtocol, job: BackgroundCurationJob): string {
@@ -354,6 +340,24 @@ function enrichConcepts(concepts: string[], intent: FollowupGenerationIntent): s
 
 function normalizeConcepts(concepts: string[]): string[] {
   return Array.from(new Set(concepts.map((concept) => concept.trim()).filter(Boolean)));
+}
+
+function dedupeTexts(values: Array<string | undefined>): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const value of values) {
+    const normalized = value?.replace(/\s+/g, " ").trim();
+
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+
+    seen.add(normalized);
+    result.push(normalized);
+  }
+
+  return result;
 }
 
 function toSeedPostSummary(post: KnowledgePost): Record<string, unknown> {
