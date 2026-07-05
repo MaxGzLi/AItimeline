@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { createApiServer, listen } from "../apps/api/src/server.mjs";
 
 const tempDir = await mkdtemp(join(tmpdir(), "aitimeline-api-"));
+const mediaRootDir = join(tempDir, "media");
+await mkdir(join(mediaRootDir, "smoke-source"), { recursive: true });
+await writeFile(join(mediaRootDir, "smoke-source", "1.png"), new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]));
+
 let discoveryBaseUrl = "";
 const fakeSearchProvider = {
   id: "smoke",
@@ -23,6 +27,7 @@ const fakeSearchProvider = {
 const server = createApiServer({
   dataPath: join(tempDir, "aitimeline.json"),
   curationDataPath: join(tempDir, "curation-jobs.json"),
+  mediaRootDir,
   enableFixtures: true,
   searchProvider: fakeSearchProvider
 });
@@ -34,6 +39,19 @@ try {
   const health = await requestJson("/health");
 
   assert.equal(health.ok, true, "API health check should pass");
+
+  const mediaResponse = await fetch(`${baseUrl}/media/smoke-source/1.png`);
+  const mediaBytes = new Uint8Array(await mediaResponse.arrayBuffer());
+
+  assert.equal(mediaResponse.status, 200, "media route should serve files from the configured media root");
+  assert.equal(mediaResponse.headers.get("content-type"), "image/png", "media route should set image content-type");
+  assert.equal(mediaBytes.byteLength, 8, "media route should return the written image bytes");
+
+  const traversalResponse = await fetch(`${baseUrl}/media/smoke-source/%2e%2e/aitimeline.json`);
+  const plainTraversalResponse = await fetch(`${baseUrl}/media/../aitimeline.json`);
+
+  assert.notEqual(traversalResponse.status, 200, "media route must reject path traversal");
+  assert.notEqual(plainTraversalResponse.status, 200, "media route must not serve normalized traversal paths");
 
   const importResult = await requestJson("/api/import/article", {
     method: "POST",

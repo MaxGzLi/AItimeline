@@ -20,7 +20,7 @@ export function createSourceRegistry(input: CreateSourceRegistryInput): SourceRe
   const assets = dedupeById(input.assets ?? []);
   const chunks = dedupeById(input.chunks ?? []);
   const snapshots = assets.map((asset, index) => createSourceSnapshot(asset, createdAt, index + 1));
-  const snapshotBySourceId = new Map(snapshots.map((snapshot) => [snapshot.sourceId, snapshot]));
+  const snapshotBySourceId = createPrimarySnapshotMap(assets, snapshots);
   const chunkVersions = chunks.map((chunk, index) =>
     createSourceChunkVersion(chunk, snapshotBySourceId.get(chunk.sourceId), createdAt, index + 1)
   );
@@ -45,14 +45,16 @@ export function mergeSourceRegistries(...registries: SourceRegistry[]): SourceRe
 }
 
 export function createSourceSnapshot(asset: SourceAsset, createdAt = asset.createdAt, version = 1): SourceSnapshot {
+  const snapshotContent = getAssetSnapshotContent(asset);
+
   return {
     id: `${asset.id}-snapshot-v${version}`,
     sourceId: asset.sourceId,
     assetId: asset.id,
     kind: asset.kind,
     version,
-    contentHash: hashContent(asset.content),
-    contentLength: asset.content.length,
+    contentHash: hashContent(snapshotContent),
+    contentLength: snapshotContent.length,
     createdAt
   };
 }
@@ -115,4 +117,33 @@ function dedupeById<T extends { id: string }>(items: T[]): T[] {
   }
 
   return deduped;
+}
+
+function createPrimarySnapshotMap(assets: SourceAsset[], snapshots: SourceSnapshot[]): Map<string, SourceSnapshot> {
+  const snapshotBySourceId = new Map<string, SourceSnapshot>();
+
+  for (let index = 0; index < snapshots.length; index += 1) {
+    const asset = assets[index];
+    const snapshot = snapshots[index];
+
+    if (!asset || !snapshot) {
+      continue;
+    }
+
+    const existing = snapshotBySourceId.get(snapshot.sourceId);
+
+    if (!existing || asset.kind !== "image") {
+      snapshotBySourceId.set(snapshot.sourceId, snapshot);
+    }
+  }
+
+  return snapshotBySourceId;
+}
+
+function getAssetSnapshotContent(asset: SourceAsset): string {
+  if (asset.kind === "image") {
+    return [asset.url, asset.figureLabel, asset.caption].join("\n");
+  }
+
+  return asset.content;
 }

@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const { createBackgroundCurationPlan } = await import("../packages/core/dist/agents/backgroundCuration.js");
 const { runConversationTurn } = await import("../packages/core/dist/agents/conversationAgent.js");
@@ -49,6 +52,7 @@ const { createAITimelinePersistenceStore } = await import("../packages/core/dist
 const { fetchArticle, parseArxivAtom, transformArticleUrl } = await import(
   "../packages/core/dist/transform/articleImport.js"
 );
+const { parseArxivHtmlDecomposition } = await import("../packages/core/dist/transform/arxivHtmlImport.js");
 const { transformMockYouTubeUrl } = await import("../packages/core/dist/transform/mockYoutubeImport.js");
 const { transformYouTubeUrl } = await import("../packages/core/dist/transform/youtubeImport.js");
 
@@ -320,13 +324,166 @@ assert.equal(
   "arXiv parser should normalize abstract whitespace and XML entities"
 );
 
-let arxivRequestCount = 0;
+const placeholderArxivHtml = "<html><body><h1>arXiv HTML unavailable</h1><p>arXivLabs placeholder.</p></body></html>";
+assert.equal(
+  parseArxivHtmlDecomposition(placeholderArxivHtml, "https://arxiv.org/html/2512.13564v2"),
+  undefined,
+  "arXiv placeholder pages without LaTeXML structure should report no full text"
+);
+
+const sampleLatexmlHtml = `
+  <html>
+    <head>
+      <base href="/html/2603.07670v1/"/>
+    </head>
+    <body>
+      <main class="ltx_page_main">
+        <h1 class="ltx_title">Memory Graphs for AI Agents</h1>
+        <blockquote class="ltx_abstract">
+          <p class="ltx_p">We introduce a memory graph that keeps agent retrieval grounded and inspectable.</p>
+        </blockquote>
+        <section class="ltx_section">
+          <h2 class="ltx_title">1 Introduction</h2>
+          <p class="ltx_para">AI Agent memory needs durable source chunks, citation trails, and motivating user problems.</p>
+        </section>
+        <section class="ltx_section">
+          <h2 class="ltx_title">2 Method and Architecture</h2>
+          <p class="ltx_para">Our method builds a graph-backed memory system with retrieval nodes, summary edges, and evaluation hooks.</p>
+          <figure class="ltx_figure">
+            <img src="figures/architecture.png" />
+            <figcaption><span class="ltx_tag ltx_tag_figure">Figure 1:</span> Architecture overview &amp; memory graph.</figcaption>
+            <figure class="ltx_figure">
+              <img src="figures/architecture.png" />
+              <figcaption>(a) Duplicate subfigure that must be deduplicated.</figcaption>
+            </figure>
+          </figure>
+          <figure class="ltx_figure">
+            <img src="data:image/png;base64,iVBORw0KGgo=" />
+            <figcaption>Table 1: Representative memory systems and retrieval affordances.</figcaption>
+          </figure>
+        </section>
+        <section class="ltx_section">
+          <h2 class="ltx_title">4 Core Memory Mechanisms</h2>
+          <p class="ltx_para">Retrieval-augmented stores and reflective loops manage what the agent keeps.</p>
+        </section>
+        <section class="ltx_section">
+          <h2 class="ltx_title">9 Open Challenges</h2>
+          <p class="ltx_para">Principled consolidation and learning to forget remain unsolved.</p>
+        </section>
+        <section class="ltx_section">
+          <h2 class="ltx_title">Acknowledgments</h2>
+          <p class="ltx_para">We thank the AITimeline boilerplate reviewers for feedback.</p>
+        </section>
+      </main>
+    </body>
+  </html>
+`;
+const parsedLatexml = parseArxivHtmlDecomposition(sampleLatexmlHtml, "https://arxiv.org/html/2603.07670");
+
+assert.ok(parsedLatexml, "LaTeXML HTML should decompose into a full-text payload");
+assert.equal(parsedLatexml.title, "Memory Graphs for AI Agents", "LaTeXML title should be extracted");
+assert.ok(
+  parsedLatexml.buckets.some(
+    (bucket) => bucket.kind === "motivation" && bucket.chunks.join(" ").includes("durable source chunks")
+  ),
+  "abstract and introduction should map to the motivation bucket"
+);
+assert.ok(
+  parsedLatexml.buckets.some(
+    (bucket) => bucket.kind === "method" && bucket.chunks.join(" ").includes("graph-backed memory system")
+  ),
+  "method and architecture sections should map to the method bucket"
+);
+assert.ok(
+  parsedLatexml.buckets.some(
+    (bucket) => bucket.kind === "method" && bucket.chunks.join(" ").includes("reflective loops")
+  ),
+  "survey-style mechanism sections should map to the method bucket"
+);
+assert.ok(
+  parsedLatexml.buckets.some(
+    (bucket) => bucket.kind === "conclusion" && bucket.chunks.join(" ").includes("learning to forget")
+  ),
+  "open-challenges sections should map to the conclusion bucket"
+);
+assert.ok(
+  parsedLatexml.buckets.every((bucket) => !bucket.chunks.join(" ").includes("boilerplate reviewers")),
+  "acknowledgment sections should not produce chunks"
+);
+assert.equal(parsedLatexml.figures.length, 2, "LaTeXML figures should be extracted and deduplicated by image");
+assert.equal(
+  parsedLatexml.figures[0].imageRef,
+  "https://arxiv.org/html/2603.07670v1/figures/architecture.png",
+  "relative arXiv images should resolve against the document base href"
+);
+assert.equal(parsedLatexml.figures[1].figureLabel, "Table 1", "table labels should be read from captions");
+
+const mediaTempDir = await mkdtemp(join(tmpdir(), "aitimeline-arxiv-media-"));
+
+try {
+  const fakePng = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+  const fetchArxivFullHtml = async (url) => {
+    const requestedUrl = String(url);
+
+    if (requestedUrl === "https://arxiv.org/html/2603.07670") {
+      return new Response(sampleLatexmlHtml, { status: 200, headers: { "content-type": "text/html" } });
+    }
+
+    if (requestedUrl === "https://arxiv.org/html/2603.07670v1/figures/architecture.png") {
+      return new Response(fakePng, {
+        status: 200,
+        headers: {
+          "content-type": "image/png",
+          "content-length": String(fakePng.byteLength)
+        }
+      });
+    }
+
+    return new Response("not found", { status: 404 });
+  };
+  const fullArxivImport = await transformArticleUrl("https://arxiv.org/abs/2603.07670", {
+    createdAt: "2026-06-10T00:00:00.000Z",
+    fetch: fetchArxivFullHtml,
+    mediaRootDir: mediaTempDir,
+    recommendedBecause: "Smoke test arXiv LaTeXML import."
+  });
+  const imageAssets = fullArxivImport.assets.filter((asset) => asset.kind === "image");
+
+  assert.equal(fullArxivImport.source.title, "Memory Graphs for AI Agents", "full HTML import should use the paper title");
+  assert.equal(imageAssets.length, 2, "full HTML import should cache both relative and data URI images");
+  assert.ok(
+    imageAssets.every((asset) => asset.url.startsWith(`/media/${fullArxivImport.source.id}/`)),
+    "cached image assets should expose /media URLs"
+  );
+  await stat(join(mediaTempDir, fullArxivImport.source.id, "1.png"));
+  await stat(join(mediaTempDir, fullArxivImport.source.id, "2.png"));
+  assert.ok(
+    fullArxivImport.chunks.some((chunk) => chunk.content.includes("Figure 1: Architecture overview")),
+    "figure captions should be registered as source chunks"
+  );
+  assert.ok(
+    fullArxivImport.chunks.some((chunk) => chunk.content.includes("Table 1: Representative memory systems")),
+    "table captions should be registered as source chunks"
+  );
+  assert.equal(fullArxivImport.importRecord.status, "ready", "full arXiv HTML import should remain ready");
+} finally {
+  await rm(mediaTempDir, { recursive: true, force: true });
+}
+
+const arxivRequestLog = [];
 const fetchArxiv = async (url) => {
-  arxivRequestCount += 1;
+  const requestedUrl = String(url);
+
+  arxivRequestLog.push(requestedUrl);
+
+  if (requestedUrl === "https://arxiv.org/html/2512.13564v2") {
+    return new Response(placeholderArxivHtml, { status: 200, headers: { "content-type": "text/html" } });
+  }
+
   assert.equal(
-    String(url),
+    requestedUrl,
     "https://export.arxiv.org/api/query?id_list=2512.13564v2",
-    "arXiv import should call the metadata API with the normalized id"
+    "arXiv fallback should call the metadata API with the normalized id"
   );
 
   return new Response(arxivAtomXml, { status: 200, headers: { "content-type": "application/atom+xml" } });
@@ -337,7 +494,11 @@ const arxivImport = await transformArticleUrl("https://arxiv.org/abs/2512.13564v
   recommendedBecause: "Smoke test arXiv article import."
 });
 
-assert.equal(arxivRequestCount, 1, "arXiv import should make exactly one metadata request");
+assert.deepEqual(
+  arxivRequestLog.slice(0, 2),
+  ["https://arxiv.org/html/2512.13564v2", "https://export.arxiv.org/api/query?id_list=2512.13564v2"],
+  "arXiv import should try HTML before falling back to the Atom metadata API"
+);
 assert.equal(arxivImport.source.type, "article", "arXiv import should still create an article source");
 assert.equal(arxivImport.source.title, parsedArxiv.title, "arXiv import should use the paper title");
 assert.equal(
@@ -347,6 +508,7 @@ assert.equal(
 );
 assert.equal(arxivImport.source.author, "Ada Lovelace, Alan Turing", "arXiv import should join authors");
 assert.equal(arxivImport.source.publishedAt, parsedArxiv.publishedAt, "arXiv import should set publishedAt");
+assert.equal(arxivImport.assets.length, 1, "placeholder fallback should preserve the single text asset behavior");
 assert.equal(arxivImport.chunks.length, 1, "arXiv import should create one abstract chunk");
 assert.equal(arxivImport.chunks[0].content, parsedArxiv.abstract, "arXiv chunk should be the paper abstract");
 assert.ok(!arxivImport.chunks[0].content.includes("arXivLabs"), "arXiv import should not use page footer text");

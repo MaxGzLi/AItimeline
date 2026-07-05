@@ -137,11 +137,9 @@ export async function runModelAgentHarness(
     }
   }
 
-  const hasErrors = hasValidationErrors(finalAttempt.validation);
-  const acceptedPosts = hasErrors
-    ? []
-    : collectAcceptedPosts(finalAttempt.candidates, finalAttempt.validation);
-  const status = hasErrors ? "failed" : "succeeded";
+  // 按卡保留:修复轮次用尽后,仍然接受逐卡校验通过的卡片,只丢弃未通过的那几张。
+  const acceptedPosts = collectAcceptedPosts(finalAttempt.candidates, finalAttempt.validation);
+  const status = acceptedPosts.length ? "succeeded" : "failed";
 
   return {
     run: {

@@ -171,6 +171,39 @@ assert.equal(disabledLanguageCalls, 1, "disabled language gate should not trigge
 assert.equal(disabledLanguageResult.run.status, "succeeded", "English output should pass when contentLanguage is unset");
 assert.equal(disabledLanguageResult.posts[0].title, englishModelPost.title, "ungated output should be accepted as-is");
 
+// 4b) 按卡保留:修复轮次用尽后,通过校验的卡片保留,失败的卡片丢弃,不再一票否决整批。
+let salvageCalls = 0;
+const salvageRunner = createModelKnowledgePostRunner({
+  contentLanguage: "zh",
+  maxRepairAttempts: 1,
+  client: {
+    async complete() {
+      salvageCalls += 1;
+      return {
+        content: JSON.stringify({
+          posts: [zhModelPost, { ...englishModelPost, id: `${englishModelPost.id}-en` }]
+        })
+      };
+    }
+  }
+});
+const salvageResult = await salvageRunner.run({
+  source: deterministic.source,
+  chunks: deterministic.chunks,
+  sourceRegistry: deterministic.sourceRegistry,
+  createdAt,
+  recommendedBecause: "这次 smoke 用来确认单张坏卡不会拖垮整批卡片。"
+});
+
+assert.equal(salvageCalls, 2, "partial salvage should still spend the repair attempt first");
+assert.equal(salvageResult.run.status, "succeeded", "a run with at least one valid post should succeed");
+assert.equal(salvageResult.posts.length, 1, "only the post that passed validation should be accepted");
+assert.equal(salvageResult.posts[0].id, zhModelPost.id, "the accepted post should be the valid Chinese one");
+assert.ok(
+  salvageResult.validation.some((result) => !result.valid),
+  "the dropped post's validation issues should stay observable on the run"
+);
+
 // 5) The same runner option threads through the YouTube transform path.
 const youtubeUrl = "https://www.youtube.com/watch?v=model-demo";
 const fakePlayerResponse = {

@@ -14,7 +14,7 @@ export type TrustState = "emerging" | "supported" | "contested";
 
 export type UserSignalType = "like" | "save" | "ask" | "review";
 
-export type SourceAssetKind = "transcript" | "text" | "metadata";
+export type SourceAssetKind = "transcript" | "text" | "metadata" | "image";
 
 export type TransformationStatus = "queued" | "extracting" | "transforming" | "ready" | "failed";
 
@@ -82,13 +82,26 @@ export interface Source {
   durationSeconds?: number;
 }
 
-export interface SourceAsset {
+export interface SourceTextAsset {
   id: string;
   sourceId: string;
-  kind: SourceAssetKind;
+  kind: Exclude<SourceAssetKind, "image">;
   content: string;
   createdAt: string;
 }
+
+export interface SourceImageAsset {
+  id: string;
+  sourceId: string;
+  kind: "image";
+  content?: never;
+  url: string;
+  caption: string;
+  figureLabel: string;
+  createdAt: string;
+}
+
+export type SourceAsset = SourceTextAsset | SourceImageAsset;
 
 export interface SourceSnapshot {
   id: string;

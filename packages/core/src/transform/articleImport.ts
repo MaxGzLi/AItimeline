@@ -11,12 +11,19 @@ import type {
   SourceImport,
   SourceRegistry
 } from "../types.js";
+import {
+  cacheArxivFigureImages,
+  createFigureCaptionChunks,
+  fetchArxivHtmlDecomposition,
+  type ArxivHtmlDecomposition
+} from "./arxivHtmlImport.js";
 
 export interface ArticleFetchOptions {
   fetch?: typeof fetch;
   createdAt?: string;
   maxChunks?: number;
   minParagraphLength?: number;
+  mediaRootDir?: string;
 }
 
 export interface ArticleTransformOptions extends ArticleFetchOptions {
@@ -27,7 +34,9 @@ export interface ArticleTransformOptions extends ArticleFetchOptions {
 export interface ArticleFetchResult {
   source: Source;
   asset: SourceAsset;
+  assets: SourceAsset[];
   paragraphs: string[];
+  arxivHtml?: ArxivHtmlDecomposition;
 }
 
 export interface ArxivAtomPaper {
@@ -40,12 +49,14 @@ export interface ArxivAtomPaper {
 export interface ArticleTransformResult {
   source: Source;
   asset: SourceAsset;
+  assets: SourceAsset[];
   chunks: KnowledgeChunk[];
   cards: KnowledgePost[];
   sourceRegistry: SourceRegistry;
   harnessRun?: AgentHarnessRun;
   validation: HarnessValidationResult[];
   importRecord: SourceImport;
+  arxivHtml?: ArxivHtmlDecomposition;
 }
 
 const defaultMaxChunks = 8;
@@ -66,7 +77,7 @@ export async function fetchArticle(url: string, options: ArticleFetchOptions = {
   const arxivUrl = parseArxivArticleUrl(parsedUrl);
 
   if (arxivUrl) {
-    return fetchArxivArticle(fetchImpl, arxivUrl, createdAt);
+    return fetchArxivArticle(fetchImpl, arxivUrl, createdAt, options);
   }
 
   const html = await fetchArticleHtml(fetchImpl, parsedUrl.toString());
@@ -99,6 +110,7 @@ export async function fetchArticle(url: string, options: ArticleFetchOptions = {
   return {
     source,
     asset,
+    assets: [asset],
     paragraphs
   };
 }
@@ -117,14 +129,14 @@ export async function transformArticleUrl(
   }));
   const sourceRegistry = createSourceRegistry({
     sources: [fetched.source],
-    assets: [fetched.asset],
+    assets: fetched.assets,
     chunks,
     createdAt
   });
   const importResult = await runSourceImport(
     {
       source: fetched.source,
-      assets: [fetched.asset],
+      assets: fetched.assets,
       chunks,
       sourceRegistry,
       createdAt,
@@ -138,12 +150,14 @@ export async function transformArticleUrl(
   return {
     source: fetched.source,
     asset: fetched.asset,
+    assets: fetched.assets,
     chunks,
     cards: importResult.posts,
     sourceRegistry: importResult.sourceRegistry,
     harnessRun: importResult.harnessRun,
     validation: importResult.validation,
-    importRecord: importResult.importRecord
+    importRecord: importResult.importRecord,
+    arxivHtml: fetched.arxivHtml
   };
 }
 
@@ -190,8 +204,15 @@ interface ArxivArticleUrl {
 async function fetchArxivArticle(
   fetchImpl: typeof fetch,
   arxivUrl: ArxivArticleUrl,
-  createdAt: string
+  createdAt: string,
+  options: ArticleFetchOptions
 ): Promise<ArticleFetchResult> {
+  const htmlDecomposition = await tryFetchArxivHtmlDecomposition(fetchImpl, arxivUrl.id);
+
+  if (htmlDecomposition?.buckets.length) {
+    return buildArxivHtmlArticle(fetchImpl, arxivUrl, createdAt, htmlDecomposition, options);
+  }
+
   const xml = await fetchArxivAtom(fetchImpl, arxivUrl.apiUrl.toString());
   const metadata = parseArxivAtom(xml);
   const paragraphs = [metadata.abstract];
@@ -214,7 +235,59 @@ async function fetchArxivArticle(
   return {
     source,
     asset,
+    assets: [asset],
     paragraphs
+  };
+}
+
+async function tryFetchArxivHtmlDecomposition(
+  fetchImpl: typeof fetch,
+  arxivId: string
+): Promise<ArxivHtmlDecomposition | undefined> {
+  try {
+    return await fetchArxivHtmlDecomposition(arxivId, { fetch: fetchImpl });
+  } catch {
+    return undefined;
+  }
+}
+
+async function buildArxivHtmlArticle(
+  fetchImpl: typeof fetch,
+  arxivUrl: ArxivArticleUrl,
+  createdAt: string,
+  arxivHtml: ArxivHtmlDecomposition,
+  options: ArticleFetchOptions
+): Promise<ArticleFetchResult> {
+  const source: Source = {
+    id: buildArticleSourceId(arxivUrl.absUrl),
+    title: arxivHtml.title ?? `arXiv ${arxivUrl.id}`,
+    url: arxivUrl.absUrl.toString(),
+    type: "article"
+  };
+  const bodyChunks = arxivHtml.buckets.flatMap((bucket) => bucket.chunks);
+  const captionChunks = createFigureCaptionChunks(source.id, arxivHtml.figures);
+  const paragraphs = [...bodyChunks, ...captionChunks.map((chunk) => chunk.content)];
+  const asset: SourceAsset = {
+    id: `${source.id}-text`,
+    sourceId: source.id,
+    kind: "text",
+    content: paragraphs.join("\n\n"),
+    createdAt
+  };
+  const imageAssets = await cacheArxivFigureImages({
+    sourceId: source.id,
+    figures: arxivHtml.figures,
+    mediaRootDir: options.mediaRootDir,
+    fetch: fetchImpl,
+    createdAt
+  });
+
+  return {
+    source,
+    asset,
+    assets: [asset, ...imageAssets],
+    paragraphs,
+    arxivHtml
   };
 }
 
