@@ -6,6 +6,7 @@ import type {
   KnowledgeChunk,
   KnowledgePost,
   KnowledgePostAgentRunner,
+  PaperDigestInput,
   Source,
   SourceAsset,
   SourceImport,
@@ -133,12 +134,14 @@ export async function transformArticleUrl(
     chunks,
     createdAt
   });
+  const paperDigest = fetched.arxivHtml ? buildPaperDigestInput(fetched, chunks) : undefined;
   const importResult = await runSourceImport(
     {
       source: fetched.source,
       assets: fetched.assets,
       chunks,
       sourceRegistry,
+      paperDigest,
       createdAt,
       recommendedBecause:
         options.recommendedBecause ??
@@ -158,6 +161,49 @@ export async function transformArticleUrl(
     validation: importResult.validation,
     importRecord: importResult.importRecord,
     arxivHtml: fetched.arxivHtml
+  };
+}
+
+function buildPaperDigestInput(fetched: ArticleFetchResult, chunks: KnowledgeChunk[]): PaperDigestInput {
+  let chunkCursor = 0;
+  const buckets = (fetched.arxivHtml?.buckets ?? []).map((bucket) => {
+    const chunkIds = bucket.chunks.flatMap(() => {
+      const chunk = chunks[chunkCursor];
+      chunkCursor += 1;
+
+      return chunk ? [chunk.id] : [];
+    });
+
+    return {
+      kind: bucket.kind,
+      title: bucket.title,
+      chunkIds
+    };
+  });
+  const imageAssetsById = new Map(
+    fetched.assets
+      .filter((asset): asset is Extract<SourceAsset, { kind: "image" }> => asset.kind === "image")
+      .map((asset) => [asset.id, asset])
+  );
+  const figures = (fetched.arxivHtml?.figures ?? []).flatMap((figure) => {
+    const asset = imageAssetsById.get(`${fetched.source.id}-image-${figure.index}`);
+
+    if (!asset) {
+      return [];
+    }
+
+    return [
+      {
+        assetId: asset.id,
+        figureLabel: asset.figureLabel,
+        caption: asset.caption
+      }
+    ];
+  });
+
+  return {
+    buckets,
+    figures
   };
 }
 
