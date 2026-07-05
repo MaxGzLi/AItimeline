@@ -1132,13 +1132,45 @@ function getTimelineResponse(snapshot, nowValue, userId = "local-user") {
   });
 
   return {
-    posts: rankedPosts,
+    posts: enrichPostsMedia(snapshot, rankedPosts),
     sourceImports: snapshot.sourceImports,
     releasePlans,
     topicStates: snapshot.topicStates,
     recommendationSummary: summarizeRecommendation(rankedPosts),
     snapshotSummary: summarizeSnapshot(snapshot)
   };
+}
+
+// 卡片的 media 只存 assetId;对外返回时补上 registry 里图片资产的 url 和图号,前端才能直接渲染。
+function enrichPostsMedia(snapshot, posts) {
+  const imageAssetsById = new Map();
+
+  for (const record of snapshot.sourceRegistries) {
+    for (const asset of record.registry?.assets ?? []) {
+      if (asset.kind === "image") {
+        imageAssetsById.set(asset.id, asset);
+      }
+    }
+  }
+
+  if (!imageAssetsById.size) {
+    return posts;
+  }
+
+  return posts.map((post) => {
+    if (!Array.isArray(post.media) || !post.media.length) {
+      return post;
+    }
+
+    return {
+      ...post,
+      media: post.media.map((item) => {
+        const asset = imageAssetsById.get(item.assetId);
+
+        return asset ? { ...item, url: asset.url, figureLabel: asset.figureLabel } : item;
+      })
+    };
+  });
 }
 
 function getEvidenceLedgerResponse(snapshot, postId) {

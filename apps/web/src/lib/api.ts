@@ -36,3 +36,27 @@ export function isYouTubeUrl(url: string): boolean {
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+
+export interface CardMediaItem {
+  assetId: string;
+  caption: string;
+  origin: "paper" | "derived";
+  url?: string;
+  figureLabel?: string;
+}
+
+// 论文卡的附图:media 由 API 在返回时补上 url/figureLabel,旧卡没有 media 字段。
+export function getCardMedia(card: unknown): CardMediaItem[] {
+  if (!isRecord(card) || !Array.isArray(card.media)) {
+    return [];
+  }
+
+  return card.media.filter(
+    (item): item is CardMediaItem =>
+      isRecord(item) && typeof item.assetId === "string" && typeof item.caption === "string" && typeof item.url === "string"
+  );
+}
+
+export function resolveMediaUrl(url: string): string {
+  return url.startsWith("/") ? `${apiBaseUrl}${url}` : url;
+}

@@ -1,6 +1,7 @@
 import type { CardConnection, InteractionSignal, KnowledgeCard, RankedKnowledgeCard } from "@aitimeline/core";
 import { BadgeCheck, Bookmark, Clock, Heart, MessageCircle, Plus, Repeat2, XCircle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { getCardMedia, resolveMediaUrl } from "../lib/api";
 import { formatConnectionKind, formatRelativeTime, getAgentInitials, getAgentName, slugConcept } from "../lib/format";
 import { renderWithWikilinks } from "../lib/wikilinks";
 import { PostReplyThread } from "./PostReplyThread";
@@ -50,6 +51,8 @@ export function PostView({
   const source = card.sources[0];
   const isUserNote = source?.type === "user_note";
   const topConnection = connections[0];
+  const cardMedia = getCardMedia(card);
+  const leadMedia = cardMedia[0];
   const commentBlocks = (card.thread ?? []).filter(
     (block) => block.kind === "user_comment" || block.kind === "agent_reply"
   );
@@ -186,6 +189,18 @@ export function PostView({
             </p>
             {bodyOverflows ? <span className="x-showmore">显示更多</span> : null}
           </button>
+
+          {leadMedia?.url ? (
+            <a
+              className="x-media"
+              href={resolveMediaUrl(leadMedia.url)}
+              rel="noreferrer"
+              target="_blank"
+              title={leadMedia.caption}
+            >
+              <img alt={leadMedia.caption} loading="lazy" src={resolveMediaUrl(leadMedia.url)} />
+            </a>
+          ) : null}
 
           <div className="x-tags">
             {card.concepts.slice(0, 3).map((concept) => (
