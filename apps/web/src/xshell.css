@@ -419,6 +419,21 @@ body:has(.x-frame) {
   font-family: inherit;
 }
 .x-tag:hover { text-decoration: underline; }
+/* 论文附图:X 式媒体位。图底固定白色——论文图多为白底/透明 PNG,暗色主题下不能跟着变黑。 */
+.x-media {
+  display: block;
+  margin: 4px 0 10px;
+  border: 1px solid var(--x-line);
+  border-radius: 16px;
+  overflow: hidden;
+  background: #ffffff;
+}
+.x-media img {
+  display: block;
+  width: 100%;
+  max-height: 510px;
+  object-fit: contain;
+}
 .x-quote {
   display: block;
   width: 100%;
@@ -1055,6 +1070,45 @@ body:has(.x-frame) {
   white-space: pre-line;
 }
 .x-detail-tags { margin-bottom: 12px; }
+/* 详情页论文图集:全部附图 + 图注,图底同样固定白色。 */
+.x-detail-media {
+  display: grid;
+  gap: 12px;
+  margin: 4px 0 14px;
+}
+.x-mediafig {
+  margin: 0;
+  border: 1px solid var(--x-line);
+  border-radius: 16px;
+  overflow: hidden;
+}
+.x-mediafig a {
+  display: block;
+  background: #ffffff;
+}
+.x-mediafig img {
+  display: block;
+  width: 100%;
+  max-height: 560px;
+  object-fit: contain;
+}
+.x-mediafig figcaption {
+  padding: 10px 12px;
+  border-top: 1px solid var(--x-line);
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: var(--x-muted);
+}
+.x-mediatag {
+  display: inline-block;
+  margin-right: 8px;
+  padding: 1px 8px;
+  border: 1px solid var(--x-line);
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--x-muted);
+  white-space: nowrap;
+}
 .x-detail-quote {
   display: grid;
   gap: 6px;

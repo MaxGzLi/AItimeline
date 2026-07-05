@@ -44,6 +44,7 @@ import {
   getAgentName,
   slugConcept
 } from "../lib/format";
+import { getCardMedia, resolveMediaUrl } from "../lib/api";
 import type { AiMessage, EvidenceLedger } from "../lib/types";
 import { renderWithWikilinks } from "../lib/wikilinks";
 import { PostReplyThread } from "./PostReplyThread";
@@ -103,6 +104,7 @@ export function PostDetailView({
     (block) => block.kind !== "user_comment" && block.kind !== "agent_reply"
   );
   const sourceQuote = quoteText ?? chunks[0]?.content ?? asset?.content;
+  const cardMedia = getCardMedia(card);
   const topConnection = connections[0];
 
   return (
@@ -120,6 +122,32 @@ export function PostDetailView({
 
           {isUserNote ? null : <h2 className="x-detail-title">{card.title}</h2>}
           <p className="x-detail-body">{renderWithWikilinks(card.summary, cards, handlers)}</p>
+
+          {cardMedia.length ? (
+            <div className="x-detail-media">
+              {cardMedia.map((item) => {
+                const mediaUrl = resolveMediaUrl(item.url ?? "");
+                const captionText =
+                  item.figureLabel && item.caption.toLowerCase().startsWith(item.figureLabel.toLowerCase())
+                    ? item.caption.slice(item.figureLabel.length).replace(/^[:.\s]+/, "")
+                    : item.caption;
+
+                return (
+                  <figure className="x-mediafig" key={item.assetId}>
+                    <a href={mediaUrl} rel="noreferrer" target="_blank">
+                      <img alt={item.caption} loading="lazy" src={mediaUrl} />
+                    </a>
+                    <figcaption>
+                      <span className="x-mediatag">
+                        {item.origin === "derived" ? "派生图" : `图源：论文 ${item.figureLabel ?? "插图"}`}
+                      </span>
+                      {captionText}
+                    </figcaption>
+                  </figure>
+                );
+              })}
+            </div>
+          ) : null}
 
           <div className="x-tags x-detail-tags">
             {card.concepts.map((concept) => (
