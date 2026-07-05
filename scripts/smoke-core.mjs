@@ -42,7 +42,9 @@ const { createOpenAICompatibleSourceImportWorker, createSourceImportWorker } = a
   "../packages/core/dist/source/sourceImportWorker.js"
 );
 const { createAITimelinePersistenceStore } = await import("../packages/core/dist/storage/persistenceStore.js");
-const { transformArticleUrl } = await import("../packages/core/dist/transform/articleImport.js");
+const { fetchArticle, parseArxivAtom, transformArticleUrl } = await import(
+  "../packages/core/dist/transform/articleImport.js"
+);
 const { transformMockYouTubeUrl } = await import("../packages/core/dist/transform/mockYoutubeImport.js");
 const { transformYouTubeUrl } = await import("../packages/core/dist/transform/youtubeImport.js");
 
@@ -266,6 +268,96 @@ assert.equal(articleImport.source.title, "Learning agents need a timeline surfac
 assert.equal(articleImport.chunks.length, 2, "article import should create chunks from paragraphs");
 assert.equal(articleImport.cards.length, 2, "article import should create cards from chunks");
 assert.equal(articleImport.importRecord.status, "ready", "article import should be ready");
+
+const arxivAtomXml = `
+  <?xml version="1.0" encoding="UTF-8"?>
+  <feed xmlns="http://www.w3.org/2005/Atom">
+    <entry>
+      <id>http://arxiv.org/abs/2512.13564v2</id>
+      <updated>2025-12-16T00:00:00Z</updated>
+      <published>2025-12-15T00:00:00Z</published>
+      <title>Memory &amp; Retrieval for AI Agents</title>
+      <summary>
+        We study how AI Agent systems combine Memory, RAG, and Knowledge Graph retrieval.
+        The abstract explains why citations &amp; durable source chunks keep Recommendation workflows grounded,
+        and it normalizes source evidence for Evaluation across agent timelines.
+      </summary>
+      <author>
+        <name>Ada Lovelace</name>
+      </author>
+      <author>
+        <name>Alan Turing</name>
+      </author>
+    </entry>
+  </feed>
+`;
+const parsedArxiv = parseArxivAtom(arxivAtomXml);
+
+assert.equal(parsedArxiv.title, "Memory & Retrieval for AI Agents", "arXiv parser should decode title entities");
+assert.deepEqual(parsedArxiv.authors, ["Ada Lovelace", "Alan Turing"], "arXiv parser should read authors");
+assert.equal(parsedArxiv.publishedAt, "2025-12-15T00:00:00Z", "arXiv parser should read published date");
+assert.equal(
+  parsedArxiv.abstract,
+  "We study how AI Agent systems combine Memory, RAG, and Knowledge Graph retrieval. The abstract explains why citations & durable source chunks keep Recommendation workflows grounded, and it normalizes source evidence for Evaluation across agent timelines.",
+  "arXiv parser should normalize abstract whitespace and XML entities"
+);
+
+let arxivRequestCount = 0;
+const fetchArxiv = async (url) => {
+  arxivRequestCount += 1;
+  assert.equal(
+    String(url),
+    "https://export.arxiv.org/api/query?id_list=2512.13564v2",
+    "arXiv import should call the metadata API with the normalized id"
+  );
+
+  return new Response(arxivAtomXml, { status: 200, headers: { "content-type": "application/atom+xml" } });
+};
+const arxivImport = await transformArticleUrl("https://arxiv.org/abs/2512.13564v2?utm_source=smoke", {
+  createdAt: "2026-06-10T00:00:00.000Z",
+  fetch: fetchArxiv,
+  recommendedBecause: "Smoke test arXiv article import."
+});
+
+assert.equal(arxivRequestCount, 1, "arXiv import should make exactly one metadata request");
+assert.equal(arxivImport.source.type, "article", "arXiv import should still create an article source");
+assert.equal(arxivImport.source.title, parsedArxiv.title, "arXiv import should use the paper title");
+assert.equal(
+  arxivImport.source.url,
+  "https://arxiv.org/abs/2512.13564v2",
+  "arXiv import should normalize source URL to the abs page"
+);
+assert.equal(arxivImport.source.author, "Ada Lovelace, Alan Turing", "arXiv import should join authors");
+assert.equal(arxivImport.source.publishedAt, parsedArxiv.publishedAt, "arXiv import should set publishedAt");
+assert.equal(arxivImport.chunks.length, 1, "arXiv import should create one abstract chunk");
+assert.equal(arxivImport.chunks[0].content, parsedArxiv.abstract, "arXiv chunk should be the paper abstract");
+assert.ok(!arxivImport.chunks[0].content.includes("arXivLabs"), "arXiv import should not use page footer text");
+assert.equal(arxivImport.importRecord.status, "ready", "arXiv import should be ready");
+
+const arxivPdfFetch = await fetchArticle("https://arxiv.org/pdf/2512.13564v2.pdf", {
+  createdAt: "2026-06-10T00:00:00.000Z",
+  fetch: fetchArxiv
+});
+const arxivHtmlFetch = await fetchArticle("https://arxiv.org/html/2512.13564v2", {
+  createdAt: "2026-06-10T00:00:00.000Z",
+  fetch: fetchArxiv
+});
+
+assert.equal(
+  arxivPdfFetch.source.id,
+  arxivImport.source.id,
+  "arXiv pdf and abs links should dedupe to the same source id"
+);
+assert.equal(
+  arxivHtmlFetch.source.id,
+  arxivImport.source.id,
+  "arXiv html and abs links should dedupe to the same source id"
+);
+assert.equal(
+  arxivPdfFetch.source.url,
+  "https://arxiv.org/abs/2512.13564v2",
+  "arXiv pdf links should normalize to the abs page"
+);
 
 const releasePlan = createSourcePostReleasePlan({
   posts: result.cards,

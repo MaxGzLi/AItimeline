@@ -30,6 +30,13 @@ export interface ArticleFetchResult {
   paragraphs: string[];
 }
 
+export interface ArxivAtomPaper {
+  title: string;
+  abstract: string;
+  authors: string[];
+  publishedAt: string;
+}
+
 export interface ArticleTransformResult {
   source: Source;
   asset: SourceAsset;
@@ -43,6 +50,9 @@ export interface ArticleTransformResult {
 
 const defaultMaxChunks = 8;
 const defaultMinParagraphLength = 80;
+const arxivApiUrl = "https://export.arxiv.org/api/query";
+const newStyleArxivIdPattern = /^\d{4}\.\d{4,5}(?:v\d+)?$/i;
+const oldStyleArxivIdPattern = /^[a-z-]+(?:\.[a-z]{2})?\/\d{7}(?:v\d+)?$/i;
 
 export async function fetchArticle(url: string, options: ArticleFetchOptions = {}): Promise<ArticleFetchResult> {
   const fetchImpl = options.fetch ?? globalThis.fetch;
@@ -53,6 +63,12 @@ export async function fetchArticle(url: string, options: ArticleFetchOptions = {
 
   const parsedUrl = parseArticleUrl(url);
   const createdAt = options.createdAt ?? new Date().toISOString();
+  const arxivUrl = parseArxivArticleUrl(parsedUrl);
+
+  if (arxivUrl) {
+    return fetchArxivArticle(fetchImpl, arxivUrl, createdAt);
+  }
+
   const html = await fetchArticleHtml(fetchImpl, parsedUrl.toString());
   const metadata = extractArticleMetadata(html, parsedUrl);
   const paragraphs = extractArticleParagraphs(html, {
@@ -131,6 +147,87 @@ export async function transformArticleUrl(
   };
 }
 
+export function parseArxivAtom(xml: string): ArxivAtomPaper {
+  const entry = readXmlTagContent(xml, "entry");
+
+  if (!entry) {
+    throw new Error("arXiv API response did not include an entry.");
+  }
+
+  const title = normalizeArxivText(readXmlTagContent(entry, "title") ?? "");
+  const abstract = normalizeArxivText(readXmlTagContent(entry, "summary") ?? "");
+  const publishedAt = normalizeArxivText(readXmlTagContent(entry, "published") ?? "");
+  const authors = Array.from(entry.matchAll(/<author\b[^>]*>([\s\S]*?)<\/author>/gi))
+    .map((match) => normalizeArxivText(readXmlTagContent(match[1] ?? "", "name") ?? ""))
+    .filter((author) => author.length > 0);
+
+  if (!title) {
+    throw new Error("arXiv API response did not include a title.");
+  }
+
+  if (!abstract) {
+    throw new Error("arXiv API response did not include an abstract.");
+  }
+
+  if (!publishedAt) {
+    throw new Error("arXiv API response did not include a published date.");
+  }
+
+  return {
+    title,
+    abstract,
+    authors,
+    publishedAt
+  };
+}
+
+interface ArxivArticleUrl {
+  id: string;
+  absUrl: URL;
+  apiUrl: URL;
+}
+
+async function fetchArxivArticle(
+  fetchImpl: typeof fetch,
+  arxivUrl: ArxivArticleUrl,
+  createdAt: string
+): Promise<ArticleFetchResult> {
+  const xml = await fetchArxivAtom(fetchImpl, arxivUrl.apiUrl.toString());
+  const metadata = parseArxivAtom(xml);
+  const paragraphs = [metadata.abstract];
+  const source: Source = {
+    id: buildArticleSourceId(arxivUrl.absUrl),
+    title: metadata.title,
+    url: arxivUrl.absUrl.toString(),
+    type: "article",
+    author: metadata.authors.length ? metadata.authors.join(", ") : undefined,
+    publishedAt: metadata.publishedAt
+  };
+  const asset: SourceAsset = {
+    id: `${source.id}-text`,
+    sourceId: source.id,
+    kind: "text",
+    content: paragraphs.join("\n\n"),
+    createdAt
+  };
+
+  return {
+    source,
+    asset,
+    paragraphs
+  };
+}
+
+async function fetchArxivAtom(fetchImpl: typeof fetch, url: string): Promise<string> {
+  const response = await fetchImpl(url);
+
+  if (!response.ok) {
+    throw new Error(`arXiv request failed with ${response.status}.`);
+  }
+
+  return response.text();
+}
+
 async function fetchArticleHtml(fetchImpl: typeof fetch, url: string): Promise<string> {
   const response = await fetchImpl(url);
 
@@ -156,6 +253,61 @@ function parseArticleUrl(url: string): URL {
     }
 
     throw new Error("Please enter a valid article URL.");
+  }
+}
+
+function parseArxivArticleUrl(url: URL): ArxivArticleUrl | undefined {
+  const hostname = url.hostname.toLowerCase().replace(/^www\./, "");
+
+  if (hostname !== "arxiv.org") {
+    return undefined;
+  }
+
+  const pathSegments = url.pathname
+    .split("/")
+    .filter((segment) => segment.length > 0)
+    .map(decodePathSegment);
+  const route = pathSegments[0]?.toLowerCase();
+
+  if (route !== "abs" && route !== "pdf" && route !== "html") {
+    return undefined;
+  }
+
+  const id = normalizeArxivId(pathSegments.slice(1).join("/"));
+
+  if (!id) {
+    return undefined;
+  }
+
+  const apiUrl = new URL(arxivApiUrl);
+  apiUrl.searchParams.set("id_list", id);
+
+  return {
+    id,
+    absUrl: new URL(`https://arxiv.org/abs/${id}`),
+    apiUrl
+  };
+}
+
+function normalizeArxivId(value: string): string | undefined {
+  const id = value
+    .trim()
+    .replace(/^arxiv:/i, "")
+    .replace(/\.pdf$/i, "")
+    .replace(/v(\d+)$/i, "v$1");
+
+  if (newStyleArxivIdPattern.test(id) || oldStyleArxivIdPattern.test(id)) {
+    return id;
+  }
+
+  return undefined;
+}
+
+function decodePathSegment(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
   }
 }
 
@@ -214,6 +366,10 @@ function readTagHtml(html: string, tagName: string): string | undefined {
   return html.match(new RegExp(`<${tagName}\\b[^>]*>([\\s\\S]*?)<\\/${tagName}>`, "i"))?.[1];
 }
 
+function readXmlTagContent(xml: string, tagName: string): string | undefined {
+  return xml.match(new RegExp(`<${tagName}\\b[^>]*>([\\s\\S]*?)<\\/${tagName}>`, "i"))?.[1];
+}
+
 function removeNonContentTags(html: string): string {
   return html
     .replace(/<script\b[\s\S]*?<\/script>/gi, " ")
@@ -233,6 +389,10 @@ function normalizeArticleText(value: string): string {
   return decodeHtmlEntities(value).replace(/\s+/g, " ").trim();
 }
 
+function normalizeArxivText(value: string): string {
+  return decodeXmlEntities(value.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
+}
+
 function decodeHtmlEntities(value: string): string {
   return value
     .replace(/&nbsp;/g, " ")
@@ -241,6 +401,33 @@ function decodeHtmlEntities(value: string): string {
     .replace(/&#39;/g, "'")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">");
+}
+
+function decodeXmlEntities(value: string): string {
+  return value
+    .replace(/&#x([0-9a-f]+);/gi, (match, codePoint) => decodeNumericEntity(match, codePoint, 16))
+    .replace(/&#(\d+);/g, (match, codePoint) => decodeNumericEntity(match, codePoint, 10))
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">");
+}
+
+function decodeNumericEntity(match: string, value: string, radix: number): string {
+  const codePoint = Number.parseInt(value, radix);
+
+  if (!Number.isFinite(codePoint)) {
+    return match;
+  }
+
+  try {
+    return String.fromCodePoint(codePoint);
+  } catch {
+    return match;
+  }
 }
 
 function chunkText(text: string, targetLength: number): string[] {
