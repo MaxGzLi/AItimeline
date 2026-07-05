@@ -21,6 +21,7 @@ export interface OpenAICompatibleModelClientOptions {
 export interface OpenAICompatibleModelClientEnv {
   AITIMELINE_MODEL_API_KEY?: string;
   AITIMELINE_MODEL_BASE_URL?: string;
+  AITIMELINE_MODEL_MAX_TOKENS?: string;
   AITIMELINE_MODEL_NAME?: string;
   OPENAI_API_KEY?: string;
   OPENAI_BASE_URL?: string;
@@ -42,6 +43,7 @@ interface ChatCompletionResponse {
 }
 
 const defaultBaseUrl = "https://api.openai.com/v1";
+const defaultMaxTokens = 8192;
 
 export function createOpenAICompatibleModelClient(options: OpenAICompatibleModelClientOptions): ModelClient {
   const endpoint = `${normalizeBaseUrl(options.baseUrl ?? defaultBaseUrl)}/chat/completions`;
@@ -65,8 +67,25 @@ export function createOpenAICompatibleModelClientFromEnv(
     ...overrides,
     model,
     apiKey: overrides.apiKey ?? env.AITIMELINE_MODEL_API_KEY ?? env.OPENAI_API_KEY,
-    baseUrl: overrides.baseUrl ?? env.AITIMELINE_MODEL_BASE_URL ?? env.OPENAI_BASE_URL ?? defaultBaseUrl
+    baseUrl: overrides.baseUrl ?? env.AITIMELINE_MODEL_BASE_URL ?? env.OPENAI_BASE_URL ?? defaultBaseUrl,
+    maxTokens: overrides.maxTokens ?? parsePositiveInteger(env.AITIMELINE_MODEL_MAX_TOKENS) ?? defaultMaxTokens
   });
+}
+
+function parsePositiveInteger(value: string | undefined): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+
+  if (!/^\d+$/.test(trimmed)) {
+    return undefined;
+  }
+
+  const parsed = Number.parseInt(trimmed, 10);
+
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 async function completeChat(

@@ -19,6 +19,18 @@ assert.ok(
   askSystemPrompt.includes("Write all user-facing text in Simplified Chinese."),
   "askGrounded system prompt should require Simplified Chinese"
 );
+assert.ok(
+  agentHarnessSystemPrompt.includes("never copy") && agentHarnessSystemPrompt.includes("verbatim"),
+  "knowledge post system prompt should forbid verbatim copying outside citation quote fields"
+);
+assert.ok(
+  followupHarnessSystemPrompt.includes("never copy") && followupHarnessSystemPrompt.includes("verbatim"),
+  "follow-up system prompt should forbid verbatim copying outside citation quote fields"
+);
+assert.ok(
+  askSystemPrompt.includes("never copy") && askSystemPrompt.includes("verbatim"),
+  "askGrounded system prompt should forbid verbatim copying outside citation quote fields"
+);
 
 const createdAt = "2026-06-10T00:00:00.000Z";
 const articleUrl = "https://example.com/model-import-test";

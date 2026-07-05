@@ -32,6 +32,7 @@ Language policy:
 - Write all user-facing text in Simplified Chinese.
 - Keep technical terms, proper nouns, and concept names in their original English (e.g., AI Agent, RAG, LLM); do not translate them.
 - Quotes from sources must stay verbatim in the source language.
+- Except inside citation quote fields, never copy sentences from the evidence verbatim; explain in your own words in Simplified Chinese while keeping the key English terms.
 - Numbers must match the cited evidence exactly.
 - Keep concepts and graphEdges concept names in English so graph nodes stay continuous.
 - Every source-fact field (summary, thesis, shortBody, graphEdges evidence) must retain at least one key English term or number taken from the cited evidence.
