@@ -17,6 +17,7 @@ const {
   "../packages/core/dist/agents/backgroundCurationQueue.js"
 );
 const { createEvidenceLedger } = await import("../packages/core/dist/harness/evidenceLedger.js");
+const { calculateCjkRatio } = await import("../packages/core/dist/harness/contentLanguage.js");
 const { validateGrounding } = await import("../packages/core/dist/harness/groundingGate.js");
 const { validateKnowledgePost } = await import("../packages/core/dist/harness/schema.js");
 const { createAgentHarnessConfig, defaultAgentHarnessConfig } = await import(
@@ -93,6 +94,18 @@ const result = transformMockYouTubeUrl(
 
 assert.equal(defaultAgentHarnessConfig.maxPostsPerRun, 4, "default harness should limit one run to four posts");
 assert.equal(createAgentHarnessConfig().maxPostsPerRun, 4, "model harness config should inherit the four-post default");
+assert.equal(calculateCjkRatio("All English text"), 0, "all-English text should have a 0 CJK ratio");
+assert.ok(
+  calculateCjkRatio("AI Agent 让知识卡片更有用") >= 0.3,
+  "Chinese text with retained English terms should pass the default threshold"
+);
+assert.equal(calculateCjkRatio("纯中文内容"), 1, "pure Chinese text should have a 1 CJK ratio");
+assert.ok(
+  calculateCjkRatio("Agent Memory 的三种形式:token、parametric、latent") >= 0.3,
+  "term-heavy Chinese (CJK chars vs Latin words) should still pass the threshold"
+);
+assert.equal(calculateCjkRatio(""), 0, "empty text should have a 0 CJK ratio");
+assert.equal(calculateCjkRatio("12345"), 0, "text without CJK or Latin letters should have a 0 CJK ratio");
 assert.equal(result.harnessRun.status, "succeeded", "harness run should succeed");
 assert.equal(result.cards.length, 4, "mock import should produce four cards");
 assert.equal(result.sourceRegistry.snapshots.length, 1, "transcript asset should produce one source snapshot");

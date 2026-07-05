@@ -35,6 +35,7 @@ Language policy:
 - Except inside citation quote fields, never copy sentences from the evidence verbatim; explain in your own words in Simplified Chinese while keeping the key English terms.
 - Numbers must match the cited evidence exactly.
 - Keep concepts and graphEdges concept names in English so graph nodes stay continuous.
+- graphEdges evidence must stay in the source language: quote or closely paraphrase the cited chunk; do not translate it into Chinese.
 - Every source-fact field (summary, thesis, shortBody, graphEdges evidence) must retain at least one key English term or number taken from the cited evidence.
 
 Avoid:

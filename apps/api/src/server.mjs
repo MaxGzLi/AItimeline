@@ -405,10 +405,28 @@ function createConfiguredSourceImportWorker(env) {
     return createSourceImportWorker();
   }
 
-  const worker = createOpenAICompatibleSourceImportWorker(env);
+  const contentLanguage = readConfiguredContentLanguage(env);
+  const worker = createOpenAICompatibleSourceImportWorker(
+    env,
+    contentLanguage ? { modelRunner: { contentLanguage } } : {}
+  );
   console.log(`[aitimeline] source import using model runner (${modelName}).`);
 
   return worker;
+}
+
+function readConfiguredContentLanguage(env) {
+  const value = env.AITIMELINE_CONTENT_LANGUAGE ?? "zh";
+
+  if (value === "none") {
+    return undefined;
+  }
+
+  if (value !== "zh") {
+    console.warn(`[aitimeline] unsupported AITIMELINE_CONTENT_LANGUAGE "${value}"; defaulting to "zh".`);
+  }
+
+  return "zh";
 }
 
 function createConfiguredAskModelClient(env) {

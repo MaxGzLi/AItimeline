@@ -11,6 +11,10 @@ import type {
 import { createAgentHarnessConfig, validateHarnessPosts } from "./runner.js";
 import { knowledgePostJsonSchema } from "./schema.js";
 import { agentHarnessSystemPrompt } from "./systemPrompt.js";
+import {
+  type ContentLanguage,
+  validateKnowledgePostContentLanguage
+} from "./contentLanguage.js";
 
 export interface ModelMessage {
   role: "system" | "user" | "assistant";
@@ -34,6 +38,7 @@ export interface ModelClient {
 
 export interface CreateModelKnowledgePostRunnerOptions {
   client: ModelClient;
+  contentLanguage?: ContentLanguage;
   id?: string;
   maxRepairAttempts?: number;
   temperature?: number;
@@ -81,7 +86,7 @@ export async function runModelAgentHarness(
   const recommendedBecause =
     input.recommendedBecause ?? "这个来源已导入,并转成了可以进时间线的知识卡片。";
   const maxRepairAttempts = options.maxRepairAttempts ?? 2;
-  const messages = buildInitialMessages(input, sourceRegistry, createdAt, recommendedBecause);
+  const messages = buildInitialMessages(input, sourceRegistry, createdAt, recommendedBecause, options.contentLanguage);
   let currentMessages = messages;
   let finalAttempt: ModelRunAttempt = {
     candidates: [],
@@ -101,9 +106,12 @@ export async function runModelAgentHarness(
       temperature: options.temperature ?? 0.2
     });
     const parsed = parseModelPosts(response.content);
-    const validation = parsed.validation.length
+    const harnessValidation = parsed.validation.length
       ? parsed.validation
       : validateHarnessPosts(parsed.posts, config, sourceRegistry);
+    const validation = options.contentLanguage === "zh"
+      ? appendContentLanguageValidation(harnessValidation, parsed.posts)
+      : harnessValidation;
 
     finalAttempt = {
       candidates: parsed.posts,
@@ -160,7 +168,8 @@ function buildInitialMessages(
   input: AgentHarnessRunInput,
   sourceRegistry: SourceRegistry,
   createdAt: string,
-  recommendedBecause: string
+  recommendedBecause: string,
+  contentLanguage?: ContentLanguage
 ): ModelMessage[] {
   const config = createAgentHarnessConfig({
     ...(input.config ?? {}),
@@ -191,6 +200,11 @@ function buildInitialMessages(
         "- Use graphEdges for durable concept links that can power review and recommendation.",
         "- Use nextActions to say whether the user should go deeper, broader, simpler, review, or cool down.",
         "- Do not include markdown, comments, or prose outside JSON.",
+        ...(contentLanguage === "zh"
+          ? [
+              "- 所有面向用户的字段(title、hook、thesis、shortBody、keyTakeaway、summary、thread、reviewPrompts、recommendedBecause)必须以简体中文书写,技术术语保留英文;graphEdges 的 evidence 保持来源原文语言。"
+            ]
+          : []),
         "",
         `recommendedBecause: ${recommendedBecause}`,
         "",
@@ -360,6 +374,25 @@ function hasValidationErrors(validation: readonly HarnessValidationResult[]): bo
   return validation.some(
     (result) => !result.valid || result.issues.some((issue) => issue.severity === "error")
   );
+}
+
+function appendContentLanguageValidation(
+  validation: readonly HarnessValidationResult[],
+  candidates: readonly unknown[]
+): HarnessValidationResult[] {
+  return validation.map((result, index) => {
+    const languageIssues = validateKnowledgePostContentLanguage(candidates[index]);
+
+    if (!languageIssues.length) {
+      return result;
+    }
+
+    return {
+      ...result,
+      valid: false,
+      issues: [...result.issues, ...languageIssues]
+    };
+  });
 }
 
 function createValidationResult(issue: HarnessValidationIssue): HarnessValidationResult {

@@ -4,6 +4,7 @@ const { transformArticleUrl } = await import("../packages/core/dist/transform/ar
 const { transformYouTubeUrl } = await import("../packages/core/dist/transform/youtubeImport.js");
 const { agentHarnessSystemPrompt } = await import("../packages/core/dist/harness/systemPrompt.js");
 const { createModelKnowledgePostRunner } = await import("../packages/core/dist/harness/modelRunner.js");
+const { calculateCjkRatio } = await import("../packages/core/dist/harness/contentLanguage.js");
 const { askGrounded, askSystemPrompt } = await import("../packages/core/dist/harness/askGrounded.js");
 const { followupHarnessSystemPrompt } = await import("../packages/core/dist/harness/followupHarness.js");
 
@@ -105,7 +106,72 @@ assert.notEqual(
   "the deterministic path should keep the template hook, not the model sentinel"
 );
 
-// 4) The same runner option threads through the YouTube transform path.
+// 4) The language gate is opt-in: English model output repairs when enabled, and passes when disabled.
+const englishModelPost = toEnglishUserFacingPost(deterministic.cards[0]);
+const zhModelPost = toChineseUserFacingPost(deterministic.cards[0]);
+let languageGateCalls = 0;
+let languageRepairPrompt = "";
+const languageGateRunner = createModelKnowledgePostRunner({
+  contentLanguage: "zh",
+  maxRepairAttempts: 1,
+  client: {
+    async complete(request) {
+      languageGateCalls += 1;
+
+      if (languageGateCalls === 1) {
+        return { content: JSON.stringify({ posts: [englishModelPost] }) };
+      }
+
+      languageRepairPrompt = request.messages.at(-1)?.content ?? "";
+      return { content: JSON.stringify({ posts: [zhModelPost] }) };
+    }
+  }
+});
+const languageGateResult = await languageGateRunner.run({
+  source: deterministic.source,
+  chunks: deterministic.chunks,
+  sourceRegistry: deterministic.sourceRegistry,
+  createdAt,
+  recommendedBecause: "这次 smoke 用来确认英文模型输出会被中文语言门禁修复。"
+});
+
+assert.equal(languageGateCalls, 2, "language gate should ask the model to repair English output");
+assert.match(
+  languageRepairPrompt,
+  /must be rewritten primarily in Simplified Chinese, keeping key English terms/,
+  "repair prompt should include the language validation issue"
+);
+assert.match(languageRepairPrompt, /\$\.title/, "language validation should report the failing field path");
+assert.equal(languageGateResult.run.status, "succeeded", "Chinese repair output should pass the model harness");
+assert.equal(languageGateResult.posts.length, 1, "language repair should keep the repaired post");
+assert.ok(
+  calculateCjkRatio(languageGateResult.posts[0].title) >= 0.3,
+  "repaired title should be primarily Chinese with key English terms retained"
+);
+
+let disabledLanguageCalls = 0;
+const disabledLanguageRunner = createModelKnowledgePostRunner({
+  maxRepairAttempts: 0,
+  client: {
+    async complete() {
+      disabledLanguageCalls += 1;
+      return { content: JSON.stringify({ posts: [englishModelPost] }) };
+    }
+  }
+});
+const disabledLanguageResult = await disabledLanguageRunner.run({
+  source: deterministic.source,
+  chunks: deterministic.chunks,
+  sourceRegistry: deterministic.sourceRegistry,
+  createdAt,
+  recommendedBecause: "Smoke test confirms the language gate stays off by default."
+});
+
+assert.equal(disabledLanguageCalls, 1, "disabled language gate should not trigger a repair");
+assert.equal(disabledLanguageResult.run.status, "succeeded", "English output should pass when contentLanguage is unset");
+assert.equal(disabledLanguageResult.posts[0].title, englishModelPost.title, "ungated output should be accepted as-is");
+
+// 5) The same runner option threads through the YouTube transform path.
 const youtubeUrl = "https://www.youtube.com/watch?v=model-demo";
 const fakePlayerResponse = {
   videoDetails: { title: "Model runner transcript demo", author: "AITimeline Test Channel", lengthSeconds: "120" },
@@ -173,7 +239,7 @@ assert.equal(youtubeModel.harnessRun?.runnerKind, "model", "youtube with a model
 assert.equal(youtubeModel.importRecord.status, "ready", "youtube model import should be ready");
 assert.equal(youtubeModel.cards[0].hook, sentinelHook, "youtube card hook should come from the model output");
 
-// 5) askGrounded: a model client answers grounded in the post's cited source chunks.
+// 6) askGrounded: a model client answers grounded in the post's cited source chunks.
 let askCalls = 0;
 const askModelResult = await askGrounded(
   {
@@ -202,7 +268,7 @@ assert.ok(askModelResult.answer.includes("extract claims"), "ask answer should c
 assert.ok(askModelResult.citations.length >= 1, "ask should resolve at least one grounded citation");
 assert.equal(askModelResult.grounded, true, "an answer citing an excerpt should be grounded");
 
-// 6) askGrounded: no client falls back to a deterministic grounded answer.
+// 7) askGrounded: no client falls back to a deterministic grounded answer.
 const askDeterministic = await askGrounded({
   post: deterministic.cards[0],
   registry: deterministic.sourceRegistry,
@@ -214,3 +280,59 @@ assert.ok(askDeterministic.answer.length > 0, "deterministic ask should produce 
 assert.ok(askDeterministic.citations.length >= 1, "deterministic ask should cite the source chunk");
 
 console.log("Model import smoke passed");
+
+function toEnglishUserFacingPost(post) {
+  return {
+    ...post,
+    title: "AI Agent turns source material into durable knowledge",
+    hook: "AI Agent keeps citations, extracts concepts, and builds a learning surface.",
+    thesis: "An AI Agent can turn source material into durable knowledge when it keeps citations and extracts concepts.",
+    shortBody:
+      "An AI Agent keeps citations, extracts concepts, and builds a learning surface the reader can revisit later.",
+    summary:
+      "An AI Agent turns source material into durable knowledge by keeping citations, extracting concepts, and building a learning surface.",
+    keyTakeaway:
+      "The key lesson is that AI Agent work becomes durable knowledge through citations, concepts, and a learning surface.",
+    recommendedBecause: "Smoke test selected this English card to prove the language gate repairs it.",
+    thread: post.thread.map((block) => ({
+      ...block,
+      body:
+        "AI Agent output becomes durable knowledge when it keeps citations, extracts concepts, and gives the reader a learning surface to revisit."
+    })),
+    reviewPrompts: post.reviewPrompts.map((prompt) => ({
+      ...prompt,
+      prompt: "How do citations and concepts help an AI Agent create durable knowledge?"
+    }))
+  };
+}
+
+function toChineseUserFacingPost(post) {
+  return {
+    ...post,
+    title: "AI Agent 把来源变成知识卡",
+    hook: "这张卡要用中文重写：AI Agent 不是照抄原文，而是保留 citations、抽取 concepts，让读者之后能复习。",
+    thesis: "来源的核心是：AI Agent 通过 citations 和 concepts，把材料整理成之后可回看的知识。",
+    shortBody:
+      "这段内容说明，AI Agent 需要保留 citations、抽取 concepts，并把来源材料变成读者以后还能回来的学习表面。",
+    summary: "来源说，AI Agent 会保留 citations、抽取 concepts，并建立可回看的知识表面。",
+    keyTakeaway: "要点是把 AI Agent 的输出做成可复习知识：保留 citations、抽取 concepts，而不是只做摘要。",
+    recommendedBecause: "这次 smoke 用来确认英文模型输出会被中文语言门禁修复。",
+    thread: post.thread.map((block, index) => ({
+      ...block,
+      body: [
+        "用中文解释：AI Agent 先保留 citations，再抽取 concepts，所以来源不会变成一次性摘要。",
+        "例子：读者导入文章后，AI Agent 生成带 citations 的卡片，并把 concepts 接到后续复习。",
+        "对比来看，普通摘要只压缩文本；这张卡强调 citations、concepts 和可复习的知识结构。",
+        "下一步可以追问：AI Agent 如何把 concepts 连到用户已有的知识图谱。",
+        "快速复习：请说出 citations 和 concepts 为什么能让这条知识以后再次出现。"
+      ][index] ?? "这条线程继续用中文说明 AI Agent 如何保留 citations 和 concepts。"
+    })),
+    reviewPrompts: post.reviewPrompts.map((prompt, index) => ({
+      ...prompt,
+      prompt:
+        index === 0
+          ? "请用自己的话说明：AI Agent 为什么要保留 citations，并从来源里抽取 concepts？"
+          : "复习时怎么判断：AI Agent 生成的知识卡是否保留了 citations 和 concepts？"
+    }))
+  };
+}
