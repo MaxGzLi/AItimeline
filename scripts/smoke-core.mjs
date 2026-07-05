@@ -19,6 +19,9 @@ const {
 const { createEvidenceLedger } = await import("../packages/core/dist/harness/evidenceLedger.js");
 const { validateGrounding } = await import("../packages/core/dist/harness/groundingGate.js");
 const { validateKnowledgePost } = await import("../packages/core/dist/harness/schema.js");
+const { createAgentHarnessConfig, defaultAgentHarnessConfig } = await import(
+  "../packages/core/dist/harness/runner.js"
+);
 const { createModelKnowledgePostRunner } = await import("../packages/core/dist/harness/modelRunner.js");
 const { evaluateInteraction } = await import("../packages/core/dist/harness/feedbackPolicy.js");
 const {
@@ -88,6 +91,8 @@ const result = transformMockYouTubeUrl(
   "2026-06-10T00:00:00.000Z"
 );
 
+assert.equal(defaultAgentHarnessConfig.maxPostsPerRun, 4, "default harness should limit one run to four posts");
+assert.equal(createAgentHarnessConfig().maxPostsPerRun, 4, "model harness config should inherit the four-post default");
 assert.equal(result.harnessRun.status, "succeeded", "harness run should succeed");
 assert.equal(result.cards.length, 4, "mock import should produce four cards");
 assert.equal(result.sourceRegistry.snapshots.length, 1, "transcript asset should produce one source snapshot");
@@ -506,16 +511,18 @@ if (evidenceNumber) {
 }
 
 let repairCalls = 0;
+let repairPrompt = "";
 const repairRunner = createModelKnowledgePostRunner({
   maxRepairAttempts: 1,
   client: {
-    async complete() {
+    async complete(request) {
       repairCalls += 1;
 
       if (repairCalls === 1) {
-        return { content: JSON.stringify({ posts: [{ id: "broken-post" }] }) };
+        return { content: '{"posts":[{"id":"broken-post"}' };
       }
 
+      repairPrompt = request.messages.at(-1)?.content ?? "";
       return { content: JSON.stringify({ posts: result.cards }) };
     }
   }
@@ -529,6 +536,8 @@ const modelResult = await repairRunner.run({
 });
 
 assert.equal(repairCalls, 2, "model runner should repair after invalid output");
+assert.match(repairPrompt, /previous output was truncated/i, "JSON parse repair should warn about truncation");
+assert.match(repairPrompt, /Reduce the number of cards/i, "JSON parse repair should ask for fewer cards");
 assert.equal(modelResult.run.status, "succeeded", "repaired model run should succeed");
 assert.equal(modelResult.posts.length, 4, "repaired model run should keep valid posts");
 
@@ -571,18 +580,26 @@ assert.equal(capturedRequest.body.model, "test-model");
 assert.deepEqual(capturedRequest.body.response_format, { type: "json_object" });
 assert.equal(capturedRequest.body.temperature, 0);
 
+let capturedEnvRequest;
 const envClient = createOpenAICompatibleModelClientFromEnv(
   {
     AITIMELINE_MODEL_NAME: "env-model",
     AITIMELINE_MODEL_BASE_URL: "https://env-models.example/v1",
-    AITIMELINE_MODEL_API_KEY: "env-key"
+    AITIMELINE_MODEL_API_KEY: "env-key",
+    AITIMELINE_MODEL_MAX_TOKENS: "4096"
   },
   {
-    fetch: async () =>
-      new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ env: true }) } }] }), {
+    fetch: async (url, init) => {
+      capturedEnvRequest = {
+        url: String(url),
+        body: JSON.parse(String(init.body))
+      };
+
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ env: true }) } }] }), {
         status: 200,
         headers: { "content-type": "application/json" }
-      })
+      });
+    }
   }
 );
 const envCompletion = await envClient.complete({
@@ -591,6 +608,39 @@ const envCompletion = await envClient.complete({
 });
 
 assert.equal(envCompletion.content, JSON.stringify({ env: true }), "env client should read model settings from env map");
+assert.equal(capturedEnvRequest.url, "https://env-models.example/v1/chat/completions");
+assert.equal(capturedEnvRequest.body.max_tokens, 4096, "env client should pass configured max_tokens");
+
+let capturedDefaultEnvRequest;
+const defaultEnvClient = createOpenAICompatibleModelClientFromEnv(
+  {
+    AITIMELINE_MODEL_NAME: "default-env-model",
+    AITIMELINE_MODEL_BASE_URL: "https://default-env-models.example/v1"
+  },
+  {
+    fetch: async (_url, init) => {
+      capturedDefaultEnvRequest = {
+        body: JSON.parse(String(init.body))
+      };
+
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ defaultEnv: true }) } }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    }
+  }
+);
+const defaultEnvCompletion = await defaultEnvClient.complete({
+  messages: [{ role: "user", content: "Return JSON." }],
+  responseFormat: "json_object"
+});
+
+assert.equal(
+  defaultEnvCompletion.content,
+  JSON.stringify({ defaultEnv: true }),
+  "env client should work without an explicit max token env"
+);
+assert.equal(capturedDefaultEnvRequest.body.max_tokens, 8192, "env client should default max_tokens to 8192");
 
 const failingClient = createOpenAICompatibleModelClient({
   model: "test-model",

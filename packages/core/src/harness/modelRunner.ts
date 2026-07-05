@@ -235,10 +235,18 @@ function buildInitialMessages(
 }
 
 function buildRepairPrompt(validation: HarnessValidationResult[], previousResponse: string): string {
+  const truncationGuidance = hasJsonParseValidationError(validation)
+    ? [
+        "",
+        "The previous output was truncated. Reduce the number of cards, shorten each card, and ensure the JSON is complete with every object, array, and string closed."
+      ]
+    : [];
+
   return [
     "The previous JSON response failed the AITimeline harness.",
     "Return a complete replacement JSON object in the exact shape {\"posts\":[...]} with all errors fixed.",
     "Do not apologize. Do not explain the fix. Do not reuse unsupported claims.",
+    ...truncationGuidance,
     "",
     "Validation issues:",
     JSON.stringify(
@@ -257,6 +265,12 @@ function buildRepairPrompt(validation: HarnessValidationResult[], previousRespon
     "Previous response:",
     truncate(previousResponse, 12000)
   ].join("\n");
+}
+
+function hasJsonParseValidationError(validation: readonly HarnessValidationResult[]): boolean {
+  return validation.some((result) =>
+    result.issues.some((issue) => /must be parseable JSON/i.test(issue.message))
+  );
 }
 
 function parseModelPosts(content: string): ParsedModelPosts {

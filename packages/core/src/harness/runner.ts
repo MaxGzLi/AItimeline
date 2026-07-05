@@ -24,7 +24,7 @@ export const defaultAgentHarnessConfig: AgentHarnessConfig = {
   version: harnessVersion,
   runnerKind: "deterministic",
   objective: "source_import",
-  maxPostsPerRun: 12,
+  maxPostsPerRun: 4,
   threadPolicy: {
     requiredKinds: ["explain", "example", "contrast", "extension", "quiz"],
     maxBlocksPerPost: 7
