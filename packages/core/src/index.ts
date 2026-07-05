@@ -29,6 +29,7 @@ export * from "./review/spacedReview.js";
 export * from "./source/sourceImportWorker.js";
 export * from "./source/sourceRegistry.js";
 export * from "./storage/persistenceStore.js";
+export * from "./transform/arxivHtmlImport.js";
 export * from "./transform/articleImport.js";
 export * from "./transform/mockYoutubeImport.js";
 export * from "./transform/noteImport.js";

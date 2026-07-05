@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, extname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   applyUserMemoryEdits,
@@ -32,11 +32,13 @@ const defaultPort = 8787;
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const defaultDataPath = resolve(currentDir, "../data/aitimeline.json");
 const defaultCurationDataPath = resolve(currentDir, "../data/curation-jobs.json");
+const defaultMediaRoot = resolve(currentDir, "../data/media");
 
 export function createApiServer(options = {}) {
   const dataPath = options.dataPath ?? process.env.AITIMELINE_DATA_PATH ?? defaultDataPath;
   const curationDataPath =
     options.curationDataPath ?? process.env.AITIMELINE_CURATION_DATA_PATH ?? defaultCurationDataPath;
+  const mediaRootDir = resolve(options.mediaRootDir ?? process.env.AITIMELINE_MEDIA_ROOT ?? defaultMediaRoot);
   const enableFixtures = options.enableFixtures ?? process.env.AITIMELINE_ENABLE_FIXTURES === "1";
   const persistenceStore = createStoreWithRecovery(
     () => createAITimelinePersistenceStore(createFileStorageAdapter(dataPath)),
@@ -77,6 +79,11 @@ export function createApiServer(options = {}) {
 
       if (request.method === "GET" && url.pathname === "/health") {
         sendJson(response, 200, { ok: true, service: "aitimeline-api" });
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname.startsWith("/media/")) {
+        sendMediaFile(response, mediaRootDir, url.pathname);
         return;
       }
 
@@ -168,7 +175,7 @@ export function createApiServer(options = {}) {
 
       if (request.method === "POST" && url.pathname === "/api/import/article") {
         const body = await readJsonBody(request);
-        const importResult = await importArticle(body, importRunner);
+        const importResult = await importArticle(body, importRunner, mediaRootDir);
         const { snapshot, releasePlan } = persistImportAndReleasePlan(persistenceStore, importResult);
 
         sendJson(response, 200, {
@@ -924,12 +931,13 @@ async function handleAsk(body, persistenceStore, client) {
   return askGrounded({ post, registry, question: body.question }, { client });
 }
 
-async function importArticle(body, runner) {
+async function importArticle(body, runner, mediaRootDir) {
   requireString(body.url, "url");
   const result = await transformArticleUrl(body.url, {
     createdAt: body.createdAt,
     recommendedBecause: body.recommendedBecause,
-    runner
+    runner,
+    mediaRootDir
   });
 
   return toSourceImportWorkerResult(result);
@@ -950,7 +958,7 @@ function toSourceImportWorkerResult(result) {
   return {
     importRecord: result.importRecord,
     source: result.source,
-    assets: [result.asset],
+    assets: result.assets ?? [result.asset],
     chunks: result.chunks,
     sourceRegistry: result.sourceRegistry,
     posts: result.cards,
@@ -1483,6 +1491,69 @@ function isSourceCandidateIntakeKind(value) {
 function sendJson(response, status, payload) {
   response.writeHead(status, { "content-type": "application/json" });
   response.end(JSON.stringify(payload, null, 2));
+}
+
+function sendMediaFile(response, mediaRootDir, pathname) {
+  let relativePath = "";
+
+  try {
+    relativePath = decodeURIComponent(pathname.replace(/^\/media\//, ""));
+  } catch {
+    sendJson(response, 400, { error: "Media path is not valid." });
+    return;
+  }
+
+  if (!relativePath || relativePath.includes("\0")) {
+    sendJson(response, 404, { error: "Media not found." });
+    return;
+  }
+
+  const filePath = resolve(mediaRootDir, relativePath);
+  const safeRelativePath = relative(mediaRootDir, filePath);
+
+  if (safeRelativePath.startsWith("..") || isAbsolute(safeRelativePath)) {
+    sendJson(response, 404, { error: "Media not found." });
+    return;
+  }
+
+  if (!existsSync(filePath)) {
+    sendJson(response, 404, { error: "Media not found." });
+    return;
+  }
+
+  const contentType = getMediaContentType(filePath);
+
+  if (!contentType) {
+    sendJson(response, 404, { error: "Media not found." });
+    return;
+  }
+
+  try {
+    const bytes = readFileSync(filePath);
+
+    response.writeHead(200, { "content-type": contentType });
+    response.end(bytes);
+  } catch {
+    sendJson(response, 404, { error: "Media not found." });
+  }
+}
+
+function getMediaContentType(filePath) {
+  switch (extname(filePath).toLowerCase()) {
+    case ".png":
+      return "image/png";
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".gif":
+      return "image/gif";
+    case ".svg":
+      return "image/svg+xml";
+    case ".webp":
+      return "image/webp";
+    default:
+      return undefined;
+  }
 }
 
 function sendHtml(response, html) {
