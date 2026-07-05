@@ -8,8 +8,10 @@ import type {
   AgentHarnessRunResult,
   HarnessValidationIssue,
   HarnessValidationResult,
+  KnowledgeChunk,
   KnowledgePost,
   KnowledgePostAgentRunner,
+  PaperDigestFigure,
   SourceRegistry
 } from "../types.js";
 
@@ -55,7 +57,7 @@ export async function runAgentHarness(
 export function runDeterministicAgentHarness(input: AgentHarnessRunInput): AgentHarnessRunResult {
   const createdAt = input.createdAt ?? new Date().toISOString();
   const config = input.config ?? defaultAgentHarnessConfig;
-  const chunks = input.chunks.slice(0, config.maxPostsPerRun);
+  const chunks = selectAgentHarnessInputChunks(input, config);
   const sourceRegistry =
     input.sourceRegistry ??
     createSourceRegistry({
@@ -65,15 +67,17 @@ export function runDeterministicAgentHarness(input: AgentHarnessRunInput): Agent
     });
   const recommendedBecause =
     input.recommendedBecause ?? "这个来源已导入,并转成了可以进时间线的知识卡片。";
-  const posts = chunks.map((chunk, index) =>
-    createKnowledgePost({
-      source: input.source,
-      chunk,
-      index,
-      createdAt,
-      recommendedBecause
-    })
-  );
+  const posts = input.paperDigest
+    ? createDeterministicPaperDigestPosts(input, createdAt, recommendedBecause)
+    : chunks.map((chunk, index) =>
+        createKnowledgePost({
+          source: input.source,
+          chunk,
+          index,
+          createdAt,
+          recommendedBecause
+        })
+      );
   const validation = validateHarnessPosts(posts, config, sourceRegistry);
   const status = validation.some((result) => result.issues.some((issue) => issue.severity === "error"))
     ? "failed"
@@ -119,6 +123,74 @@ export function createAgentHarnessConfig(overrides: AgentHarnessConfigOverrides 
   };
 }
 
+export function selectAgentHarnessInputChunks(
+  input: AgentHarnessRunInput,
+  config: AgentHarnessConfig = defaultAgentHarnessConfig
+): KnowledgeChunk[] {
+  if (!input.paperDigest) {
+    return input.chunks.slice(0, config.maxPostsPerRun);
+  }
+
+  const chunkById = new Map(input.chunks.map((chunk) => [chunk.id, chunk]));
+  const selectedChunkIds = new Set<string>();
+  const sampledBuckets = input.paperDigest.buckets.map((bucket) => ({
+    cursor: 0,
+    selectedCount: 0,
+    chunks: bucket.chunkIds.flatMap((chunkId) => {
+      const chunk = chunkById.get(chunkId);
+
+      return chunk ? [chunk] : [];
+    })
+  }));
+  const selectedChunks: KnowledgeChunk[] = [];
+  const maxTotalChunks = 16;
+  const maxChunksPerBucket = 4;
+
+  const addNextChunk = (bucket: (typeof sampledBuckets)[number]): boolean => {
+    if (bucket.selectedCount >= maxChunksPerBucket || selectedChunks.length >= maxTotalChunks) {
+      return false;
+    }
+
+    while (bucket.cursor < bucket.chunks.length) {
+      const chunk = bucket.chunks[bucket.cursor];
+      bucket.cursor += 1;
+
+      if (!chunk || selectedChunkIds.has(chunk.id)) {
+        continue;
+      }
+
+      selectedChunkIds.add(chunk.id);
+      selectedChunks.push(chunk);
+      bucket.selectedCount += 1;
+      return true;
+    }
+
+    return false;
+  };
+
+  for (const bucket of sampledBuckets) {
+    addNextChunk(bucket);
+  }
+
+  while (selectedChunks.length < maxTotalChunks) {
+    let added = false;
+
+    for (const bucket of sampledBuckets) {
+      added = addNextChunk(bucket) || added;
+
+      if (selectedChunks.length >= maxTotalChunks) {
+        break;
+      }
+    }
+
+    if (!added) {
+      break;
+    }
+  }
+
+  return selectedChunks;
+}
+
 export function validateHarnessPosts(
   posts: readonly unknown[],
   config: AgentHarnessConfig = defaultAgentHarnessConfig,
@@ -133,6 +205,7 @@ export function validateHarnessPosts(
 
     const post = candidate;
     const policyIssues = validatePostPolicies(post, config);
+    const mediaIssues = sourceRegistry ? validatePostMedia(post, sourceRegistry) : [];
     const grounding = sourceRegistry ? validateGrounding(post, sourceRegistry) : undefined;
     const groundingIssues = grounding?.issues ?? [];
 
@@ -141,8 +214,9 @@ export function validateHarnessPosts(
       valid:
         result.valid &&
         !policyIssues.some((issue) => issue.severity === "error") &&
+        !mediaIssues.some((issue) => issue.severity === "error") &&
         !groundingIssues.some((issue) => issue.severity === "error"),
-      issues: [...result.issues, ...policyIssues, ...groundingIssues],
+      issues: [...result.issues, ...policyIssues, ...mediaIssues, ...groundingIssues],
       grounding
     };
   });
@@ -214,6 +288,107 @@ function validatePostPolicies(post: KnowledgePost, config: AgentHarnessConfig): 
       severity: "warning"
     });
   }
+
+  return issues;
+}
+
+function createDeterministicPaperDigestPosts(
+  input: AgentHarnessRunInput,
+  createdAt: string,
+  recommendedBecause: string
+): KnowledgePost[] {
+  const paperDigest = input.paperDigest;
+
+  if (!paperDigest) {
+    return [];
+  }
+
+  const chunkById = new Map(input.chunks.map((chunk) => [chunk.id, chunk]));
+  const posts: KnowledgePost[] = [];
+  const cardGroups = [
+    { bucketKinds: ["motivation"], mediaPurpose: undefined },
+    { bucketKinds: ["method"], mediaPurpose: "method" },
+    { bucketKinds: ["experiment", "result"], mediaPurpose: "experiment" },
+    { bucketKinds: ["conclusion"], mediaPurpose: undefined }
+  ] as const;
+
+  for (const group of cardGroups) {
+    const groupChunks = paperDigest.buckets
+      .filter((bucket) => group.bucketKinds.some((bucketKind) => bucketKind === bucket.kind))
+      .flatMap((bucket) => bucket.chunkIds.flatMap((chunkId) => {
+        const chunk = chunkById.get(chunkId);
+
+        return chunk ? [chunk] : [];
+      }));
+
+    if (!groupChunks.length) {
+      continue;
+    }
+
+    const post = createKnowledgePost({
+      source: input.source,
+      chunk: groupChunks[0],
+      index: posts.length,
+      createdAt,
+      recommendedBecause
+    });
+    const figure = group.mediaPurpose ? findMatchingPaperFigure(paperDigest.figures, group.mediaPurpose) : undefined;
+
+    posts.push(
+      figure
+        ? {
+            ...post,
+            media: [
+              {
+                assetId: figure.assetId,
+                caption: figure.caption,
+                origin: "paper"
+              }
+            ]
+          }
+        : post
+    );
+  }
+
+  return posts;
+}
+
+function findMatchingPaperFigure(
+  figures: readonly PaperDigestFigure[],
+  purpose: "method" | "experiment"
+): PaperDigestFigure | undefined {
+  const keywords =
+    purpose === "method"
+      ? ["architecture", "overview", "method", "model", "framework", "pipeline", "system", "design"]
+      : ["result", "experiment", "table", "evaluation", "benchmark", "ablation", "performance", "accuracy", "baseline"];
+
+  return figures.find((figure) => {
+    const haystack = `${figure.figureLabel} ${figure.caption}`.toLowerCase();
+
+    return keywords.some((keyword) => haystack.includes(keyword));
+  });
+}
+
+function validatePostMedia(post: KnowledgePost, sourceRegistry: SourceRegistry): HarnessValidationIssue[] {
+  const issues: HarnessValidationIssue[] = [];
+
+  if (!post.media) {
+    return issues;
+  }
+
+  const imageAssetIds = new Set(
+    sourceRegistry.assets.filter((asset) => asset.kind === "image").map((asset) => asset.id)
+  );
+
+  post.media.forEach((mediaItem, index) => {
+    if (!imageAssetIds.has(mediaItem.assetId)) {
+      issues.push({
+        path: `$.media[${index}].assetId`,
+        message: `media assetId "${mediaItem.assetId}" must reference a registered image asset.`,
+        severity: "error"
+      });
+    }
+  });
 
   return issues;
 }

@@ -23,7 +23,7 @@ const { createEvidenceLedger } = await import("../packages/core/dist/harness/evi
 const { calculateCjkRatio } = await import("../packages/core/dist/harness/contentLanguage.js");
 const { validateGrounding } = await import("../packages/core/dist/harness/groundingGate.js");
 const { validateKnowledgePost } = await import("../packages/core/dist/harness/schema.js");
-const { createAgentHarnessConfig, defaultAgentHarnessConfig } = await import(
+const { createAgentHarnessConfig, defaultAgentHarnessConfig, validateHarnessPosts } = await import(
   "../packages/core/dist/harness/runner.js"
 );
 const { createModelKnowledgePostRunner } = await import("../packages/core/dist/harness/modelRunner.js");
@@ -465,6 +465,19 @@ try {
     fullArxivImport.chunks.some((chunk) => chunk.content.includes("Table 1: Representative memory systems")),
     "table captions should be registered as source chunks"
   );
+  assert.ok(fullArxivImport.cards.length >= 3, "full arXiv HTML fallback should produce multiple section cards");
+  const cachedImageAssetIds = new Set(imageAssets.map((asset) => asset.id));
+  const arxivCardsWithMedia = fullArxivImport.cards.filter((card) => card.media?.length);
+
+  assert.ok(arxivCardsWithMedia.length >= 1, "deterministic paper section cards should attach matching media");
+  assert.ok(
+    arxivCardsWithMedia.some((card) => cachedImageAssetIds.has(card.media[0].assetId)),
+    "deterministic media should point to a cached arXiv image asset"
+  );
+  assert.ok(
+    arxivCardsWithMedia.some((card) => /Architecture overview/i.test(card.media[0].caption)),
+    "method-oriented paper card should attach the architecture figure"
+  );
   assert.equal(fullArxivImport.importRecord.status, "ready", "full arXiv HTML import should remain ready");
 } finally {
   await rm(mediaTempDir, { recursive: true, force: true });
@@ -636,6 +649,56 @@ assert.equal(
   }).valid,
   true,
   "graph edges with weight 0 should pass validation (schema minimum is 0)"
+);
+
+const smokeImageAsset = {
+  id: `${result.source.id}-image-smoke`,
+  sourceId: result.source.id,
+  kind: "image",
+  url: `/media/${result.source.id}/smoke.png`,
+  caption: "Figure 1: Smoke media asset.",
+  figureLabel: "Figure 1",
+  createdAt: "2026-06-10T00:00:00.000Z"
+};
+const registryWithSmokeImage = {
+  ...result.sourceRegistry,
+  assets: [...result.sourceRegistry.assets, smokeImageAsset]
+};
+const validMediaCard = {
+  ...contractCard,
+  media: [{ assetId: smokeImageAsset.id, caption: smokeImageAsset.caption, origin: "paper" }]
+};
+const invalidMediaCard = {
+  ...contractCard,
+  id: `${contractCard.id}-invalid-media`,
+  media: [{ assetId: "missing-image-asset", caption: "Missing figure.", origin: "paper" }]
+};
+const nonImageMediaCard = {
+  ...contractCard,
+  id: `${contractCard.id}-non-image-media`,
+  media: [{ assetId: result.asset.id, caption: "Text asset is not media.", origin: "paper" }]
+};
+
+assert.equal(validateKnowledgePost(validMediaCard).valid, true, "valid media shape should pass schema validation");
+assert.equal(
+  validateHarnessPosts([validMediaCard], defaultAgentHarnessConfig, registryWithSmokeImage)[0].valid,
+  true,
+  "media should pass when assetId points to a registered image asset"
+);
+assert.equal(
+  validateHarnessPosts([invalidMediaCard], defaultAgentHarnessConfig, registryWithSmokeImage)[0].valid,
+  false,
+  "media should fail when assetId is not registered"
+);
+assert.equal(
+  validateHarnessPosts([nonImageMediaCard], defaultAgentHarnessConfig, registryWithSmokeImage)[0].valid,
+  false,
+  "media should fail when assetId points to a non-image asset"
+);
+assert.equal(
+  validateHarnessPosts([contractCard], defaultAgentHarnessConfig, registryWithSmokeImage)[0].valid,
+  true,
+  "cards without media should remain valid"
 );
 
 const acronymSourceCard = result.cards.find((card) =>
@@ -1656,6 +1719,11 @@ const appSnapshot = rehydratedPersistence.getSnapshot();
 assert.equal(appSnapshot.sourceImports.length, 1, "persistence should store source imports");
 assert.equal(appSnapshot.sourceRegistries.length, 1, "persistence should store source registries");
 assert.equal(appSnapshot.posts.length, 4, "persistence should store generated posts");
+assert.equal(
+  appSnapshot.posts.every((post) => !("media" in post)),
+  true,
+  "legacy-style persisted posts without media should rehydrate without migration"
+);
 assert.equal(appSnapshot.harnessRuns.length, 1, "persistence should store harness runs");
 assert.equal(appSnapshot.curationJobs.length, 3, "persistence should store curation job records");
 assert.equal(appSnapshot.releasePlans.length, 1, "persistence should store release plans");

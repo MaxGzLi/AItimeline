@@ -4,9 +4,11 @@ const { transformArticleUrl } = await import("../packages/core/dist/transform/ar
 const { transformYouTubeUrl } = await import("../packages/core/dist/transform/youtubeImport.js");
 const { agentHarnessSystemPrompt } = await import("../packages/core/dist/harness/systemPrompt.js");
 const { createModelKnowledgePostRunner } = await import("../packages/core/dist/harness/modelRunner.js");
+const { deterministicKnowledgePostRunner } = await import("../packages/core/dist/harness/runner.js");
 const { calculateCjkRatio } = await import("../packages/core/dist/harness/contentLanguage.js");
 const { askGrounded, askSystemPrompt } = await import("../packages/core/dist/harness/askGrounded.js");
 const { followupHarnessSystemPrompt } = await import("../packages/core/dist/harness/followupHarness.js");
+const { createSourceRegistry } = await import("../packages/core/dist/source/sourceRegistry.js");
 
 assert.ok(
   agentHarnessSystemPrompt.includes("Write all user-facing text in Simplified Chinese."),
@@ -98,6 +100,164 @@ assert.ok(
   model.validation.every((result) => result.valid),
   "model output should pass validation with no errors"
 );
+
+// 2b) Paper digest model path: prompt includes the section-card protocol, cross-bucket sampled
+//     chunks, and the exact figure assetId list; legal media survives validation unchanged.
+const paperSource = {
+  id: "paper-model-smoke",
+  title: "Paper digest model smoke",
+  url: "https://arxiv.org/abs/2603.07670",
+  type: "paper"
+};
+const makePaperChunk = (kind, index, text) => ({
+  id: `${paperSource.id}-${kind}-${index}`,
+  sourceId: paperSource.id,
+  content: `${text} ${kind} sample ${index} ${index === 5 ? "should stay out of the sampled prompt" : "reaches the paper prompt"}.`,
+  conceptHints: ["AI Agent", "Memory"]
+});
+const motivationChunks = Array.from({ length: 5 }, (_, index) =>
+  makePaperChunk(
+    "motivation",
+    index + 1,
+    "The paper motivates grounded AI Agent memory with citations, durable source chunks, and inspectable retrieval trails."
+  )
+);
+const methodChunks = Array.from({ length: 5 }, (_, index) =>
+  makePaperChunk(
+    "method",
+    index + 1,
+    "The method builds a graph-backed architecture with retrieval nodes, summary edges, and evaluation hooks."
+  )
+);
+const experimentChunks = Array.from({ length: 4 }, (_, index) =>
+  makePaperChunk(
+    "experiment",
+    index + 1,
+    "The experiments compare baselines on benchmark tasks and report result accuracy for retrieval quality."
+  )
+);
+const conclusionChunks = Array.from({ length: 3 }, (_, index) =>
+  makePaperChunk(
+    "conclusion",
+    index + 1,
+    "The conclusion names limitations around consolidation, forgetting, and long-term maintenance of memory graphs."
+  )
+);
+const paperChunks = [...motivationChunks, ...methodChunks, ...experimentChunks, ...conclusionChunks];
+const paperTextAsset = {
+  id: `${paperSource.id}-text`,
+  sourceId: paperSource.id,
+  kind: "text",
+  content: paperChunks.map((chunk) => chunk.content).join("\n\n"),
+  createdAt
+};
+const architectureImageAsset = {
+  id: `${paperSource.id}-image-1`,
+  sourceId: paperSource.id,
+  kind: "image",
+  url: `/media/${paperSource.id}/1.png`,
+  caption: "Figure 1: Architecture overview of the memory graph.",
+  figureLabel: "Figure 1",
+  createdAt
+};
+const resultImageAsset = {
+  id: `${paperSource.id}-image-2`,
+  sourceId: paperSource.id,
+  kind: "image",
+  url: `/media/${paperSource.id}/2.png`,
+  caption: "Table 1: Experiment results across retrieval benchmarks.",
+  figureLabel: "Table 1",
+  createdAt
+};
+const paperDigest = {
+  buckets: [
+    { kind: "motivation", title: "Abstract / Introduction", chunkIds: motivationChunks.map((chunk) => chunk.id) },
+    { kind: "method", title: "Method and Architecture", chunkIds: methodChunks.map((chunk) => chunk.id) },
+    { kind: "experiment", title: "Experiments", chunkIds: experimentChunks.map((chunk) => chunk.id) },
+    { kind: "conclusion", title: "Limitations and Conclusion", chunkIds: conclusionChunks.map((chunk) => chunk.id) }
+  ],
+  figures: [
+    {
+      assetId: architectureImageAsset.id,
+      figureLabel: architectureImageAsset.figureLabel,
+      caption: architectureImageAsset.caption
+    },
+    {
+      assetId: resultImageAsset.id,
+      figureLabel: resultImageAsset.figureLabel,
+      caption: resultImageAsset.caption
+    }
+  ]
+};
+const paperSourceRegistry = createSourceRegistry({
+  sources: [paperSource],
+  assets: [paperTextAsset, architectureImageAsset, resultImageAsset],
+  chunks: paperChunks,
+  createdAt
+});
+const deterministicPaperDigest = await deterministicKnowledgePostRunner.run({
+  source: paperSource,
+  chunks: paperChunks,
+  sourceRegistry: paperSourceRegistry,
+  paperDigest,
+  createdAt,
+  recommendedBecause: "Smoke test paper digest model protocol."
+});
+
+assert.equal(deterministicPaperDigest.posts.length, 4, "paper digest fallback fixture should create four section posts");
+assert.ok(
+  deterministicPaperDigest.posts.some((post) => post.media?.[0]?.assetId === architectureImageAsset.id),
+  "paper digest fallback fixture should attach the architecture image"
+);
+assert.ok(
+  deterministicPaperDigest.posts.some((post) => post.media?.[0]?.assetId === resultImageAsset.id),
+  "paper digest fallback fixture should attach the experiment result image"
+);
+
+let capturedPaperDigestPrompt = "";
+const paperDigestModelRunner = createModelKnowledgePostRunner({
+  maxRepairAttempts: 0,
+  client: {
+    async complete(request) {
+      capturedPaperDigestPrompt = request.messages.map((message) => message.content).join("\n");
+
+      return { content: JSON.stringify({ posts: deterministicPaperDigest.posts }) };
+    }
+  }
+});
+const paperDigestModelResult = await paperDigestModelRunner.run({
+  source: paperSource,
+  chunks: paperChunks,
+  sourceRegistry: paperSourceRegistry,
+  paperDigest,
+  createdAt,
+  recommendedBecause: "Smoke test paper digest model protocol."
+});
+
+assert.match(capturedPaperDigestPrompt, /Paper digest protocol/, "paper prompt should include the section-card protocol");
+assert.match(
+  capturedPaperDigestPrompt,
+  new RegExp(architectureImageAsset.id),
+  "paper prompt should include the figure assetId list"
+);
+assert.match(
+  capturedPaperDigestPrompt,
+  /method sample 1 reaches the paper prompt/,
+  "paper prompt should include sampled chunks beyond the old first-four slice"
+);
+assert.doesNotMatch(
+  capturedPaperDigestPrompt,
+  /method sample 5 should stay out of the sampled prompt/,
+  "paper prompt should cap each bucket at four chunks"
+);
+assert.equal(paperDigestModelResult.run.status, "succeeded", "paper digest model output should pass validation");
+assert.equal(paperDigestModelResult.posts.length, 4, "paper digest model output should accept section cards");
+
+for (const post of paperDigestModelResult.posts) {
+  const expectedPost = deterministicPaperDigest.posts.find((candidate) => candidate.id === post.id);
+
+  assert.deepEqual(post.media, expectedPost?.media, "paper digest media should survive the model path unchanged");
+}
 
 // 3) Prove the two paths actually diverge: the deterministic card never carries the model sentinel.
 assert.notEqual(

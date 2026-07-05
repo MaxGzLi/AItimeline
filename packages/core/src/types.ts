@@ -161,6 +161,14 @@ export interface EvidenceSpan {
   endTimeSeconds?: number;
 }
 
+export type KnowledgePostMediaOrigin = "paper" | "derived";
+
+export interface KnowledgePostMedia {
+  assetId: string;
+  caption: string;
+  origin: KnowledgePostMediaOrigin;
+}
+
 export interface SourceClaim {
   id: string;
   postId: string;
@@ -198,6 +206,7 @@ export interface KnowledgePost extends KnowledgeCard {
   hook: string;
   thesis: string;
   shortBody: string;
+  media?: KnowledgePostMedia[];
   difficulty: KnowledgeDifficulty;
   confidence: KnowledgeConfidence;
   thread: KnowledgeThreadBlock[];
@@ -346,11 +355,31 @@ export interface AgentHarnessUserContext {
   topicStates?: TopicState[];
 }
 
+export type PaperDigestBucketKind = "motivation" | "method" | "experiment" | "result" | "conclusion" | "other";
+
+export interface PaperDigestBucket {
+  kind: PaperDigestBucketKind;
+  title: string;
+  chunkIds: string[];
+}
+
+export interface PaperDigestFigure {
+  assetId: string;
+  figureLabel: string;
+  caption: string;
+}
+
+export interface PaperDigestInput {
+  buckets: PaperDigestBucket[];
+  figures: PaperDigestFigure[];
+}
+
 export interface AgentHarnessRunInput {
   id?: string;
   source: Source;
   chunks: KnowledgeChunk[];
   sourceRegistry?: SourceRegistry;
+  paperDigest?: PaperDigestInput;
   createdAt?: string;
   recommendedBecause?: string;
   config?: AgentHarnessConfig;

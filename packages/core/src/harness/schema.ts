@@ -4,6 +4,7 @@ import type {
   KnowledgeConfidence,
   KnowledgeDifficulty,
   KnowledgeEdgeRelation,
+  KnowledgePostMediaOrigin,
   KnowledgePost,
   NextActionPolicy,
   ReviewPromptKind,
@@ -45,6 +46,7 @@ const edgeRelations = [
   "summarizes"
 ] as const satisfies readonly KnowledgeEdgeRelation[];
 const reviewPromptKinds = ["recall", "compare", "apply", "explain"] as const satisfies readonly ReviewPromptKind[];
+const mediaOrigins = ["paper", "derived"] as const satisfies readonly KnowledgePostMediaOrigin[];
 const nextActionPolicies = [
   "continue_deeper",
   "expand_broader",
@@ -117,6 +119,18 @@ export const knowledgePostJsonSchema = {
     recommendedBecause: { type: "string" },
     trustState: { enum: trustStates },
     estimatedReadMinutes: { type: "number", minimum: 1 },
+    media: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["assetId", "caption", "origin"],
+        properties: {
+          assetId: { type: "string" },
+          caption: { type: "string" },
+          origin: { enum: mediaOrigins }
+        }
+      }
+    },
     difficulty: { enum: difficulties },
     confidence: { enum: confidences },
     thread: {
@@ -196,6 +210,7 @@ export function validateKnowledgePost(post: unknown): HarnessValidationResult {
   requireStringArray(post, "concepts", issues, { minItems: 1 });
   validateSources(post.sources, issues);
   validateCitations(post.citations, issues);
+  validateMedia(post.media, issues);
   validateThread(post.thread, issues);
   validateGraphEdges(post.graphEdges, issues);
   validateReviewPrompts(post.reviewPrompts, issues);
@@ -249,6 +264,28 @@ function validateCitations(value: unknown, issues: HarnessValidationIssue[]): vo
 
     requireString(citation, "sourceId", issues, `$.citations[${index}]`);
     requireString(citation, "chunkId", issues, `$.citations[${index}]`);
+  });
+}
+
+function validateMedia(value: unknown, issues: HarnessValidationIssue[]): void {
+  if (value === undefined) {
+    return;
+  }
+
+  if (!Array.isArray(value)) {
+    issues.push({ path: "$.media", message: "media must be an array when present.", severity: "error" });
+    return;
+  }
+
+  value.forEach((mediaItem, index) => {
+    if (!isRecord(mediaItem)) {
+      issues.push({ path: `$.media[${index}]`, message: "media item must be an object.", severity: "error" });
+      return;
+    }
+
+    requireString(mediaItem, "assetId", issues, `$.media[${index}]`);
+    requireString(mediaItem, "caption", issues, `$.media[${index}]`);
+    requireEnum(mediaItem, "origin", mediaOrigins, issues, `$.media[${index}]`);
   });
 }
 

@@ -8,7 +8,7 @@ import type {
   KnowledgePostAgentRunner,
   SourceRegistry
 } from "../types.js";
-import { createAgentHarnessConfig, validateHarnessPosts } from "./runner.js";
+import { createAgentHarnessConfig, selectAgentHarnessInputChunks, validateHarnessPosts } from "./runner.js";
 import { knowledgePostJsonSchema } from "./schema.js";
 import { agentHarnessSystemPrompt } from "./systemPrompt.js";
 import {
@@ -75,7 +75,7 @@ export async function runModelAgentHarness(
     ...(input.config ?? {}),
     runnerKind: "model"
   });
-  const chunks = input.chunks.slice(0, config.maxPostsPerRun);
+  const chunks = selectAgentHarnessInputChunks(input, config);
   const sourceRegistry =
     input.sourceRegistry ??
     createSourceRegistry({
@@ -173,7 +173,71 @@ function buildInitialMessages(
     ...(input.config ?? {}),
     runnerKind: "model"
   });
-  const chunks = input.chunks.slice(0, config.maxPostsPerRun);
+  const chunks = selectAgentHarnessInputChunks(input, config);
+  const hardRequirements = input.paperDigest
+    ? [
+        "Hard requirements:",
+        "- Produce the paper section cards defined in the Paper digest protocol below: one overview card is mandatory, and the method, experiment/results, and conclusion cards are included only when their bucket groups have chunks.",
+        `- Use harnessVersion "${config.version}" exactly.`,
+        `- Use createdAt "${createdAt}" exactly for each post.`,
+        "- Every post must include citations with registered sourceId and chunkId values.",
+        "- Source facts must be supported by cited chunks; do not invent claims outside the source.",
+        "- Every numeric token in source-fact fields must appear verbatim in that card's cited chunks. Digits inside names count (GPT-4o contains 4, Claude-3.5 contains 3.5): if a cited chunk does not contain the token, do not write it.",
+        "- Each thread must include explain, example, contrast, extension, and quiz blocks.",
+        "- Use graphEdges for durable concept links that can power review and recommendation.",
+        "- Use nextActions to say whether the user should go deeper, broader, simpler, review, or cool down.",
+        "- Do not include markdown, comments, or prose outside JSON.",
+        ...(contentLanguage === "zh"
+          ? [
+              "- 所有面向用户的字段(title、hook、thesis、shortBody、keyTakeaway、summary、thread、reviewPrompts、recommendedBecause)必须以简体中文书写,技术术语保留英文;graphEdges 的 evidence 保持来源原文语言。"
+            ]
+          : [])
+      ]
+    : [
+        "Hard requirements:",
+        `- Produce at most ${config.maxPostsPerRun} posts.`,
+        `- Use harnessVersion "${config.version}" exactly.`,
+        `- Use createdAt "${createdAt}" exactly for each post.`,
+        "- Every post must include citations with registered sourceId and chunkId values.",
+        "- Source facts must be supported by cited chunks; do not invent claims outside the source.",
+        "- Every numeric token in source-fact fields must appear verbatim in that card's cited chunks. Digits inside names count (GPT-4o contains 4, Claude-3.5 contains 3.5): if a cited chunk does not contain the token, do not write it.",
+        "- Each thread must include explain, example, contrast, extension, and quiz blocks.",
+        "- Use graphEdges for durable concept links that can power review and recommendation.",
+        "- Use nextActions to say whether the user should go deeper, broader, simpler, review, or cool down.",
+        "- Do not include markdown, comments, or prose outside JSON.",
+        ...(contentLanguage === "zh"
+          ? [
+              "- 所有面向用户的字段(title、hook、thesis、shortBody、keyTakeaway、summary、thread、reviewPrompts、recommendedBecause)必须以简体中文书写,技术术语保留英文;graphEdges 的 evidence 保持来源原文语言。"
+            ]
+          : [])
+      ];
+  // 桶映射只列真正进了提示词的 chunkId,避免模型引用它没见过内容的 chunk。
+  const sampledChunkIds = new Set(chunks.map((chunk) => chunk.id));
+  const promptPaperBuckets = input.paperDigest?.buckets.map((bucket) => ({
+    ...bucket,
+    chunkIds: bucket.chunkIds.filter((chunkId) => sampledChunkIds.has(chunkId))
+  }));
+  const paperDigestSections = input.paperDigest
+    ? [
+        "",
+        "Paper digest protocol:",
+        "- Produce 3-4 section cards when the source has all required sections, in this order:",
+        "  1. 概览卡: motivation bucket; this card is mandatory. If motivation has no chunks, use the strongest available sampled chunk.",
+        "  2. 方法与架构卡: method bucket; skip this card when the method bucket has no chunks.",
+        "  3. 实验与结果卡: experiment and result buckets combined; skip this card when both bucket groups have no chunks.",
+        "  4. 局限与结论卡: conclusion bucket; skip this card when the conclusion bucket has no chunks.",
+        "- Each card's citations must point to chunkIds from its corresponding bucket group.",
+        "- The method card and experiment/results card should attach relevant figures through KnowledgePost.media when a figure clearly matches.",
+        "- media may only use assetId values from the Paper figures list; set origin to \"paper\" and copy caption exactly from that list.",
+        "- If no suitable paper figure exists for a card, omit the media field for that card.",
+        "",
+        "Paper digest bucket map:",
+        JSON.stringify(promptPaperBuckets, null, 2),
+        "",
+        "Paper figures list:",
+        JSON.stringify(input.paperDigest.figures, null, 2)
+      ]
+    : [];
 
   return [
     {
@@ -188,21 +252,7 @@ function buildInitialMessages(
         "Return exactly one JSON object in this shape:",
         '{"posts":[KnowledgePost, ...]}',
         "",
-        "Hard requirements:",
-        `- Produce at most ${config.maxPostsPerRun} posts.`,
-        `- Use harnessVersion "${config.version}" exactly.`,
-        `- Use createdAt "${createdAt}" exactly for each post.`,
-        "- Every post must include citations with registered sourceId and chunkId values.",
-        "- Source facts must be supported by cited chunks; do not invent claims outside the source.",
-        "- Each thread must include explain, example, contrast, extension, and quiz blocks.",
-        "- Use graphEdges for durable concept links that can power review and recommendation.",
-        "- Use nextActions to say whether the user should go deeper, broader, simpler, review, or cool down.",
-        "- Do not include markdown, comments, or prose outside JSON.",
-        ...(contentLanguage === "zh"
-          ? [
-              "- 所有面向用户的字段(title、hook、thesis、shortBody、keyTakeaway、summary、thread、reviewPrompts、recommendedBecause)必须以简体中文书写,技术术语保留英文;graphEdges 的 evidence 保持来源原文语言。"
-            ]
-          : []),
+        ...hardRequirements,
         "",
         `recommendedBecause: ${recommendedBecause}`,
         "",
@@ -211,6 +261,7 @@ function buildInitialMessages(
         "",
         "Registered source chunks:",
         JSON.stringify(chunks, null, 2),
+        ...paperDigestSections,
         "",
         "Source registry summary:",
         JSON.stringify(
@@ -253,12 +304,19 @@ function buildRepairPrompt(validation: HarnessValidationResult[], previousRespon
         "The previous output was truncated. Reduce the number of cards, shorten each card, and ensure the JSON is complete with every object, array, and string closed."
       ]
     : [];
+  const numberGuidance = hasNumberMismatchValidationError(validation)
+    ? [
+        "",
+        "For number mismatches: every number in source-fact fields must appear verbatim in the cited chunks. Remove or reword any number the cited chunks do not contain; do not round, convert, or derive new numbers. Digits inside product or model names (GPT-4o, Claude-3.5) count as numbers — drop such comparisons unless a cited chunk contains them."
+      ]
+    : [];
 
   return [
     "The previous JSON response failed the AITimeline harness.",
     "Return a complete replacement JSON object in the exact shape {\"posts\":[...]} with all errors fixed.",
     "Do not apologize. Do not explain the fix. Do not reuse unsupported claims.",
     ...truncationGuidance,
+    ...numberGuidance,
     "",
     "Validation issues:",
     JSON.stringify(
@@ -282,6 +340,12 @@ function buildRepairPrompt(validation: HarnessValidationResult[], previousRespon
 function hasJsonParseValidationError(validation: readonly HarnessValidationResult[]): boolean {
   return validation.some((result) =>
     result.issues.some((issue) => /must be parseable JSON/i.test(issue.message))
+  );
+}
+
+function hasNumberMismatchValidationError(validation: readonly HarnessValidationResult[]): boolean {
+  return validation.some((result) =>
+    result.issues.some((issue) => /numbers that do not appear in cited evidence/i.test(issue.message))
   );
 }
 

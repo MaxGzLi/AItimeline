@@ -14,6 +14,7 @@ import type {
   KnowledgeChunk,
   KnowledgePost,
   KnowledgePostAgentRunner,
+  PaperDigestInput,
   Source,
   SourceAsset,
   SourceImport,
@@ -28,6 +29,7 @@ export interface SourceImportWorkerInput {
   assets?: SourceAsset[];
   chunks: KnowledgeChunk[];
   sourceRegistry?: SourceRegistry;
+  paperDigest?: PaperDigestInput;
   createdAt?: string;
   recommendedBecause?: string;
   config?: AgentHarnessConfig;
@@ -117,6 +119,7 @@ export async function runSourceImport(
       source: input.source,
       chunks: input.chunks,
       sourceRegistry,
+      paperDigest: input.paperDigest,
       createdAt,
       recommendedBecause: input.recommendedBecause,
       config: input.config,
