@@ -363,7 +363,15 @@ const sampleLatexmlHtml = `
           </figure>
         </section>
         <section class="ltx_section">
-          <h2 class="ltx_title">4 Core Memory Mechanisms</h2>
+          <h2 class="ltx_title">3 Infrastructures</h2>
+          <p class="ltx_para">The cluster infrastructure coordinates storage, scheduling, and communication paths for reliable large-scale runs.</p>
+        </section>
+        <section class="ltx_section">
+          <h2 class="ltx_title">4 Pre-Training</h2>
+          <p class="ltx_para">Pre-Training scales data mixtures and optimizer schedules before the instruction tuning stage.</p>
+        </section>
+        <section class="ltx_section">
+          <h2 class="ltx_title">5 Core Memory Mechanisms</h2>
           <p class="ltx_para">Retrieval-augmented stores and reflective loops manage what the agent keeps.</p>
         </section>
         <section class="ltx_section">
@@ -396,6 +404,18 @@ assert.ok(
 );
 assert.ok(
   parsedLatexml.buckets.some(
+    (bucket) => bucket.kind === "method" && bucket.chunks.join(" ").includes("cluster infrastructure")
+  ),
+  "infrastructure sections should map to the method bucket"
+);
+assert.ok(
+  parsedLatexml.buckets.some(
+    (bucket) => bucket.kind === "experiment" && bucket.chunks.join(" ").includes("optimizer schedules")
+  ),
+  "pre-training sections should map to the experiment bucket"
+);
+assert.ok(
+  parsedLatexml.buckets.some(
     (bucket) => bucket.kind === "method" && bucket.chunks.join(" ").includes("reflective loops")
   ),
   "survey-style mechanism sections should map to the method bucket"
@@ -417,6 +437,63 @@ assert.equal(
   "relative arXiv images should resolve against the document base href"
 );
 assert.equal(parsedLatexml.figures[1].figureLabel, "Table 1", "table labels should be read from captions");
+
+const makeBalancedParagraphs = (label) =>
+  Array.from({ length: 30 }, (_, index) => {
+    const token = `${label}-chunk-${String(index + 1).padStart(2, "0")}`;
+    return `<p class="ltx_para">${`${token} carries distinct source evidence for balanced truncation. `.repeat(15)}</p>`;
+  }).join("\n");
+const balancedLatexmlHtml = `
+  <html>
+    <body>
+      <main class="ltx_page_main">
+        <h1 class="ltx_title">Balanced Bucket Budget Smoke</h1>
+        <section class="ltx_section">
+          <h2 class="ltx_title">2 Method</h2>
+          ${makeBalancedParagraphs("method")}
+        </section>
+        <section class="ltx_section">
+          <h2 class="ltx_title">4 Pre-Training</h2>
+          ${makeBalancedParagraphs("experiment")}
+        </section>
+      </main>
+    </body>
+  </html>
+`;
+const balancedLatexml = parseArxivHtmlDecomposition(balancedLatexmlHtml, "https://arxiv.org/html/2603.07670");
+
+assert.ok(balancedLatexml, "balanced LaTeXML fixture should parse");
+assert.equal(balancedLatexml.truncated, true, "balanced fixture should be truncated at the global chunk budget");
+assert.ok(
+  balancedLatexml.buckets.reduce((total, bucket) => total + bucket.chunks.length, 0) <= 40,
+  "balanced truncation should keep the total chunk count within the global budget"
+);
+
+const balancedMethodBucket = balancedLatexml.buckets.find((bucket) => bucket.kind === "method");
+const balancedExperimentBucket = balancedLatexml.buckets.find((bucket) => bucket.kind === "experiment");
+
+assert.ok(balancedMethodBucket, "balanced fixture should keep method chunks");
+assert.ok(balancedExperimentBucket, "balanced fixture should keep experiment chunks");
+assert.ok(
+  balancedMethodBucket.chunks.length >= 15,
+  "balanced truncation should leave a meaningful method allocation"
+);
+assert.ok(
+  balancedExperimentBucket.chunks.length >= 15,
+  "balanced truncation should leave a meaningful experiment allocation"
+);
+assert.match(balancedMethodBucket.chunks[0], /method-chunk-01/, "method chunks should keep original order");
+assert.match(balancedMethodBucket.chunks[1], /method-chunk-02/, "method chunks should keep original order");
+assert.match(
+  balancedExperimentBucket.chunks[0],
+  /experiment-chunk-01/,
+  "experiment chunks should keep original order"
+);
+assert.match(
+  balancedExperimentBucket.chunks[1],
+  /experiment-chunk-02/,
+  "experiment chunks should keep original order"
+);
 
 const mediaTempDir = await mkdtemp(join(tmpdir(), "aitimeline-arxiv-media-"));
 

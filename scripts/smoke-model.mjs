@@ -309,6 +309,50 @@ assert.ok(
   "repaired title should be primarily Chinese with key English terms retained"
 );
 
+let overlapRepairCalls = 0;
+let overlapRepairPrompt = "";
+const weakOverlapPost = {
+  ...zhModelPost,
+  summary: "这句话只用中文转述，没有保留被引证据里的关键术语。"
+};
+const overlapRepairRunner = createModelKnowledgePostRunner({
+  contentLanguage: "zh",
+  maxRepairAttempts: 1,
+  client: {
+    async complete(request) {
+      overlapRepairCalls += 1;
+
+      if (overlapRepairCalls === 1) {
+        return { content: JSON.stringify({ posts: [weakOverlapPost] }) };
+      }
+
+      overlapRepairPrompt = request.messages.at(-1)?.content ?? "";
+      return { content: JSON.stringify({ posts: [zhModelPost] }) };
+    }
+  }
+});
+const overlapRepairResult = await overlapRepairRunner.run({
+  source: deterministic.source,
+  chunks: deterministic.chunks,
+  sourceRegistry: deterministic.sourceRegistry,
+  createdAt,
+  recommendedBecause: "这次 smoke 用来确认中文 source-fact 重合度失败会得到可操作修复提示。"
+});
+
+assert.equal(overlapRepairCalls, 2, "weak source-fact overlap should ask the model to repair output");
+assert.match(
+  overlapRepairPrompt,
+  /verbatim.*English terms|English terms.*verbatim/i,
+  "repair prompt should tell the model to preserve cited English anchor terms verbatim"
+);
+assert.match(
+  overlapRepairPrompt,
+  /Source fact does not overlap enough with cited evidence/,
+  "repair prompt should include the weak overlap validation issue"
+);
+assert.equal(overlapRepairResult.run.status, "succeeded", "source-fact overlap repair output should pass");
+assert.equal(overlapRepairResult.posts.length, 1, "source-fact overlap repair should keep the repaired post");
+
 let disabledLanguageCalls = 0;
 const disabledLanguageRunner = createModelKnowledgePostRunner({
   maxRepairAttempts: 0,

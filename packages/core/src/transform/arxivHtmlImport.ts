@@ -255,24 +255,47 @@ function buildBuckets(bucketDrafts: Map<ArxivSectionKind, { titles: string[]; te
 }
 
 function limitTotalChunks(buckets: ArxivHtmlBucket[], maxChunks: number): boolean {
-  let total = 0;
+  const orderedBuckets = bucketOrder.flatMap((kind) =>
+    buckets.filter((bucket) => bucket.kind === kind && bucket.chunks.length > 0)
+  );
+  const keptChunksByBucket = new Map<ArxivHtmlBucket, string[]>();
   let truncated = false;
 
+  for (const bucket of orderedBuckets) {
+    keptChunksByBucket.set(bucket, []);
+  }
+
+  let total = 0;
+  let addedInPass = true;
+
+  while (total < maxChunks && addedInPass) {
+    addedInPass = false;
+
+    for (const bucket of orderedBuckets) {
+      if (total >= maxChunks) {
+        break;
+      }
+
+      const keptChunks = keptChunksByBucket.get(bucket);
+
+      if (!keptChunks || keptChunks.length >= bucket.chunks.length) {
+        continue;
+      }
+
+      keptChunks.push(bucket.chunks[keptChunks.length]);
+      total += 1;
+      addedInPass = true;
+    }
+  }
+
   for (const bucket of buckets) {
-    if (total >= maxChunks) {
-      bucket.chunks = [];
-      truncated = true;
-      continue;
-    }
+    const keptChunks = keptChunksByBucket.get(bucket) ?? [];
 
-    const remaining = maxChunks - total;
-
-    if (bucket.chunks.length > remaining) {
-      bucket.chunks = bucket.chunks.slice(0, remaining);
+    if (keptChunks.length < bucket.chunks.length) {
       truncated = true;
     }
 
-    total += bucket.chunks.length;
+    bucket.chunks = keptChunks;
   }
 
   for (let index = buckets.length - 1; index >= 0; index -= 1) {
@@ -291,11 +314,11 @@ function classifySectionKind(title: string): ArxivSectionKind {
     return "motivation";
   }
 
-  if (titleIncludesAny(normalizedTitle, ["method", "approach", "model", "architecture", "mechanism", "framework", "taxonomy", "design"])) {
+  if (titleIncludesAny(normalizedTitle, ["method", "approach", "model", "architecture", "infrastructure", "mechanism", "framework", "taxonomy", "design"])) {
     return "method";
   }
 
-  if (titleIncludesAny(normalizedTitle, ["experiment", "setup", "evaluation", "implementation", "benchmark"])) {
+  if (titleIncludesAny(normalizedTitle, ["experiment", "setup", "evaluation", "implementation", "benchmark", "training"])) {
     return "experiment";
   }
 
