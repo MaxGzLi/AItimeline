@@ -12,12 +12,14 @@ import { planDiscoveryQueries } from "../discovery/sourceDiscovery.js";
 import type { InteractionSignal, KnowledgePost, SourceRegistry, UserMemory, UserSignal } from "../types.js";
 import type { AgentTurnRecord } from "../storage/persistenceStore.js";
 
-export type AgentTurnIntent = "grounded_qa" | "boundary_probe" | "discovery_proposal";
+export type AgentTurnIntent = "grounded_qa" | "boundary_probe" | "discovery_proposal" | "idea_observation";
 
 export type AgentTurnTier = "free" | "standard";
 
 export type AgentTurnActionKind =
   | "confirm_discovery"
+  | "idea_probe"
+  | "research_idea"
   | "discover_sources"
   | "start_series"
   | "continue_deeper"
@@ -41,6 +43,7 @@ export interface AgentTurnAction {
   kind: AgentTurnActionKind;
   label: string;
   concepts: string[];
+  question?: string;
   queries?: string[];
   questions?: AgentTurnConfirmationQuestion[];
 }

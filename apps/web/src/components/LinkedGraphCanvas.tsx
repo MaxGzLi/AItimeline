@@ -251,6 +251,9 @@ export function LinkedGraphCanvas({
       if (node.kind === "ghost") {
         return 5;
       }
+      if (node.kind === "idea") {
+        return 5.5;
+      }
       return 4;
     }
 
@@ -377,12 +380,12 @@ export function LinkedGraphCanvas({
         const point = toScreen(node);
         const radius = nodeRadius(node) * Math.min(1.6, Math.max(0.75, viewRef.current.scale));
 
-        if (node.kind === "ghost") {
+        if (node.kind === "ghost" || node.kind === "idea") {
           ctx.beginPath();
           ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
-          ctx.strokeStyle = palette.muted;
-          ctx.lineWidth = 1.4;
-          ctx.setLineDash([3, 3]);
+          ctx.strokeStyle = node.kind === "idea" ? palette.blue : palette.muted;
+          ctx.lineWidth = node.kind === "idea" ? 1.7 : 1.4;
+          ctx.setLineDash(node.kind === "idea" ? [5, 3] : [3, 3]);
           ctx.stroke();
           ctx.setLineDash([]);
         } else {
@@ -404,7 +407,7 @@ export function LinkedGraphCanvas({
         }
 
         // Concept and ghost labels are always on; card/note labels only on hover.
-        const showLabel = node.kind === "concept" || node.kind === "ghost" || node.id === hovered;
+        const showLabel = node.kind === "concept" || node.kind === "ghost" || node.kind === "idea" || node.id === hovered;
 
         if (showLabel && node.label) {
           ctx.font = "11px -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif";
@@ -569,7 +572,7 @@ export function LinkedGraphCanvas({
         if (node) {
           if (node.kind === "concept") {
             openConceptRef.current(node.label);
-          } else if (node.kind === "card" || node.kind === "note") {
+          } else if (node.kind === "card" || node.kind === "note" || node.kind === "idea") {
             openCardRef.current(node.id);
           }
         }

@@ -30,6 +30,8 @@ export function AgentReplyThread({
   onDismiss,
   onOpenCardId,
   onOpenDiscover,
+  onProbe,
+  onResearchIdea,
   question,
   response,
   turnStatus
@@ -40,6 +42,8 @@ export function AgentReplyThread({
   onDismiss: () => void;
   onOpenCardId: (cardId: string) => void;
   onOpenDiscover: () => void;
+  onProbe: (action: AgentReplyAction) => void;
+  onResearchIdea: (action: AgentReplyAction) => void;
   question: string;
   response: AgentAskApiResponse;
   turnStatus?: string;
@@ -55,6 +59,7 @@ export function AgentReplyThread({
   const isConfirmReady =
     confirmQuestions.length > 0 && confirmQuestions.every((confirmQuestion) => choices[confirmQuestion.id]);
   const effectiveTurnStatus = turnStatus ?? response.turnRecord?.status;
+  const body = turn.answer?.answer ?? turn.notes.join("\n") ?? t("agent.askFallback");
 
   useEffect(() => {
     setChoices({});
@@ -90,11 +95,15 @@ export function AgentReplyThread({
             <span className="x-meta">{t("agent.replyToYou")}</span>
           </div>
 
-          <p className={`x-zone ${zoneClassNames[turn.zone]}`.trim()}>
-            {t("agent.boundaryPrefix", { zone: formatBoundaryZone(turn.zone) })}
-          </p>
+          {turn.intent === "idea_observation" ? (
+            <p className={`x-zone ${zoneClassNames[turn.zone]}`.trim()}>{t("agent.ideaBoundary")}</p>
+          ) : (
+            <p className={`x-zone ${zoneClassNames[turn.zone]}`.trim()}>
+              {t("agent.boundaryPrefix", { zone: formatBoundaryZone(turn.zone) })}
+            </p>
+          )}
 
-          <p className="x-body">{turn.answer?.answer ?? turn.notes.join("\n") ?? t("agent.askFallback")}</p>
+          <p className="x-body">{body}</p>
 
           {turn.nearestPosts?.length ? (
             <div className="x-nearest" role="list">
@@ -176,6 +185,27 @@ export function AgentReplyThread({
                 >
                   {discovery.status === "searching" ? t("agent.discovery.searching") : action.label}
                 </button>
+              ) : action.kind === "idea_probe" ? (
+                <button
+                  className="x-chip action"
+                  key={`${action.kind}-${action.question ?? action.label}`}
+                  onClick={() => onProbe(action)}
+                  type="button"
+                >
+                  {action.label}
+                </button>
+              ) : action.kind === "research_idea" ? (
+                <div className="x-idea-action" key={`${action.kind}-${action.question ?? action.label}`}>
+                  <span className="x-meta">{action.question ?? action.queries?.[0]}</span>
+                  <button
+                    className="x-chip action"
+                    disabled={effectiveTurnStatus === "researching"}
+                    onClick={() => onResearchIdea(action)}
+                    type="button"
+                  >
+                    {effectiveTurnStatus === "researching" ? t("agent.research.working") : action.label}
+                  </button>
+                </div>
               ) : (
                 <span className="x-chip" key={`${action.kind}-${action.label}`}>
                   {action.label}

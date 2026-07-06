@@ -195,6 +195,7 @@ export type AgentAskApiResponse = {
       kind: string;
       label: string;
       concepts: string[];
+      question?: string;
       queries?: string[];
       questions?: Array<{
         id: string;
@@ -206,6 +207,10 @@ export type AgentAskApiResponse = {
   };
   discoveredCandidates: Array<{ id: string }>;
   turnRecord: AgentTurnSummary;
+};
+
+export type NoteApiResponse = AgentAskApiResponse & {
+  post: KnowledgeCard;
 };
 
 export type AgentConfirmApiResponse = {

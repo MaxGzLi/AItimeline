@@ -344,9 +344,16 @@ body:has(.x-frame) {
 .x-composer-foot {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 4px;
   border-top: 1px solid var(--x-line);
   padding-top: 10px;
+}
+.x-modechips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-right: 6px;
 }
 .x-hint {
   font-size: 13px;
@@ -1775,6 +1782,17 @@ button.x-chip {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+.x-idea-action {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 0;
+}
+.x-idea-action .x-meta {
+  line-height: 1.45;
 }
 .x-notifications {
   display: grid;

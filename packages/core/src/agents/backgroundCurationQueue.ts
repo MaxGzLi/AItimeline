@@ -16,6 +16,10 @@ export interface BackgroundCurationJobResult {
   message?: string;
   sourceImport?: SourceImportWorkerResult;
   discoveredSourceCandidates?: BackgroundSourceCandidate[];
+  ideaResearchQueries?: {
+    support: string[];
+    challenge: string[];
+  };
   followupProtocol?: FollowupGenerationProtocol;
 }
 
@@ -73,6 +77,7 @@ export interface BackgroundCurationExecutionHandlers {
   askClarifyingQuestion?: (job: BackgroundCurationJob) => Promise<BackgroundCurationJobResult> | BackgroundCurationJobResult;
   cooldownTopic?: (job: BackgroundCurationJob) => Promise<BackgroundCurationJobResult> | BackgroundCurationJobResult;
   researchQuestion?: (job: BackgroundCurationJob) => Promise<BackgroundCurationJobResult> | BackgroundCurationJobResult;
+  researchIdea?: (job: BackgroundCurationJob) => Promise<BackgroundCurationJobResult> | BackgroundCurationJobResult;
 }
 
 export interface RunBackgroundCurationJobsOptions {
@@ -274,6 +279,12 @@ async function runJob(
     return handlers.researchQuestion
       ? handlers.researchQuestion(job)
       : skippedResult(job, "research question handler is not configured.");
+  }
+
+  if (job.kind === "research_idea") {
+    return handlers.researchIdea
+      ? handlers.researchIdea(job)
+      : skippedResult(job, "idea research handler is not configured.");
   }
 
   if (job.kind === "generate_followup") {

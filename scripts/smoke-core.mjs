@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 const { createBackgroundCurationPlan } = await import("../packages/core/dist/agents/backgroundCuration.js");
 const { runConversationTurn } = await import("../packages/core/dist/agents/conversationAgent.js");
+const { runIdeaObservation } = await import("../packages/core/dist/agents/ideaFlow.js");
 const { createStaticSearchProvider } = await import("../packages/core/dist/discovery/searchProvider.js");
 const { planDiscoveryQueries, runSourceDiscovery } = await import(
   "../packages/core/dist/discovery/sourceDiscovery.js"
@@ -79,6 +80,7 @@ const { createAITimelinePersistenceStore } = await import("../packages/core/dist
 const { fetchArticle, parseArxivAtom, transformArticleUrl } = await import(
   "../packages/core/dist/transform/articleImport.js"
 );
+const { transformUserNote } = await import("../packages/core/dist/transform/noteImport.js");
 const { parseArxivHtmlDecomposition } = await import("../packages/core/dist/transform/arxivHtmlImport.js");
 const { transformMockYouTubeUrl } = await import("../packages/core/dist/transform/mockYoutubeImport.js");
 const { transformYouTubeUrl } = await import("../packages/core/dist/transform/youtubeImport.js");
@@ -393,6 +395,43 @@ const userAliasGraph = buildKnowledgeGraph(
 );
 
 assert.equal(userAliasGraph.nodes.length, 1, "existing alias table entries should resolve matching concepts");
+
+const ideaAliasPosts = [
+  makeSmokePost({ id: "idea-alias-card", title: "Speculative Decoding source card", concepts: ["Speculative Decoding"] })
+];
+const ideaAliasRecords = [
+  {
+    canonical: "Speculative Decoding",
+    aliases: ["投机解码"],
+    decidedBy: "user",
+    decidedAt: "2026-07-06T00:00:00.000Z"
+  }
+];
+const ideaObservation = await runIdeaObservation({
+  idea: "投机解码可能适合低延迟推理产品。",
+  posts: ideaAliasPosts,
+  conceptAliases: ideaAliasRecords,
+  now: "2026-07-06T02:00:00.000Z"
+});
+
+assert.equal(ideaObservation.intent, "idea_observation", "idea posts should produce an idea observation turn");
+assert.ok(
+  ideaObservation.matchedConcepts.includes("Speculative Decoding"),
+  "idea library overlap should resolve aliases before scoring concepts"
+);
+assert.ok(
+  ideaObservation.nearestPosts.some((post) => post.postId === "idea-alias-card"),
+  "idea observations should link related in-library cards"
+);
+assert.ok(
+  ideaObservation.actions.some((action) => action.kind === "idea_probe"),
+  "idea observations should include probe actions"
+);
+assert.ok(
+  ideaObservation.actions.some((action) => action.kind === "research_idea" && action.question),
+  "idea observations should include testable research actions"
+);
+assert.match(ideaObservation.notes.join("\n"), /库内关联/, "idea observations should render the deterministic triad");
 
 const connectionOldPosts = [
   makeSmokePost({
@@ -2526,7 +2565,6 @@ assert.deepEqual(
 );
 
 // --- User notes: self-grounded source + post ---
-const { transformUserNote } = await import("../packages/core/dist/transform/noteImport.js");
 const noteResult = transformUserNote("RAG depends on retrieval quality.\n后半句是我的想法。", {
   createdAt: "2026-06-10T00:00:00.000Z",
   libraryConcepts: ["RAG", "Evaluation"]
@@ -2667,6 +2705,49 @@ assert.deepEqual(
   "edge order is deterministic across runs"
 );
 assert.equal(new Set(linked.edges.map((edge) => edge.id)).size, linked.edges.length, "edges are de-duplicated by id");
+
+const ideaNote = transformUserNote("投机解码可以作为 [[RAG]] 系统的延迟优化假设。", {
+  kind: "idea",
+  createdAt: "2026-01-06T00:00:00.000Z",
+  libraryConcepts: ["Speculative Decoding", "RAG"],
+  libraryCards: backlinkCards,
+  conceptAliases: [
+    {
+      canonical: "Speculative Decoding",
+      aliases: ["投机解码"],
+      decidedBy: "user",
+      decidedAt: "2026-07-06T00:00:00.000Z"
+    }
+  ]
+});
+assert.equal(ideaNote.post.kind, "idea", "idea notes should persist as idea posts");
+assert.ok(
+  ideaNote.post.concepts.includes("Speculative Decoding"),
+  "idea note concept matching should reuse concept aliases"
+);
+const ideaLinked = buildLinkedKnowledgeGraph({
+  cards: [...backlinkCards, ideaNote.post],
+  signals: [
+    ...linkedSignals,
+    { id: "sig-idea", cardId: ideaNote.post.id, type: "save", createdAt: "2026-01-06T00:00:00.000Z" }
+  ],
+  conceptAliases: [
+    {
+      canonical: "Speculative Decoding",
+      aliases: ["投机解码"],
+      decidedBy: "user",
+      decidedAt: "2026-07-06T00:00:00.000Z"
+    }
+  ]
+});
+assert.ok(
+  ideaLinked.nodes.some((node) => node.id === ideaNote.post.id && node.kind === "idea"),
+  "a user idea becomes a distinct idea node"
+);
+assert.ok(
+  ideaLinked.edges.some((edge) => edge.source === ideaNote.post.id && edge.kind === "mentions"),
+  "idea nodes should connect to resolved concept hubs"
+);
 
 const ghostCards = [
   {

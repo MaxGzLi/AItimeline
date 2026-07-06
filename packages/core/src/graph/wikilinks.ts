@@ -40,7 +40,7 @@ export interface Backlink {
   kind: WikilinkKind;
 }
 
-export type LinkedGraphNodeKind = "concept" | "card" | "note" | "ghost";
+export type LinkedGraphNodeKind = "concept" | "card" | "note" | "idea" | "ghost";
 
 export interface LinkedGraphNode {
   id: string;
@@ -238,7 +238,7 @@ export function buildLinkedKnowledgeGraph(input: {
     const isNote = card.sources[0]?.type === "user_note";
     nodes.set(card.id, {
       id: card.id,
-      kind: isNote ? "note" : "card",
+      kind: card.kind === "idea" ? "idea" : isNote ? "note" : "card",
       label: card.title,
       weight: 1
     });
@@ -297,8 +297,9 @@ export function buildLinkedKnowledgeGraph(input: {
 const nodeKindRank: Record<LinkedGraphNodeKind, number> = {
   concept: 0,
   note: 1,
-  card: 2,
-  ghost: 3
+  idea: 2,
+  card: 3,
+  ghost: 4
 };
 
 function compareNodes(left: LinkedGraphNode, right: LinkedGraphNode): number {
