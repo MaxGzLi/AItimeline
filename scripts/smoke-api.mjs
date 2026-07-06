@@ -43,6 +43,25 @@ const originalFetch = globalThis.fetch;
 globalThis.fetch = async (input, init = {}) => {
   const url = getFetchUrl(input);
 
+  if (url === `${baseUrl}/fixtures/connection-note`) {
+    return new Response(
+      `
+        <html>
+          <head><meta property="og:title" content="Connection note smoke import" /></head>
+          <body>
+            <article>
+              <p>Knowledge Graph evaluation evidence from the imported source connects Knowledge Graph and Evaluation for the learner.</p>
+            </article>
+          </body>
+        </html>
+      `,
+      {
+        status: 200,
+        headers: { "content-type": "text/html" }
+      }
+    );
+  }
+
   if (url.startsWith(baseUrl)) {
     return dispatchToServer(server, url, init);
   }
@@ -103,6 +122,149 @@ try {
   });
 
   assert.equal(resetSettings.contentLanguage, "zh", "settings API should reset back to Chinese mode");
+
+  const connectionDataPath = join(tempDir, "connection-note.json");
+  const connectionCurationPath = join(tempDir, "connection-curation-jobs.json");
+  const dismissedConnectionPost = makeApiSmokePost({
+    id: "old-dismissed-kg-eval",
+    title: "Old dismissed Knowledge Graph card",
+    concepts: ["Knowledge Graph", "Evaluation"],
+    createdAt: "2026-06-01T00:00:00.000Z"
+  });
+  const seededConnectionPosts = [
+    dismissedConnectionPost,
+    makeApiSmokePost({ id: "old-hub-rag", title: "Hub RAG", concepts: ["Memory", "RAG"] }),
+    makeApiSmokePost({ id: "old-hub-rec", title: "Hub Recommendation", concepts: ["Memory", "Recommendation"] }),
+    makeApiSmokePost({ id: "old-hub-notebook", title: "Hub NotebookLM", concepts: ["Memory", "NotebookLM"] }),
+    makeApiSmokePost({ id: "old-hub-youtube", title: "Hub YouTube", concepts: ["Memory", "YouTube"] })
+  ];
+
+  await writeFile(
+    connectionDataPath,
+    JSON.stringify({
+      version: 1,
+      updatedAt: "2026-07-06T00:00:00.000Z",
+      posts: seededConnectionPosts,
+      dismissedPosts: [
+        {
+          postId: dismissedConnectionPost.id,
+          dismissedAt: "2026-07-05T00:00:00.000Z",
+          mode: "soft"
+        }
+      ],
+      userSettings: { contentLanguage: "zh" }
+    })
+  );
+
+  const connectionServer = createApiServer({
+    dataPath: connectionDataPath,
+    curationDataPath: connectionCurationPath,
+    mediaRootDir,
+    enableFixtures: true,
+    searchProvider: fakeSearchProvider
+  });
+
+  try {
+    const suggestion = await requestJsonFromServer(connectionServer, "/api/concept-merge-suggestions", {
+      method: "POST",
+      body: {
+        left: "Speculative Decoding",
+        right: "speculative decoding",
+        leftExcerpt: "Speculative Decoding speeds inference.",
+        rightExcerpt: "speculative decoding speeds inference too."
+      }
+    });
+
+    assert.equal(suggestion.suggestion.status, "pending", "concept merge suggestion endpoint should persist pending suggestions");
+
+    const resolvedSuggestion = await requestJsonFromServer(
+      connectionServer,
+      `/api/concept-merge-suggestions/${encodeURIComponent(suggestion.suggestion.id)}/resolve`,
+      {
+        method: "POST",
+        body: {
+          decision: "merge",
+          canonical: "Speculative Decoding"
+        }
+      }
+    );
+
+    assert.equal(resolvedSuggestion.suggestion.status, "merged", "merge decision should resolve the suggestion");
+    assert.ok(
+      resolvedSuggestion.conceptAliases.some(
+        (record) => record.canonical === "Speculative Decoding" && record.aliases.includes("speculative decoding")
+      ),
+      "merge decision should write a user concept alias"
+    );
+
+    const unmerged = await requestJsonFromServer(connectionServer, "/api/concept-aliases/unmerge", {
+      method: "POST",
+      body: {
+        canonical: "Speculative Decoding",
+        alias: "speculative decoding"
+      }
+    });
+
+    assert.equal(unmerged.conceptAliases.length, 0, "unmerge endpoint should remove the selected alias");
+
+    const separateSuggestion = await requestJsonFromServer(connectionServer, "/api/concept-merge-suggestions", {
+      method: "POST",
+      body: {
+        left: "RAG",
+        right: "RAG evaluation"
+      }
+    });
+    await requestJsonFromServer(
+      connectionServer,
+      `/api/concept-merge-suggestions/${encodeURIComponent(separateSuggestion.suggestion.id)}/resolve`,
+      {
+        method: "POST",
+        body: { decision: "separate" }
+      }
+    );
+    const repeatedSeparate = await requestJsonFromServer(connectionServer, "/api/concept-merge-suggestions", {
+      method: "POST",
+      body: {
+        left: "RAG",
+        right: "RAG evaluation"
+      }
+    });
+
+    assert.equal(repeatedSeparate.suggestion.status, "separate", "separated concept pairs should not be asked again");
+
+    const connectionImport = await requestJsonFromServer(connectionServer, "/api/import/article", {
+      method: "POST",
+      body: {
+        url: `${baseUrl}/fixtures/connection-note`,
+        createdAt: "2026-07-06T00:00:00.000Z",
+        recommendedBecause: "Smoke import should create a connection note."
+      }
+    });
+
+    assert.equal(connectionImport.importRecord.status, "ready", "connection smoke import should be ready");
+
+    const connectionSnapshot = await requestJsonFromServer(connectionServer, "/api/snapshot");
+    const connectionNote = connectionSnapshot.posts.find((post) => post.kind === "connection_note");
+
+    assert.ok(connectionNote, "import should persist a connection_note card into the snapshot");
+    assert.equal(
+      connectionNote.connectionNote.restorePostId,
+      dismissedConnectionPost.id,
+      "connection note should carry undismiss target data when waking a dismissed card"
+    );
+    assert.equal(
+      connectionNote.connectionNote.oldPostId,
+      dismissedConnectionPost.id,
+      "connection note should reference the old card"
+    );
+    assert.ok(connectionNote.connectionNote.newPostId, "connection note should reference the new card");
+    assert.ok(
+      connectionNote.summary.includes(connectionNote.connectionNote.evidence),
+      "connection note card text should include existing graph edge evidence"
+    );
+  } finally {
+    await closeServer(connectionServer);
+  }
 
   const mediaResponse = await fetch(`${baseUrl}/media/smoke-source/1.png`);
   const mediaBytes = new Uint8Array(await mediaResponse.arrayBuffer());
@@ -1149,6 +1311,46 @@ async function closeServer(targetServer) {
   await new Promise((resolveClose) => {
     targetServer.close(() => resolveClose());
   });
+}
+
+function makeApiSmokePost({ id, title, concepts, createdAt = "2026-06-01T00:00:00.000Z" }) {
+  return {
+    id,
+    title,
+    hook: title,
+    thesis: title,
+    shortBody: title,
+    summary: title,
+    keyTakeaway: title,
+    concepts,
+    sources: [
+      {
+        id: `${id}-source`,
+        title: `${title} source`,
+        url: `https://example.com/${id}`,
+        type: "article"
+      }
+    ],
+    citations: [],
+    recommendedBecause: "Smoke fixture.",
+    trustState: "supported",
+    createdAt,
+    estimatedReadMinutes: 1,
+    difficulty: "beginner",
+    confidence: "high",
+    thread: [],
+    graphEdges: concepts.slice(0, -1).map((concept, index) => ({
+      id: `${id}-edge-${index + 1}`,
+      sourceConcept: concept,
+      relation: "extends",
+      targetConcept: concepts[index + 1],
+      evidence: `${title} links ${concept} to ${concepts[index + 1]}.`,
+      weight: 0.72
+    })),
+    reviewPrompts: [],
+    nextActions: [],
+    harnessVersion: "smoke"
+  };
 }
 
 async function requestJson(path, options = {}) {

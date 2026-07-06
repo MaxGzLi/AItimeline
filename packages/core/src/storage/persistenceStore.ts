@@ -4,6 +4,8 @@ import type { SourcePostReleasePlan } from "../ranking/postReleasePlan.js";
 import type { SourceImportWorkerResult } from "../source/sourceImportWorker.js";
 import type {
   AgentHarnessRun,
+  ConceptAliasRecord,
+  ConceptMergeSuggestion,
   HarnessValidationResult,
   InteractionSignal,
   KnowledgePost,
@@ -145,6 +147,8 @@ export interface AITimelinePersistenceSnapshot {
   agentTurns: AgentTurnRecord[];
   notifications: AgentNotificationRecord[];
   userSettings: UserSettings;
+  conceptAliases: ConceptAliasRecord[];
+  conceptMergeSuggestions: ConceptMergeSuggestion[];
 }
 
 export interface AITimelinePersistenceStore {
@@ -167,6 +171,11 @@ export interface AITimelinePersistenceStore {
   saveAgentTurnRecords(records: AgentTurnRecord[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
   saveNotifications(records: AgentNotificationRecord[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
   saveUserSettings(settings: UserSettings, savedAt?: string | Date): AITimelinePersistenceSnapshot;
+  saveConceptAliases(records: ConceptAliasRecord[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
+  saveConceptMergeSuggestions(
+    records: ConceptMergeSuggestion[],
+    savedAt?: string | Date
+  ): AITimelinePersistenceSnapshot;
   saveUserMemory(
     userId: string,
     memory: UserMemory,
@@ -323,6 +332,26 @@ export function createAITimelinePersistenceStore(
 
       return cloneSnapshot(snapshot);
     },
+    saveConceptAliases(records, savedAt = new Date()) {
+      snapshot = {
+        ...snapshot,
+        updatedAt: normalizeDate(savedAt).toISOString(),
+        conceptAliases: normalizeConceptAliasesInput(records)
+      };
+      persist(storage, snapshot);
+
+      return cloneSnapshot(snapshot);
+    },
+    saveConceptMergeSuggestions(records, savedAt = new Date()) {
+      snapshot = {
+        ...snapshot,
+        updatedAt: normalizeDate(savedAt).toISOString(),
+        conceptMergeSuggestions: normalizeConceptMergeSuggestions(records)
+      };
+      persist(storage, snapshot);
+
+      return cloneSnapshot(snapshot);
+    },
     saveUserMemory(userId, memory, events = [], savedAt = new Date()) {
       const updatedAt = normalizeDate(savedAt).toISOString();
 
@@ -391,7 +420,9 @@ function createSnapshot(input: AITimelinePersistenceSnapshotInput = {}): AITimel
     sourceCandidates: input.sourceCandidates ?? [],
     agentTurns: (input.agentTurns ?? []).map((record) => normalizeAgentTurnRecord(record)),
     notifications: (input.notifications ?? []).map(normalizeNotificationRecord),
-    userSettings: normalizeUserSettings(input.userSettings)
+    userSettings: normalizeUserSettings(input.userSettings),
+    conceptAliases: normalizeConceptAliasesInput(input.conceptAliases ?? []),
+    conceptMergeSuggestions: normalizeConceptMergeSuggestions(input.conceptMergeSuggestions ?? [])
   };
 }
 
@@ -494,6 +525,114 @@ function normalizeUserSettings(value: unknown): UserSettings {
   const contentLanguage = parseContentLanguage(value.contentLanguage);
 
   return contentLanguage ? { contentLanguage } : {};
+}
+
+function normalizeConceptAliasesInput(value: unknown): ConceptAliasRecord[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const byCanonical = new Map<string, ConceptAliasRecord>();
+
+  for (const record of value) {
+    if (
+      !isRecord(record) ||
+      typeof record.canonical !== "string" ||
+      !Array.isArray(record.aliases) ||
+      (record.decidedBy !== "auto" && record.decidedBy !== "user") ||
+      typeof record.decidedAt !== "string"
+    ) {
+      continue;
+    }
+
+    const canonical = normalizeConceptText(record.canonical);
+    const canonicalKey = normalizeConceptKey(canonical);
+
+    if (!canonicalKey) {
+      continue;
+    }
+
+    const existing = byCanonical.get(canonicalKey);
+    const aliases = new Map<string, string>();
+
+    for (const alias of existing?.aliases ?? []) {
+      aliases.set(alias, alias);
+    }
+
+    for (const alias of record.aliases) {
+      if (typeof alias !== "string") {
+        continue;
+      }
+
+      const label = normalizeConceptText(alias);
+      const key = normalizeConceptKey(label);
+
+      if (key && label !== canonical) {
+        aliases.set(label, label);
+      }
+    }
+
+    byCanonical.set(canonicalKey, {
+      canonical: existing?.canonical ?? canonical,
+      aliases: Array.from(aliases.values()).sort((left, right) => left.localeCompare(right)),
+      decidedBy: existing?.decidedBy === "user" || record.decidedBy === "user" ? "user" : "auto",
+      decidedAt:
+        existing?.decidedAt && existing.decidedAt.localeCompare(record.decidedAt) < 0
+          ? existing.decidedAt
+          : record.decidedAt
+    });
+  }
+
+  return Array.from(byCanonical.values())
+    .filter((record) => record.aliases.length > 0)
+    .sort((left, right) => left.canonical.localeCompare(right.canonical));
+}
+
+function normalizeConceptMergeSuggestions(value: unknown): ConceptMergeSuggestion[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const byId = new Map<string, ConceptMergeSuggestion>();
+
+  for (const record of value) {
+    if (
+      !isRecord(record) ||
+      typeof record.id !== "string" ||
+      typeof record.left !== "string" ||
+      typeof record.right !== "string" ||
+      typeof record.createdAt !== "string" ||
+      !isConceptMergeSuggestionStatus(record.status)
+    ) {
+      continue;
+    }
+
+    byId.set(record.id, {
+      id: record.id,
+      left: normalizeConceptText(record.left),
+      right: normalizeConceptText(record.right),
+      leftExcerpt: typeof record.leftExcerpt === "string" ? record.leftExcerpt : undefined,
+      rightExcerpt: typeof record.rightExcerpt === "string" ? record.rightExcerpt : undefined,
+      createdAt: record.createdAt,
+      status: record.status,
+      decidedBy: record.decidedBy === "user" ? "user" : undefined,
+      decidedAt: typeof record.decidedAt === "string" ? record.decidedAt : undefined
+    });
+  }
+
+  return Array.from(byId.values()).sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+}
+
+function isConceptMergeSuggestionStatus(value: unknown): value is ConceptMergeSuggestion["status"] {
+  return value === "pending" || value === "merged" || value === "separate";
+}
+
+function normalizeConceptText(value: string): string {
+  return value.trim();
+}
+
+function normalizeConceptKey(value: string): string {
+  return normalizeConceptText(value).toLowerCase();
 }
 
 function createValidationRecords(

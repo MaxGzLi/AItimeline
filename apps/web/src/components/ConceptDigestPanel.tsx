@@ -1,19 +1,25 @@
-import type { Backlink, ConceptDigest } from "@aitimeline/core";
+import type { Backlink, ConceptAliasRecord, ConceptDigest } from "@aitimeline/core";
 import { Layers, Link2, XCircle } from "lucide-react";
-import { formatConceptRole } from "../lib/format";
+import { formatConceptRole, formatDueDate } from "../lib/format";
 import { t } from "../lib/i18n";
 
 export function ConceptDigestPanel({
   backlinks,
+  conceptAliases,
   digest,
   onClose,
-  onOpenCardId
+  onOpenCardId,
+  onUnmergeAlias
 }: {
   backlinks: Backlink[];
+  conceptAliases: ConceptAliasRecord[];
   digest: ConceptDigest;
   onClose: () => void;
   onOpenCardId: (cardId: string) => void;
+  onUnmergeAlias: (canonical: string, alias: string) => Promise<void>;
 }) {
+  const aliasRecord = conceptAliases.find((record) => record.canonical === digest.concept);
+
   return (
     <div
       aria-label={t("concept.aria", { concept: digest.concept })}
@@ -35,6 +41,36 @@ export function ConceptDigestPanel({
             <XCircle size={18} />
           </button>
         </div>
+
+        {digest.firstSeenAt && digest.firstCardId && digest.firstCardTitle ? (
+          <div className="x-concept-origin">
+            <p>{t("concept.origin", { date: formatDueDate(digest.firstSeenAt), title: digest.firstCardTitle })}</p>
+            <button onClick={() => onOpenCardId(digest.firstCardId ?? "")} type="button">
+              {t("concept.openFirstCard")}
+            </button>
+            {digest.firstSourceOrigin ? (
+              <p className="x-muted-copy">
+                {t("concept.originQuestion", { date: formatDueDate(digest.firstSourceOrigin.createdAt) })}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+
+        {aliasRecord?.aliases.length ? (
+          <div className="x-concept-aliases">
+            <p className="x-label">{t("concept.aliases")}</p>
+            <div className="x-alias-list">
+              {aliasRecord.aliases.map((alias) => (
+                <span className="x-alias" key={alias}>
+                  {alias}
+                  <button onClick={() => void onUnmergeAlias(aliasRecord.canonical, alias)} type="button">
+                    {t("concept.unmerge")}
+                  </button>
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : null}
 
         <ol className="x-concept-list">
           {digest.entries.map((entry) => (

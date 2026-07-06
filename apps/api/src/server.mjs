@@ -6,10 +6,14 @@ import {
   applyUserMemoryEdits,
   askGrounded,
   advanceReviewState,
+  addConceptAliasDecision,
   buildDiscoveryConfirmationQuestions,
+  createAutomaticConceptAliases,
   countSeenReadSignalsByPostId,
   createAITimelinePersistenceStore,
   createBackgroundCurationPlan,
+  createConceptMergeSuggestion,
+  createConnectionNoteForImport,
   createEmptyUserMemory,
   createInitialReviewState,
   createOpenAICompatibleModelClientFromEnv,
@@ -29,6 +33,7 @@ import {
   getRestingReviewStates,
   isPureExposureSignal,
   mergeSourceRegistries,
+  removeConceptAlias,
   parseContentLanguage,
   rankPersonalizedTimeline,
   runConversationTurn,
@@ -153,6 +158,106 @@ export function createApiServer(options = {}) {
         });
 
         sendJson(response, 200, getSettingsResponse(persistenceStore, process.env, snapshot));
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/concept-merge-suggestions") {
+        const body = await readJsonBody(request);
+        requireString(body.left, "left");
+        requireString(body.right, "right");
+        const now = typeof body.createdAt === "string" ? body.createdAt : new Date().toISOString();
+        const suggestion = createConceptMergeSuggestion({
+          left: body.left,
+          right: body.right,
+          leftExcerpt: typeof body.leftExcerpt === "string" ? body.leftExcerpt : undefined,
+          rightExcerpt: typeof body.rightExcerpt === "string" ? body.rightExcerpt : undefined,
+          createdAt: now
+        });
+        const snapshot = persistenceStore.getSnapshot();
+        const existing = snapshot.conceptMergeSuggestions.find((record) => record.id === suggestion.id);
+        const nextSnapshot = existing
+          ? snapshot
+          : persistenceStore.saveConceptMergeSuggestions([...snapshot.conceptMergeSuggestions, suggestion], now);
+
+        sendJson(response, 200, {
+          suggestion: existing ?? suggestion,
+          snapshotSummary: summarizeSnapshot(nextSnapshot)
+        });
+        return;
+      }
+
+      if (request.method === "POST" && /^\/api\/concept-merge-suggestions\/[^/]+\/resolve$/.test(url.pathname)) {
+        const suggestionId = decodeURIComponent(
+          url.pathname.replace(/^\/api\/concept-merge-suggestions\//, "").replace(/\/resolve$/, "")
+        );
+        const body = await readJsonBody(request);
+        const decision = body.decision === "merge" || body.decision === "separate" ? body.decision : undefined;
+
+        if (!decision) {
+          throw new HttpError(400, "decision must be \"merge\" or \"separate\".");
+        }
+
+        const now = typeof body.decidedAt === "string" ? body.decidedAt : new Date().toISOString();
+        let snapshot = persistenceStore.getSnapshot();
+        const suggestion = snapshot.conceptMergeSuggestions.find((record) => record.id === suggestionId);
+
+        if (!suggestion) {
+          sendJson(response, 404, { error: "Concept merge suggestion not found." });
+          return;
+        }
+
+        const canonical = typeof body.canonical === "string" && body.canonical.trim() ? body.canonical.trim() : suggestion.left;
+        const alias = canonical === suggestion.right ? suggestion.left : suggestion.right;
+        const resolvedSuggestion = {
+          ...suggestion,
+          status: decision === "merge" ? "merged" : "separate",
+          decidedBy: "user",
+          decidedAt: now
+        };
+
+        if (decision === "merge") {
+          snapshot = persistenceStore.saveConceptAliases(
+            addConceptAliasDecision(snapshot.conceptAliases, {
+              canonical,
+              aliases: [alias],
+              decidedBy: "user",
+              decidedAt: now
+            }),
+            now
+          );
+        }
+
+        snapshot = persistenceStore.saveConceptMergeSuggestions(
+          [
+            ...snapshot.conceptMergeSuggestions.filter((record) => record.id !== suggestionId),
+            resolvedSuggestion
+          ],
+          now
+        );
+
+        sendJson(response, 200, {
+          suggestion: resolvedSuggestion,
+          conceptAliases: snapshot.conceptAliases,
+          snapshotSummary: summarizeSnapshot(snapshot)
+        });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/concept-aliases/unmerge") {
+        const body = await readJsonBody(request);
+        requireString(body.canonical, "canonical");
+        requireString(body.alias, "alias");
+        const now = new Date().toISOString();
+        const snapshot = persistenceStore.getSnapshot();
+        const nextSnapshot = persistenceStore.saveConceptAliases(
+          removeConceptAlias(snapshot.conceptAliases, body.canonical, body.alias),
+          now
+        );
+
+        sendJson(response, 200, {
+          conceptAliases: nextSnapshot.conceptAliases,
+          snapshotSummary: summarizeSnapshot(nextSnapshot)
+        });
         return;
       }
 
@@ -335,8 +440,11 @@ export function createApiServer(options = {}) {
 
       if (request.method === "POST" && url.pathname === "/api/import/article") {
         const body = await readJsonBody(request);
-        const importResult = await importArticle(body, importRunner, mediaRootDir, resolveContentLanguage(persistenceStore, process.env));
-        const { snapshot, releasePlan } = persistImportAndReleasePlan(persistenceStore, importResult);
+        const contentLanguage = resolveContentLanguage(persistenceStore, process.env);
+        const importResult = await importArticle(body, importRunner, mediaRootDir, contentLanguage);
+        const { snapshot, releasePlan } = persistImportAndReleasePlan(persistenceStore, importResult, {
+          contentLanguage
+        });
 
         sendJson(response, 200, {
           ...importResult,
@@ -348,8 +456,11 @@ export function createApiServer(options = {}) {
 
       if (request.method === "POST" && url.pathname === "/api/import/youtube") {
         const body = await readJsonBody(request);
-        const importResult = await importYouTube(body, importRunner, resolveContentLanguage(persistenceStore, process.env));
-        const { snapshot, releasePlan } = persistImportAndReleasePlan(persistenceStore, importResult);
+        const contentLanguage = resolveContentLanguage(persistenceStore, process.env);
+        const importResult = await importYouTube(body, importRunner, contentLanguage);
+        const { snapshot, releasePlan } = persistImportAndReleasePlan(persistenceStore, importResult, {
+          contentLanguage
+        });
 
         sendJson(response, 200, {
           ...importResult,
@@ -505,6 +616,8 @@ export function createApiServer(options = {}) {
 
         const filteredBatch = { ...batch, records };
         let snapshot = persistenceStore.saveCurationJobRecords(filteredBatch.records);
+        const beforeCurationImportSnapshot = snapshot;
+        const curationImportedPosts = [];
 
         for (const record of filteredBatch.records) {
           if (record.result?.discoveredSourceCandidates?.length) {
@@ -516,9 +629,12 @@ export function createApiServer(options = {}) {
           }
 
           if (record.result?.sourceImport) {
-            persistenceStore.saveSourceImportResult(record.result.sourceImport);
+            const completedAt = record.completedAt ?? filteredBatch.completedAt;
+            persistenceStore.saveSourceImportResult(record.result.sourceImport, completedAt);
+            curationImportedPosts.push(...record.result.sourceImport.posts);
             snapshot = persistenceStore.saveReleasePlan(
-              createSourcePostReleasePlan({ posts: record.result.sourceImport.posts })
+              createSourcePostReleasePlan({ posts: record.result.sourceImport.posts }),
+              completedAt
             );
 
             if (record.job.sourceCandidate) {
@@ -538,6 +654,17 @@ export function createApiServer(options = {}) {
               }
             }
           }
+        }
+
+        if (curationImportedPosts.length) {
+          const now = filteredBatch.completedAt ?? runNow;
+          snapshot = persistAutomaticConceptAliases(persistenceStore, persistenceStore.getSnapshot(), now);
+          snapshot = maybePersistConnectionNote(persistenceStore, {
+            beforeImport: beforeCurationImportSnapshot,
+            newPosts: curationImportedPosts,
+            now,
+            contentLanguage
+          });
         }
 
         sendJson(response, 200, {
@@ -721,6 +848,7 @@ async function handleAgentAsk(body, userId, persistenceStore, client, searchProv
   const snapshot = persistenceStore.getSnapshot();
   const now = typeof body.now === "string" ? body.now : new Date().toISOString();
   const memory = snapshot.userMemories.find((record) => record.userId === userId)?.memory;
+  const knowledgePosts = getKnowledgePosts(snapshot.posts);
   const registry = mergeSourceRegistries(...snapshot.sourceRegistries.map((record) => record.registry));
   const threadId =
     typeof body.threadId === "string" && body.threadId.trim()
@@ -731,7 +859,7 @@ async function handleAgentAsk(body, userId, persistenceStore, client, searchProv
     {
       question: body.question,
       postId: typeof body.postId === "string" ? body.postId : undefined,
-      posts: snapshot.posts,
+      posts: knowledgePosts,
       registry,
       memory,
       userSignals: toUserSignals(snapshot.interactionSignals),
@@ -987,6 +1115,14 @@ async function handleResearchQuestionJob(
       message: "Research question imports all failed or were blocked by validation."
     };
   }
+
+  persistAutomaticConceptAliases(persistenceStore, persistenceStore.getSnapshot(), now);
+  maybePersistConnectionNote(persistenceStore, {
+    beforeImport: snapshot,
+    newPosts: importedPosts,
+    now,
+    contentLanguage
+  });
 
   const answerPost = selectResearchAnswerPost(importedPosts, payload.question);
   const answerRegistry = mergeSourceRegistries(...importedResults.map((result) => result.sourceRegistry));
@@ -1353,7 +1489,7 @@ async function handleUserNote(body, userId, persistenceStore, client, searchProv
   const snapshot = persistenceStore.getSnapshot();
   const now = typeof body.createdAt === "string" ? body.createdAt : new Date().toISOString();
   const memory = snapshot.userMemories.find((record) => record.userId === userId)?.memory;
-  const libraryPosts = snapshot.posts;
+  const libraryPosts = getKnowledgePosts(snapshot.posts);
   const libraryConcepts = Array.from(new Set(libraryPosts.flatMap((post) => post.concepts)));
   const note = transformUserNote(body.text, { createdAt: now, libraryConcepts, contentLanguage });
 
@@ -1492,7 +1628,7 @@ async function handlePostReply(postId, body, userId, persistenceStore, client, s
     {
       question: commentText,
       postId,
-      posts: snapshot.posts,
+      posts: getKnowledgePosts(snapshot.posts),
       registry,
       memory,
       userSignals: toUserSignals(snapshot.interactionSignals),
@@ -1654,6 +1790,10 @@ function dedupePostsById(posts) {
   return Array.from(byId.values());
 }
 
+function getKnowledgePosts(posts) {
+  return posts.filter((post) => post.kind !== "connection_note");
+}
+
 function maybeCreateInitialReviewState(snapshot, signal, generatedAt) {
   if (!signal.liked && !signal.saved) {
     return undefined;
@@ -1663,7 +1803,9 @@ function maybeCreateInitialReviewState(snapshot, signal, generatedAt) {
     return undefined;
   }
 
-  if (!snapshot.posts.some((post) => post.id === signal.postId)) {
+  const post = snapshot.posts.find((candidate) => candidate.id === signal.postId);
+
+  if (!post || post.kind === "connection_note") {
     return undefined;
   }
 
@@ -1829,12 +1971,51 @@ function toSourceImportWorkerResult(result) {
   };
 }
 
-function persistImportAndReleasePlan(persistenceStore, importResult) {
-  persistenceStore.saveSourceImportResult(importResult);
+function persistImportAndReleasePlan(persistenceStore, importResult, options = {}) {
+  const beforeImport = persistenceStore.getSnapshot();
+  const savedAt = options.savedAt ?? new Date().toISOString();
+  persistenceStore.saveSourceImportResult(importResult, savedAt);
+  let snapshot = persistenceStore.getSnapshot();
+  snapshot = persistAutomaticConceptAliases(persistenceStore, snapshot, savedAt);
+  snapshot = maybePersistConnectionNote(persistenceStore, {
+    beforeImport,
+    newPosts: importResult.posts,
+    now: savedAt,
+    contentLanguage: options.contentLanguage
+  });
   const releasePlan = createSourcePostReleasePlan({ posts: importResult.posts });
-  const snapshot = persistenceStore.saveReleasePlan(releasePlan);
+  snapshot = persistenceStore.saveReleasePlan(releasePlan, savedAt);
 
   return { snapshot, releasePlan };
+}
+
+function persistAutomaticConceptAliases(persistenceStore, snapshot, now) {
+  const automaticAliases = createAutomaticConceptAliases(snapshot.posts, snapshot.conceptAliases, now);
+
+  if (!automaticAliases.length) {
+    return snapshot;
+  }
+
+  return persistenceStore.saveConceptAliases([...snapshot.conceptAliases, ...automaticAliases], now);
+}
+
+function maybePersistConnectionNote(persistenceStore, options) {
+  const currentSnapshot = persistenceStore.getSnapshot();
+  const note = createConnectionNoteForImport({
+    existingPosts: options.beforeImport.posts,
+    newPosts: options.newPosts,
+    interactionSignals: options.beforeImport.interactionSignals.map((record) => record.signal),
+    dismissedPosts: options.beforeImport.dismissedPosts,
+    conceptAliases: currentSnapshot.conceptAliases,
+    now: options.now,
+    contentLanguage: options.contentLanguage
+  });
+
+  if (!note) {
+    return currentSnapshot;
+  }
+
+  return persistenceStore.savePosts([note], options.now);
 }
 
 export function normalizeFollowupDedupeTitle(title) {
@@ -2087,6 +2268,7 @@ function getTimelineResponse(snapshot, nowValue, userId = "local-user") {
     recentSignals: interactionSignals,
     seenReadCounts: countSeenReadSignalsByPostId(interactionSignals),
     dueReviewPostIds,
+    conceptAliases: snapshot.conceptAliases,
     now
   }).map((post) => {
     const dueReviewState = dueReviewStateByPostId.get(post.id);
@@ -2253,7 +2435,9 @@ function summarizeSnapshot(snapshot) {
     reviewStates: snapshot.reviewStates.length,
     sourceCandidates: snapshot.sourceCandidates.length,
     agentTurns: snapshot.agentTurns.length,
-    notifications: snapshot.notifications.length
+    notifications: snapshot.notifications.length,
+    conceptAliases: snapshot.conceptAliases.length,
+    conceptMergeSuggestions: snapshot.conceptMergeSuggestions.length
   };
 }
 

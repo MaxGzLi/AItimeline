@@ -14,6 +14,31 @@ export type TrustState = "emerging" | "supported" | "contested";
 
 export type UserSignalType = "like" | "save" | "ask" | "review";
 
+export type KnowledgeCardKind = "knowledge" | "connection_note";
+
+export type ConceptAliasDecisionBy = "auto" | "user";
+
+export interface ConceptAliasRecord {
+  canonical: string;
+  aliases: string[];
+  decidedBy: ConceptAliasDecisionBy;
+  decidedAt: string;
+}
+
+export type ConceptMergeSuggestionStatus = "pending" | "merged" | "separate";
+
+export interface ConceptMergeSuggestion {
+  id: string;
+  left: string;
+  right: string;
+  leftExcerpt?: string;
+  rightExcerpt?: string;
+  createdAt: string;
+  status: ConceptMergeSuggestionStatus;
+  decidedBy?: "user";
+  decidedAt?: string;
+}
+
 export type SourceAssetKind = "transcript" | "text" | "metadata" | "image";
 
 export type TransformationStatus = "queued" | "extracting" | "transforming" | "ready" | "failed";
@@ -186,6 +211,7 @@ export interface SourceClaim {
 }
 
 export interface KnowledgeCard {
+  kind?: KnowledgeCardKind;
   id: string;
   title: string;
   hook?: string;
@@ -207,6 +233,7 @@ export interface KnowledgeCard {
   reviewPrompts?: KnowledgeReviewPrompt[];
   nextActions?: NextActionPolicy[];
   harnessVersion?: string;
+  connectionNote?: ConnectionNoteDetails;
 }
 
 export interface KnowledgePost extends KnowledgeCard {
@@ -238,6 +265,22 @@ export interface KnowledgeGraphEdge {
   targetConcept: string;
   evidence: string;
   weight: number;
+}
+
+export type ConnectionNoteReason = "distant_cluster" | "wake_dormant" | "wake_dismissed";
+
+export interface ConnectionNoteDetails {
+  oldPostId: string;
+  oldPostTitle: string;
+  newPostId: string;
+  newPostTitle: string;
+  evidence: string;
+  relation: KnowledgeEdgeRelation;
+  sourceConcept: string;
+  targetConcept: string;
+  reason: ConnectionNoteReason;
+  daysSinceOldCard: number;
+  restorePostId?: string;
 }
 
 export interface KnowledgeReviewPrompt {

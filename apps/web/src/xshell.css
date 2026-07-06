@@ -217,6 +217,48 @@ body:has(.x-frame) {
   background: var(--x-blue);
 }
 
+.x-merge-banner {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--x-line);
+  background: var(--x-module);
+}
+.x-merge-title {
+  margin: 3px 0 0;
+  font-weight: 700;
+}
+.x-merge-copy {
+  margin: 4px 0 0;
+  color: var(--x-muted);
+  font-size: 13px;
+}
+.x-merge-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.x-merge-actions button,
+.x-connection-links button,
+.x-concept-origin button,
+.x-alias button {
+  border: 1px solid var(--x-line);
+  background: var(--x-bg);
+  color: var(--x-ink);
+  border-radius: 999px;
+  padding: 7px 12px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.x-merge-actions button:hover,
+.x-connection-links button:hover,
+.x-concept-origin button:hover,
+.x-alias button:hover {
+  background: var(--x-hover);
+}
+
 /* ---------- 发帖框 ---------- */
 .x-composer {
   display: flex;
@@ -419,6 +461,20 @@ body:has(.x-frame) {
   font-family: inherit;
 }
 .x-tag:hover { text-decoration: underline; }
+.x-connection-note {
+  background: color-mix(in srgb, var(--x-repost) 6%, var(--x-bg));
+}
+.x-connection-body {
+  margin: 6px 0 10px;
+  color: var(--x-ink);
+  line-height: 1.45;
+}
+.x-connection-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 8px;
+}
 /* 论文附图:X 式媒体位。图底固定白色——论文图多为白底/透明 PNG,暗色主题下不能跟着变黑。 */
 .x-media {
   display: block;
@@ -1024,6 +1080,35 @@ body:has(.x-frame) {
 .x-concept-head h2 { margin: 4px 0 2px; font-size: 20px; font-weight: 800; }
 .x-concept-eyebrow { display: inline-flex; align-items: center; gap: 5px; }
 .x-concept-sub { margin: 0; color: var(--x-muted); font-size: 13px; }
+.x-concept-origin,
+.x-concept-aliases {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 14px;
+  padding: 12px;
+  border: 1px solid var(--x-line);
+  border-radius: 8px;
+  background: var(--x-module);
+}
+.x-concept-origin p,
+.x-concept-aliases p {
+  margin: 0;
+}
+.x-alias-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.x-alias {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 3px 3px 10px;
+  border: 1px solid var(--x-line);
+  border-radius: 999px;
+  background: var(--x-bg);
+  font-size: 13px;
+}
 .x-concept-list { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
 .x-concept-entry {
   display: flex;

@@ -1,4 +1,5 @@
 import type {
+  ConceptAliasRecord,
   InteractionSignal,
   KnowledgeCard,
   RankedKnowledgeCard,
@@ -6,6 +7,11 @@ import type {
   UserMemory,
   UserProfile
 } from "../types.js";
+import {
+  createConceptAliasResolver,
+  normalizeConceptKey,
+  slugConcept as slugResolvedConcept
+} from "../graph/conceptAliases.js";
 
 export type RecommendationIntent =
   | "deepen_interest"
@@ -22,6 +28,7 @@ export interface PersonalizedTimelineRankingInput {
   recentSignals?: InteractionSignal[];
   seenReadCounts?: Record<string, number>;
   dueReviewPostIds?: string[];
+  conceptAliases?: ConceptAliasRecord[];
   now?: string | Date;
 }
 
@@ -31,26 +38,32 @@ export interface PersonalizedRankedKnowledgeCard extends RankedKnowledgeCard {
 
 export function rankKnowledgeCards(
   cards: KnowledgeCard[],
-  profile: UserProfile
+  profile: UserProfile,
+  conceptAliases: ConceptAliasRecord[] = []
 ): RankedKnowledgeCard[] {
+  const resolver = createConceptAliasResolver(conceptAliases);
   return cards
     .map((card) => {
       const reasons: string[] = [];
       let score = 0;
+      const cardConcepts = card.concepts.map((concept) => resolver.resolveConcept(concept));
+      const profileInterests = profile.interests.map((concept) => resolver.resolveConcept(concept));
+      const profileWeakConcepts = profile.weakConcepts.map((concept) => resolver.resolveConcept(concept));
+      const profileKnownConcepts = profile.knownConcepts.map((concept) => resolver.resolveConcept(concept));
 
-      const conceptHits = card.concepts.filter((concept) => profile.interests.includes(concept));
+      const conceptHits = cardConcepts.filter((concept) => profileInterests.includes(concept));
       if (conceptHits.length > 0) {
         score += conceptHits.length * 20;
         reasons.push(`Matches interests: ${conceptHits.join(", ")}`);
       }
 
-      const weakHits = card.concepts.filter((concept) => profile.weakConcepts.includes(concept));
+      const weakHits = cardConcepts.filter((concept) => profileWeakConcepts.includes(concept));
       if (weakHits.length > 0) {
         score += weakHits.length * 16;
         reasons.push(`Strengthens weak concepts: ${weakHits.join(", ")}`);
       }
 
-      const noveltyHits = card.concepts.filter((concept) => !profile.knownConcepts.includes(concept));
+      const noveltyHits = cardConcepts.filter((concept) => !profileKnownConcepts.includes(concept));
       if (noveltyHits.length > 0) {
         score += Math.min(noveltyHits.length * 8, 24);
         reasons.push("Adds new concepts");
@@ -75,14 +88,15 @@ export function rankKnowledgeCards(
 export function rankPersonalizedTimeline(input: PersonalizedTimelineRankingInput): PersonalizedRankedKnowledgeCard[] {
   const now = normalizeDate(input.now ?? new Date());
   const memory = input.memory;
+  const resolver = createConceptAliasResolver(input.conceptAliases);
   const topicStateById = new Map((input.topicStates ?? []).map((state) => [state.topicId, state]));
   const recentSignals = [...(input.recentSignals ?? [])]
     .sort((left, right) => normalizeDate(right.createdAt).getTime() - normalizeDate(left.createdAt).getTime())
     .slice(0, 80);
-  const interestSet = createConceptSet(memory?.profile.interests ?? []);
-  const knownSet = createConceptSet(memory?.knowledge.knownConcepts ?? []);
-  const savedSet = createConceptSet(memory?.knowledge.savedConcepts ?? []);
-  const weakSet = createConceptSet(memory?.knowledge.weakConcepts ?? []);
+  const interestSet = createConceptSet(memory?.profile.interests ?? [], resolver);
+  const knownSet = createConceptSet(memory?.knowledge.knownConcepts ?? [], resolver);
+  const savedSet = createConceptSet(memory?.knowledge.savedConcepts ?? [], resolver);
+  const weakSet = createConceptSet(memory?.knowledge.weakConcepts ?? [], resolver);
   const recentCardSet = new Set(memory?.interaction.recentCardIds ?? []);
   const dueReviewPostIds = new Set(input.dueReviewPostIds ?? []);
 
@@ -91,15 +105,24 @@ export function rankPersonalizedTimeline(input: PersonalizedTimelineRankingInput
       const reasons: string[] = [];
       let score = 10;
       const isDueReview = dueReviewPostIds.has(card.id);
-      const topicId = getTopicId(card);
-      const topicState = topicStateById.get(topicId) ?? findTopicStateByConcept(topicStateById, card.concepts);
+      const cardConcepts = card.concepts.map((concept) => resolver.resolveConcept(concept));
+      const topicId = getTopicId(card, resolver);
+      const topicState = topicStateById.get(topicId) ?? findTopicStateByConcept(topicStateById, cardConcepts);
       const sameTopicSignals = recentSignals.filter(
-        (signal) => signal.topicId === topicId || signal.postId === card.id || hasConceptOverlap(signal.conceptIds, card.concepts)
+        (signal) =>
+          signal.topicId === topicId ||
+          signal.postId === card.id ||
+          hasConceptOverlap(signal.conceptIds, cardConcepts, resolver)
       );
-      const interestHits = findConceptHits(card.concepts, interestSet);
-      const savedHits = findConceptHits(card.concepts, savedSet);
-      const weakHits = findConceptHits(card.concepts, weakSet);
-      const knownHits = findConceptHits(card.concepts, knownSet);
+      const interestHits = findConceptHits(cardConcepts, interestSet, resolver);
+      const savedHits = findConceptHits(cardConcepts, savedSet, resolver);
+      const weakHits = findConceptHits(cardConcepts, weakSet, resolver);
+      const knownHits = findConceptHits(cardConcepts, knownSet, resolver);
+
+      if (card.kind === "connection_note") {
+        score += 42;
+        reasons.push("New connection found across your timeline");
+      }
 
       if (interestHits.length > 0) {
         score += interestHits.length * 18;
@@ -295,7 +318,8 @@ function findTopicStateByConcept(
   concepts: string[]
 ): TopicState | undefined {
   for (const concept of concepts) {
-    const match = topicStateById.get(slugConcept(concept)) ?? topicStateById.get(normalizeConcept(concept)) ?? topicStateById.get(concept);
+    const match =
+      topicStateById.get(slugConcept(concept)) ?? topicStateById.get(normalizeConcept(concept)) ?? topicStateById.get(concept);
 
     if (match) {
       return match;
@@ -305,32 +329,41 @@ function findTopicStateByConcept(
   return undefined;
 }
 
-function hasConceptOverlap(left: string[], right: string[]): boolean {
-  const rightSet = createConceptSet(right);
+function hasConceptOverlap(
+  left: string[],
+  right: string[],
+  resolver: ReturnType<typeof createConceptAliasResolver>
+): boolean {
+  const rightSet = createConceptSet(right, resolver);
 
-  return left.some((concept) => rightSet.has(normalizeConcept(concept)));
+  return left.some((concept) => rightSet.has(normalizeConcept(concept, resolver)));
 }
 
-function findConceptHits(concepts: string[], set: Set<string>): string[] {
-  return concepts.filter((concept) => set.has(normalizeConcept(concept)));
+function findConceptHits(
+  concepts: string[],
+  set: Set<string>,
+  resolver: ReturnType<typeof createConceptAliasResolver>
+): string[] {
+  return concepts.filter((concept) => set.has(normalizeConcept(concept, resolver)));
 }
 
-function createConceptSet(concepts: string[]): Set<string> {
-  return new Set(concepts.map(normalizeConcept));
+function createConceptSet(
+  concepts: string[],
+  resolver: ReturnType<typeof createConceptAliasResolver>
+): Set<string> {
+  return new Set(concepts.map((concept) => normalizeConcept(concept, resolver)));
 }
 
-function normalizeConcept(concept: string): string {
-  return concept.trim().toLowerCase();
+function normalizeConcept(concept: string, resolver?: ReturnType<typeof createConceptAliasResolver>): string {
+  return normalizeConceptKey(resolver ? resolver.resolveConcept(concept) : concept);
 }
 
-function getTopicId(card: KnowledgeCard): string {
-  return slugConcept(card.concepts[0] ?? card.id);
+function getTopicId(card: KnowledgeCard, resolver: ReturnType<typeof createConceptAliasResolver>): string {
+  return slugConcept(card.concepts[0] ?? card.id, resolver);
 }
 
-function slugConcept(concept: string): string {
-  // Keep Unicode letters/digits so non-ASCII concepts (e.g. Chinese) still slug to a
-  // distinct, non-empty key instead of collapsing to "" and matching each other.
-  return concept.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/(^-|-$)/g, "") || "general";
+function slugConcept(concept: string, resolver?: ReturnType<typeof createConceptAliasResolver>): string {
+  return slugResolvedConcept(resolver ? resolver.resolveConcept(concept) : concept) || "general";
 }
 
 function dedupe(items: string[]): string[] {

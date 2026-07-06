@@ -1,6 +1,8 @@
 import type {
   AgentTurnRecord,
   BackgroundSourceCandidate,
+  ConceptAliasRecord,
+  ConceptMergeSuggestion,
   InteractionSignal,
   KnowledgeCard,
   KnowledgeChunk,
@@ -102,6 +104,8 @@ export type ApiSnapshot = {
   }>;
   posts: KnowledgeCard[];
   sourceCandidates: SourceCandidateRecord[];
+  conceptAliases?: ConceptAliasRecord[];
+  conceptMergeSuggestions?: ConceptMergeSuggestion[];
   dismissedPosts?: Array<{
     postId: string;
     dismissedAt: string;

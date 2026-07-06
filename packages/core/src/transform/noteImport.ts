@@ -1,4 +1,4 @@
-import { slugConcept } from "../graph/knowledgeBoundary.js";
+import { slugConcept } from "../graph/conceptAliases.js";
 import { createSourceRegistry, hashContent } from "../source/sourceRegistry.js";
 import type { ContentLanguage } from "../harness/contentLanguage.js";
 import type {

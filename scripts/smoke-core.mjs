@@ -48,7 +48,17 @@ const { applyUserMemoryEdits, createEmptyUserMemory } = await import(
   "../packages/core/dist/memory/userMemoryControls.js"
 );
 const { buildCardConnections } = await import("../packages/core/dist/graph/cardConnections.js");
+const {
+  createAutomaticConceptAliases,
+  resolveConcept
+} = await import("../packages/core/dist/graph/conceptAliases.js");
+const {
+  buildConnectionNoteBody,
+  createConnectionNoteForImport,
+  evaluateConnectionNoteCandidates
+} = await import("../packages/core/dist/graph/connectionNotes.js");
 const { buildConceptDigest } = await import("../packages/core/dist/graph/conceptDigest.js");
+const { buildKnowledgeGraph } = await import("../packages/core/dist/graph/knowledgeGraph.js");
 const { createOpenAICompatibleModelClient, createOpenAICompatibleModelClientFromEnv } = await import(
   "../packages/core/dist/model/openaiCompatibleClient.js"
 );
@@ -106,6 +116,49 @@ function enqueueSingleJob(store, job) {
       cooledTopicIds: []
     }
   });
+}
+
+function makeSmokePost({
+  id,
+  title,
+  concepts,
+  createdAt = "2026-06-01T00:00:00.000Z",
+  graphEdges
+}) {
+  const edges =
+    graphEdges ??
+    concepts.slice(0, -1).map((concept, index) => ({
+      id: `${id}-edge-${index + 1}`,
+      sourceConcept: concept,
+      relation: "extends",
+      targetConcept: concepts[index + 1],
+      evidence: `${title} links ${concept} to ${concepts[index + 1]}.`,
+      weight: 0.72
+    }));
+
+  return {
+    id,
+    title,
+    hook: title,
+    thesis: title,
+    shortBody: title,
+    summary: title,
+    keyTakeaway: title,
+    concepts,
+    sources: [],
+    citations: [],
+    recommendedBecause: "Smoke fixture.",
+    trustState: "supported",
+    createdAt,
+    estimatedReadMinutes: 1,
+    difficulty: "beginner",
+    confidence: "high",
+    thread: [],
+    graphEdges: edges,
+    reviewPrompts: [],
+    nextActions: [],
+    harnessVersion: "smoke"
+  };
 }
 
 const result = transformMockYouTubeUrl(
@@ -257,6 +310,252 @@ assert.equal(zhMemory.entries[0].cardId, "zh-1", "the Chinese digest should reso
 const zhEval = buildConceptDigest("评估", zhCards);
 assert.equal(zhEval.cardCount, 1, "a different Chinese concept should slug to a different, non-empty key");
 assert.equal(zhEval.entries[0].cardId, "zh-2", "distinct Chinese concepts must not bleed into each other");
+
+const aliasCards = [
+  makeSmokePost({
+    id: "alias-1",
+    title: "Speculative Decoding A",
+    concepts: [" Speculative Decoding "]
+  }),
+  makeSmokePost({
+    id: "alias-2",
+    title: "Speculative Decoding B",
+    concepts: ["speculative decoding"]
+  }),
+  makeSmokePost({
+    id: "alias-3",
+    title: "Speculative Decoding C",
+    concepts: ["Ｓｐｅｃｕｌａｔｉｖｅ　Ｄｅｃｏｄｉｎｇ"]
+  })
+];
+const aliasCardTextBefore = JSON.stringify(aliasCards.map((card) => card.concepts));
+const automaticAliases = createAutomaticConceptAliases(aliasCards, [], "2026-07-06T00:00:00.000Z");
+const aliasGraph = buildKnowledgeGraph(
+  aliasCards,
+  aliasCards.map((card) => ({
+    id: `signal-${card.id}`,
+    cardId: card.id,
+    type: "save",
+    createdAt: card.createdAt
+  })),
+  { conceptAliases: automaticAliases }
+);
+
+assert.equal(aliasGraph.nodes.length, 1, "mechanical concept aliases should collapse graph nodes");
+assert.equal(
+  JSON.stringify(aliasCards.map((card) => card.concepts)),
+  aliasCardTextBefore,
+  "mechanical concept aliases must not mutate stored card concept text"
+);
+assert.equal(
+  resolveConcept(resolveConcept(" speculative decoding ", automaticAliases), automaticAliases),
+  resolveConcept("speculative decoding", automaticAliases),
+  "resolveConcept should be idempotent"
+);
+
+const chainedAliases = [
+  { canonical: "Alpha", aliases: ["Beta"], decidedBy: "user", decidedAt: "2026-07-06T00:00:00.000Z" },
+  { canonical: "Beta", aliases: ["Gamma"], decidedBy: "user", decidedAt: "2026-07-06T01:00:00.000Z" }
+];
+
+for (const orderedAliases of [chainedAliases, [...chainedAliases].reverse()]) {
+  assert.equal(
+    resolveConcept("Beta", orderedAliases),
+    "Alpha",
+    "chained merges (Beta->Alpha, Gamma->Beta) should resolve the middle concept to the root"
+  );
+  assert.equal(
+    resolveConcept("Gamma", orderedAliases),
+    "Alpha",
+    "chained merges should resolve transitively to the root regardless of record order"
+  );
+}
+
+const userAliasGraph = buildKnowledgeGraph(
+  [
+    makeSmokePost({ id: "alias-user-1", title: "English label", concepts: ["Speculative Decoding"] }),
+    makeSmokePost({ id: "alias-user-2", title: "Chinese label", concepts: ["投机解码"] })
+  ],
+  [
+    { id: "signal-alias-user-1", cardId: "alias-user-1", type: "save", createdAt: "2026-07-01T00:00:00.000Z" },
+    { id: "signal-alias-user-2", cardId: "alias-user-2", type: "save", createdAt: "2026-07-01T00:00:00.000Z" }
+  ],
+  {
+    conceptAliases: [
+      {
+        canonical: "Speculative Decoding",
+        aliases: ["投机解码"],
+        decidedBy: "user",
+        decidedAt: "2026-07-06T00:00:00.000Z"
+      }
+    ]
+  }
+);
+
+assert.equal(userAliasGraph.nodes.length, 1, "existing alias table entries should resolve matching concepts");
+
+const connectionOldPosts = [
+  makeSmokePost({
+    id: "old-kg",
+    title: "Old Knowledge Graph card",
+    concepts: ["Knowledge Graph", "Memory"],
+    createdAt: "2026-06-01T00:00:00.000Z"
+  }),
+  makeSmokePost({
+    id: "old-memory",
+    title: "Old Memory card",
+    concepts: ["Memory", "RAG"],
+    createdAt: "2026-06-02T00:00:00.000Z"
+  }),
+  makeSmokePost({
+    id: "old-rag",
+    title: "Old RAG card",
+    concepts: ["RAG", "Evaluation"],
+    createdAt: "2026-06-03T00:00:00.000Z"
+  })
+];
+const connectionNewPost = makeSmokePost({
+  id: "new-kg-eval",
+  title: "New evaluation import",
+  concepts: ["Knowledge Graph", "Evaluation"],
+  graphEdges: [
+    {
+      id: "edge-kg-eval",
+      sourceConcept: "Knowledge Graph",
+      relation: "evaluates",
+      targetConcept: "Evaluation",
+      evidence: "Knowledge Graph evaluation evidence from the imported source.",
+      weight: 0.9
+    }
+  ],
+  createdAt: "2026-07-06T00:00:00.000Z"
+});
+const distantCandidates = evaluateConnectionNoteCandidates({
+  existingPosts: connectionOldPosts,
+  newPosts: [connectionNewPost],
+  now: "2026-07-06T00:00:00.000Z"
+});
+
+assert.ok(
+  distantCandidates.some((candidate) => candidate.reason === "distant_cluster"),
+  "a >=3-hop old path should create a distant-cluster candidate"
+);
+
+const wakeCandidates = evaluateConnectionNoteCandidates({
+  existingPosts: [
+    makeSmokePost({
+      id: "old-notebooklm",
+      title: "Old NotebookLM card",
+      concepts: ["NotebookLM", "YouTube"],
+      createdAt: "2026-06-01T00:00:00.000Z"
+    }),
+    makeSmokePost({ id: "old-wake-hub-rag", title: "Wake hub RAG", concepts: ["Memory", "RAG"] }),
+    makeSmokePost({
+      id: "old-wake-hub-rec",
+      title: "Wake hub Recommendation",
+      concepts: ["Memory", "Recommendation"]
+    }),
+    makeSmokePost({
+      id: "old-wake-hub-eval",
+      title: "Wake hub Evaluation",
+      concepts: ["Memory", "Evaluation"]
+    })
+  ],
+  newPosts: [
+    makeSmokePost({
+      id: "new-notebooklm",
+      title: "New NotebookLM import",
+      concepts: ["NotebookLM", "YouTube"],
+      graphEdges: [
+        {
+          id: "edge-notebooklm-youtube",
+          sourceConcept: "NotebookLM",
+          relation: "applies",
+          targetConcept: "YouTube",
+          evidence: "NotebookLM applies source grounding to YouTube notes.",
+          weight: 0.8
+        }
+      ],
+      createdAt: "2026-07-06T00:00:00.000Z"
+    })
+  ],
+  now: "2026-07-06T00:00:00.000Z"
+});
+
+assert.equal(wakeCandidates[0]?.reason, "wake_dormant", "a 14-day dormant concept should create a wake candidate");
+
+const hubVetoCandidates = evaluateConnectionNoteCandidates({
+  existingPosts: connectionOldPosts,
+  newPosts: [
+    makeSmokePost({
+      id: "new-memory-eval",
+      title: "Hub edge import",
+      concepts: ["Memory", "Evaluation"],
+      graphEdges: [
+        {
+          id: "edge-memory-eval",
+          sourceConcept: "Memory",
+          relation: "evaluates",
+          targetConcept: "Evaluation",
+          evidence: "Memory evaluation evidence should be vetoed by the hub rule.",
+          weight: 0.9
+        }
+      ],
+      createdAt: "2026-07-06T00:00:00.000Z"
+    })
+  ],
+  now: "2026-07-06T00:00:00.000Z"
+});
+
+assert.equal(hubVetoCandidates.length, 0, "a top-decile hub endpoint should veto connection-note candidates");
+
+const batchNote = createConnectionNoteForImport({
+  existingPosts: connectionOldPosts,
+  newPosts: [
+    connectionNewPost,
+    makeSmokePost({
+      id: "new-kg-eval-2",
+      title: "Second new evaluation import",
+      concepts: ["Knowledge Graph", "Evaluation"],
+      graphEdges: [
+        {
+          id: "edge-kg-eval-2",
+          sourceConcept: "Knowledge Graph",
+          relation: "evaluates",
+          targetConcept: "Evaluation",
+          evidence: "Second Knowledge Graph evaluation evidence.",
+          weight: 0.9
+        }
+      ],
+      createdAt: "2026-07-06T00:00:00.000Z"
+    })
+  ],
+  now: "2026-07-06T00:00:00.000Z"
+});
+
+assert.ok(batchNote, "a qualifying import batch should create one connection note");
+assert.equal(batchNote.kind, "connection_note", "connection-note cards should carry the connection_note kind");
+assert.equal(batchNote.connectionNote.newPostId, "new-kg-eval", "a batch should keep only the highest-ranked note");
+assert.equal(batchNote.reviewPrompts.length, 0, "connection notes should not enter review");
+assert.ok(batchNote.summary.includes(batchNote.connectionNote.oldPostTitle), "connection note body should cite the old card title");
+assert.ok(batchNote.summary.includes(batchNote.connectionNote.newPostTitle), "connection note body should cite the new card title");
+assert.ok(batchNote.summary.includes(batchNote.connectionNote.evidence), "connection note body should include graph edge evidence");
+assert.ok(
+  buildConnectionNoteBody(batchNote.connectionNote).includes(batchNote.connectionNote.evidence),
+  "connection note template should preserve existing evidence text"
+);
+
+const limitedNote = createConnectionNoteForImport({
+  existingPosts: [
+    ...connectionOldPosts,
+    batchNote,
+    { ...batchNote, id: "connection-note-second", createdAt: "2026-07-06T12:00:00.000Z" }
+  ],
+  newPosts: [connectionNewPost],
+  now: "2026-07-06T13:00:00.000Z"
+});
+
+assert.equal(limitedNote, null, "daily connection-note limit should drop notes after two in a day");
 
 const fakePlayerResponse = {
   videoDetails: {

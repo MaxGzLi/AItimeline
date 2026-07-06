@@ -10,10 +10,14 @@ import {
   demoSignals,
   evaluateInteraction,
   rankKnowledgeCards,
+  resolveConcept,
+  slugConcept as slugCanonicalConcept,
   transformMockYouTubeUrl,
   type Backlink,
   type CardConnection,
+  type ConceptAliasRecord,
   type ConceptDigest,
+  type ConceptMergeSuggestion,
   type InteractionSignal,
   type KnowledgeCard,
   type KnowledgeChunk,
@@ -148,6 +152,8 @@ export function App() {
   const [sourceAssets, setSourceAssets] = useState<SourceAsset[]>([]);
   const [sourceChunks, setSourceChunks] = useState<KnowledgeChunk[]>([]);
   const [sourceCandidates, setSourceCandidates] = useState<SourceCandidateRecord[]>([]);
+  const [conceptAliases, setConceptAliases] = useState<ConceptAliasRecord[]>([]);
+  const [conceptMergeSuggestions, setConceptMergeSuggestions] = useState<ConceptMergeSuggestion[]>([]);
   const [dismissedPosts, setDismissedPosts] = useState<DismissedPostSummary[]>([]);
   const [agentTurns, setAgentTurns] = useState<AgentTurnSummary[]>([]);
   const [notifications, setNotifications] = useState<AgentNotification[]>([]);
@@ -388,14 +394,14 @@ export function App() {
     const byCard: Record<string, CardConnection[]> = {};
 
     for (const card of allCards) {
-      byCard[card.id] = buildCardConnections(card, allCards);
+      byCard[card.id] = buildCardConnections(card, allCards, { conceptAliases });
     }
 
     return byCard;
-  }, [allCards]);
+  }, [allCards, conceptAliases]);
   const conceptDigest = useMemo<ConceptDigest | null>(
-    () => (conceptView ? buildConceptDigest(conceptView, allCards) : null),
-    [conceptView, allCards]
+    () => (conceptView ? buildConceptDigest(conceptView, allCards, { conceptAliases }) : null),
+    [conceptView, allCards, conceptAliases]
   );
   const cardsById = useMemo(() => {
     const byId: Record<string, RankedKnowledgeCard> = {};
@@ -426,13 +432,18 @@ export function App() {
     const byConcept: Record<string, number> = {};
 
     for (const card of allCards) {
+      if (card.kind === "connection_note") {
+        continue;
+      }
+
       for (const concept of card.concepts) {
-        byConcept[concept] = (byConcept[concept] ?? 0) + 1;
+        const canonical = resolveConcept(concept, conceptAliases);
+        byConcept[canonical] = (byConcept[canonical] ?? 0) + 1;
       }
     }
 
     return byConcept;
-  }, [allCards]);
+  }, [allCards, conceptAliases]);
   // The X-style quote box under each post: the cited chunk's original text.
   const quoteByCard = useMemo(() => {
     const byCard: Record<string, string | undefined> = {};
@@ -593,13 +604,16 @@ export function App() {
     () => sourceAssets.find((asset) => asset.sourceId === selectedSourceId),
     [selectedSourceId, sourceAssets]
   );
-  const graph = useMemo(() => buildKnowledgeGraph(allCards, allSignals), [allCards, allSignals]);
+  const graph = useMemo(
+    () => buildKnowledgeGraph(allCards, allSignals, { conceptAliases }),
+    [allCards, allSignals, conceptAliases]
+  );
   const linkedGraph = useMemo(
-    () => buildLinkedKnowledgeGraph({ cards: allCards, signals: allSignals }),
-    [allCards, allSignals]
+    () => buildLinkedKnowledgeGraph({ cards: allCards, signals: allSignals, conceptAliases }),
+    [allCards, allSignals, conceptAliases]
   );
   // Wikilink backlinks, keyed by concept slug and card id (see buildBacklinkIndex).
-  const backlinkIndex = useMemo(() => buildBacklinkIndex(allCards), [allCards]);
+  const backlinkIndex = useMemo(() => buildBacklinkIndex(allCards, { conceptAliases }), [allCards, conceptAliases]);
   // One-hop patch of the linked graph around the open post, for the rail.
   const selectedLocalGraph = useMemo(
     () => (selectedCardId ? buildCardNeighborhoodGraph(linkedGraph, selectedCardId) : null),
@@ -610,16 +624,16 @@ export function App() {
     () =>
       reviewDueItems.map((item) => ({
         cardId: item.postId,
-        concept: reviewCardsById[item.postId]?.concepts[0] ?? item.postId,
+        concept: resolveConcept(reviewCardsById[item.postId]?.concepts[0] ?? item.postId, conceptAliases),
         dueAt: item.dueAt,
         intervalDays: item.intervalDays,
         strength: 0
       })),
-    [reviewDueItems, reviewCardsById]
+    [conceptAliases, reviewDueItems, reviewCardsById]
   );
   const boundary = useMemo(
-    () => buildKnowledgeBoundary({ cards: allCards, signals: allSignals }),
-    [allCards, allSignals]
+    () => buildKnowledgeBoundary({ cards: allCards, signals: allSignals, conceptAliases }),
+    [allCards, allSignals, conceptAliases]
   );
   const selectedThread = selectedCard ? aiThreads[selectedCard.id] ?? [] : [];
   const selectedFeedback = selectedCard ? learningFeedback[selectedCard.id] : undefined;
@@ -650,14 +664,14 @@ export function App() {
 
     collect(selectedCard.id);
     for (const concept of selectedCard.concepts) {
-      collect(slugConcept(concept));
+      collect(slugCanonicalConcept(resolveConcept(concept, conceptAliases)));
     }
 
     return results;
-  }, [backlinkIndex, selectedCard]);
+  }, [backlinkIndex, conceptAliases, selectedCard]);
   const conceptBacklinks = useMemo<Backlink[]>(
-    () => (conceptView ? backlinkIndex.get(slugConcept(conceptView)) ?? [] : []),
-    [backlinkIndex, conceptView]
+    () => (conceptView ? backlinkIndex.get(slugCanonicalConcept(resolveConcept(conceptView, conceptAliases))) ?? [] : []),
+    [backlinkIndex, conceptAliases, conceptView]
   );
   const hasQueuedScoutWork = useMemo(
     () => queuedJobCount > 0 || sourceCandidates.some((record) => record.status === "queued"),
@@ -971,6 +985,8 @@ export function App() {
       setSourceAssets(upsertById([], registryAssets));
       setSourceChunks(upsertById([], registryChunks));
       setSourceCandidates(snapshot.sourceCandidates);
+      setConceptAliases(snapshot.conceptAliases ?? []);
+      setConceptMergeSuggestions(snapshot.conceptMergeSuggestions ?? []);
       setDismissedPosts(dismissed.records);
       setAgentTurns(snapshot.agentTurns);
       setNotifications(notificationsResult.records);
@@ -1339,6 +1355,39 @@ export function App() {
     setConceptView(concept);
   }
 
+  async function resolveConceptSuggestion(suggestion: ConceptMergeSuggestion, decision: "merge" | "separate") {
+    const result = await apiRequest<{
+      suggestion: ConceptMergeSuggestion;
+      conceptAliases?: ConceptAliasRecord[];
+    }>(`/api/concept-merge-suggestions/${encodeURIComponent(suggestion.id)}/resolve`, {
+      method: "POST",
+      body: {
+        decision,
+        canonical: suggestion.left
+      }
+    });
+
+    setConceptMergeSuggestions((suggestions) =>
+      suggestions.map((item) => (item.id === suggestion.id ? result.suggestion : item))
+    );
+
+    if (result.conceptAliases) {
+      setConceptAliases(result.conceptAliases);
+    }
+
+    await refreshFromApi({ silent: true, mode: "buffer" });
+  }
+
+  async function unmergeConceptAlias(canonical: string, alias: string) {
+    const result = await apiRequest<{ conceptAliases: ConceptAliasRecord[] }>("/api/concept-aliases/unmerge", {
+      method: "POST",
+      body: { canonical, alias }
+    });
+
+    setConceptAliases(result.conceptAliases);
+    await refreshFromApi({ silent: true, mode: "buffer" });
+  }
+
   function handleOpenCardFromConcept(cardId: string) {
     setConceptView(null);
     handleOpenCardId(cardId);
@@ -1643,6 +1692,9 @@ export function App() {
     (record) => record.status === "pending" || record.status === "queued"
   ).length;
   const unreadNotificationCount = notifications.filter((notification) => !notification.readAt).length;
+  const activeDismissedPostIds = new Set(
+    dismissedPosts.filter((record) => record.isActive).map((record) => record.postId)
+  );
   const agentTurnStatusRank = {
     pending_confirmation: 0,
     researching: 1,
@@ -1847,6 +1899,7 @@ export function App() {
                     card={card}
                     cards={allCards}
                     connections={connectionsByCard[card.id] ?? []}
+                    dismissedPostIds={activeDismissedPostIds}
                     isFocused={index === focusedIndex}
                     key={card.id}
                     onDwell={handleDwell}
@@ -1856,6 +1909,7 @@ export function App() {
                     onOpenCardId={handleOpenCardId}
                     onOpenConcept={handleOpenConcept}
                     onReply={handleReply}
+                    onRestorePost={restoreDismissedPost}
                     onReviewComplete={handleReviewComplete}
                     onSave={handleSave}
                     onSkip={handleSkip}
@@ -1889,9 +1943,11 @@ export function App() {
           <GraphView
             boundary={boundary}
             cardCountByConcept={cardCountByConcept}
+            conceptMergeSuggestions={conceptMergeSuggestions.filter((suggestion) => suggestion.status === "pending")}
             linkedGraph={linkedGraph}
             onOpenCardId={handleOpenCardId}
             onOpenConcept={handleOpenConcept}
+            onResolveConceptSuggestion={resolveConceptSuggestion}
           />
         ) : null}
 
@@ -1987,9 +2043,11 @@ export function App() {
 
       {conceptDigest && conceptDigest.cardCount > 0 ? (
         <ConceptDigestPanel
+          conceptAliases={conceptAliases}
           backlinks={conceptBacklinks}
           digest={conceptDigest}
           onClose={() => setConceptView(null)}
+          onUnmergeAlias={unmergeConceptAlias}
           onOpenCardId={handleOpenCardFromConcept}
         />
       ) : null}
