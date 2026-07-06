@@ -5,6 +5,12 @@ import {
   classifyConceptZone,
   type KnowledgeBoundaryZone
 } from "./knowledgeBoundary.js";
+import {
+  createAutomaticConceptAliases,
+  createConceptAliasResolver,
+  slugConcept,
+  type ConceptAliasOptions
+} from "./conceptAliases.js";
 
 export type WikilinkKind = "concept" | "card" | "ghost";
 
@@ -101,21 +107,32 @@ export function parseWikilinks(text: string): Wikilink[] {
  * slug) wins over a card title (exact, case-insensitive); anything unmatched is
  * a ghost link waiting to be filled in.
  */
-export function resolveWikilink(target: string, context: { cards: KnowledgeCard[] }): ResolvedWikilink {
+export function resolveWikilink(target: string, context: { cards: KnowledgeCard[] } & ConceptAliasOptions): ResolvedWikilink {
+  const resolver = createConceptAliasResolver([
+    ...(context.conceptAliases ?? []),
+    ...createAutomaticConceptAliases(context.cards, context.conceptAliases)
+  ]);
   const trimmed = target.trim();
-  const lowered = trimmed.toLowerCase();
-  const slug = slugConcept(trimmed);
+  const slug = resolver.slugConcept(trimmed);
 
   for (const card of context.cards) {
+    if (card.kind === "connection_note") {
+      continue;
+    }
+
     for (const concept of card.concepts) {
-      if (concept.toLowerCase() === lowered || slugConcept(concept) === slug) {
-        return { kind: "concept", targetId: slugConcept(concept), label: concept };
+      if (resolver.slugConcept(concept) === slug) {
+        return {
+          kind: "concept",
+          targetId: resolver.slugConcept(concept),
+          label: resolver.resolveConcept(concept)
+        };
       }
     }
   }
 
   for (const card of context.cards) {
-    if (card.title.toLowerCase() === lowered) {
+    if (card.title.toLowerCase() === trimmed.toLowerCase()) {
       return { kind: "card", targetId: card.id, label: card.title };
     }
   }
@@ -129,7 +146,7 @@ export function resolveWikilink(target: string, context: { cards: KnowledgeCard[
  * `targetId` (concept slug / card id / ghost slug) so a card view can look up
  * both its own id and its concepts.
  */
-export function buildBacklinkIndex(cards: KnowledgeCard[]): Map<string, Backlink[]> {
+export function buildBacklinkIndex(cards: KnowledgeCard[], options: ConceptAliasOptions = {}): Map<string, Backlink[]> {
   const index = new Map<string, Backlink[]>();
 
   const push = (targetId: string, backlink: Backlink) => {
@@ -150,9 +167,13 @@ export function buildBacklinkIndex(cards: KnowledgeCard[]): Map<string, Backlink
   };
 
   for (const card of cards) {
+    if (card.kind === "connection_note") {
+      continue;
+    }
+
     for (const text of authoredTexts(card)) {
       for (const link of parseWikilinks(text)) {
-        const resolved = resolveWikilink(link.target, { cards });
+        const resolved = resolveWikilink(link.target, { cards, conceptAliases: options.conceptAliases });
         push(resolved.targetId, {
           fromPostId: card.id,
           fromTitle: card.title,
@@ -176,10 +197,15 @@ export function buildBacklinkIndex(cards: KnowledgeCard[]): Map<string, Backlink
 export function buildLinkedKnowledgeGraph(input: {
   cards: KnowledgeCard[];
   signals: UserSignal[];
-}): LinkedKnowledgeGraph {
+} & ConceptAliasOptions): LinkedKnowledgeGraph {
   const { cards, signals } = input;
-  const conceptGraph = buildKnowledgeGraph(cards, signals);
-  const boundary = buildKnowledgeBoundary({ cards, signals });
+  const graphCards = cards.filter((card) => card.kind !== "connection_note");
+  const conceptGraph = buildKnowledgeGraph(graphCards, signals, { conceptAliases: input.conceptAliases });
+  const boundary = buildKnowledgeBoundary({ cards: graphCards, signals, conceptAliases: input.conceptAliases });
+  const resolver = createConceptAliasResolver([
+    ...(input.conceptAliases ?? []),
+    ...createAutomaticConceptAliases(graphCards, input.conceptAliases)
+  ]);
 
   const nodes = new Map<string, LinkedGraphNode>();
   const edges = new Map<string, LinkedGraphEdge>();
@@ -190,7 +216,7 @@ export function buildLinkedKnowledgeGraph(input: {
       kind: "concept",
       label: node.label,
       weight: node.weight,
-      zone: classifyConceptZone(boundary, node.label)
+      zone: classifyConceptZone(boundary, node.label, { conceptAliases: input.conceptAliases })
     });
   }
 
@@ -203,12 +229,12 @@ export function buildLinkedKnowledgeGraph(input: {
         kind: "concept",
         label,
         weight: 0,
-        zone: classifyConceptZone(boundary, label)
+        zone: classifyConceptZone(boundary, label, { conceptAliases: input.conceptAliases })
       });
     }
   };
 
-  for (const card of cards) {
+  for (const card of graphCards) {
     const isNote = card.sources[0]?.type === "user_note";
     nodes.set(card.id, {
       id: card.id,
@@ -228,9 +254,9 @@ export function buildLinkedKnowledgeGraph(input: {
 
   // Card → concept "mentions" edges, only to concepts that surfaced as hubs so
   // no edge dangles off a missing node.
-  for (const card of cards) {
+  for (const card of graphCards) {
     for (const concept of card.concepts) {
-      const slug = slugConcept(concept);
+      const slug = resolver.slugConcept(concept);
 
       if (conceptNodeIds.has(slug)) {
         addEdge(card.id, slug, "mentions");
@@ -244,7 +270,7 @@ export function buildLinkedKnowledgeGraph(input: {
   for (const card of cards) {
     for (const text of authoredTexts(card)) {
       for (const link of parseWikilinks(text)) {
-        const resolved = resolveWikilink(link.target, { cards });
+        const resolved = resolveWikilink(link.target, { cards: graphCards, conceptAliases: input.conceptAliases });
 
         if (resolved.kind === "concept") {
           ensureConceptNode(resolved.targetId, resolved.label);
@@ -311,8 +337,4 @@ function extractSnippet(text: string, start: number, end: number): string {
   return `${pre}${window}${post}`.replace(/\s+/g, " ").trim();
 }
 
-function slugConcept(concept: string): string {
-  // Unicode-aware so non-ASCII concepts keep a distinct key, matching the slug
-  // used for concept-graph node ids (see knowledgeGraph.ts).
-  return concept.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/(^-|-$)/g, "");
-}
+export { slugConcept };

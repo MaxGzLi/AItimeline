@@ -1,4 +1,9 @@
 import type { KnowledgeCard, KnowledgeEdgeRelation } from "../types.js";
+import {
+  createAutomaticConceptAliases,
+  createConceptAliasResolver,
+  type ConceptAliasOptions
+} from "./conceptAliases.js";
 
 export type CardConnectionKind = "builds_on" | "leads_to" | "contrast" | "related";
 
@@ -14,7 +19,7 @@ export interface CardConnection {
   weight: number;
 }
 
-export interface BuildCardConnectionsOptions {
+export interface BuildCardConnectionsOptions extends ConceptAliasOptions {
   maxPerKind?: number;
 }
 
@@ -36,9 +41,17 @@ export function buildCardConnections(
   allCards: KnowledgeCard[],
   options: BuildCardConnectionsOptions = {}
 ): CardConnection[] {
+  if (card.kind === "connection_note") {
+    return [];
+  }
+
   const maxPerKind = options.maxPerKind ?? defaultMaxPerKind;
-  const others = allCards.filter((candidate) => candidate.id !== card.id);
-  const conceptIndex = buildConceptIndex(others);
+  const others = allCards.filter((candidate) => candidate.kind !== "connection_note" && candidate.id !== card.id);
+  const resolver = createConceptAliasResolver([
+    ...(options.conceptAliases ?? []),
+    ...createAutomaticConceptAliases(allCards, options.conceptAliases)
+  ]);
+  const conceptIndex = buildConceptIndex(others, resolver);
   const best = new Map<string, CardConnection>();
 
   const consider = (connection: CardConnection) => {
@@ -54,11 +67,13 @@ export function buildCardConnections(
   for (const edge of card.graphEdges ?? []) {
     const kind = relationToKind(edge.relation);
 
-    for (const match of conceptIndex.get(slugConcept(edge.targetConcept)) ?? []) {
+    const concept = resolver.resolveConcept(edge.targetConcept);
+
+    for (const match of conceptIndex.get(resolver.slugConcept(concept)) ?? []) {
       consider({
         kind,
         relation: edge.relation,
-        concept: edge.targetConcept,
+        concept,
         cardId: match.cardId,
         title: match.title,
         evidence: edge.evidence,
@@ -69,10 +84,12 @@ export function buildCardConnections(
 
   // 2) Shared-concept fallback so fragments still connect before edges line up.
   for (const concept of card.concepts) {
-    for (const match of conceptIndex.get(slugConcept(concept)) ?? []) {
+    const label = resolver.resolveConcept(concept);
+
+    for (const match of conceptIndex.get(resolver.slugConcept(label)) ?? []) {
       consider({
         kind: "related",
-        concept,
+        concept: label,
         cardId: match.cardId,
         title: match.title,
         weight: sharedConceptWeight
@@ -91,7 +108,10 @@ export function buildCardConnections(
   return capPerKind(connections, maxPerKind);
 }
 
-function buildConceptIndex(cards: KnowledgeCard[]): Map<string, CardConceptRef[]> {
+function buildConceptIndex(
+  cards: KnowledgeCard[],
+  resolver: ReturnType<typeof createConceptAliasResolver>
+): Map<string, CardConceptRef[]> {
   const index = new Map<string, CardConceptRef[]>();
 
   for (const card of cards) {
@@ -99,12 +119,12 @@ function buildConceptIndex(cards: KnowledgeCard[]): Map<string, CardConceptRef[]
     const slugs = new Set<string>();
 
     for (const concept of card.concepts) {
-      slugs.add(slugConcept(concept));
+      slugs.add(resolver.slugConcept(concept));
     }
 
     for (const edge of card.graphEdges ?? []) {
-      slugs.add(slugConcept(edge.sourceConcept));
-      slugs.add(slugConcept(edge.targetConcept));
+      slugs.add(resolver.slugConcept(edge.sourceConcept));
+      slugs.add(resolver.slugConcept(edge.targetConcept));
     }
 
     for (const slug of slugs) {
@@ -150,13 +170,4 @@ function capPerKind(connections: CardConnection[], maxPerKind: number): CardConn
   }
 
   return result;
-}
-
-function slugConcept(concept: string): string {
-  // Keep Unicode letters/digits so non-ASCII concepts (e.g. Chinese) slug to a distinct,
-  // non-empty key instead of collapsing to "" and matching every other concept.
-  return concept
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, "-")
-    .replace(/(^-|-$)/g, "");
 }

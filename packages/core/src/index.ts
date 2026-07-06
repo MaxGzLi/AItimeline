@@ -6,6 +6,8 @@ export * from "./discovery/searchProvider.js";
 export * from "./discovery/sourceDiscovery.js";
 export * from "./fixtures.js";
 export * from "./graph/cardConnections.js";
+export * from "./graph/connectionNotes.js";
+export * from "./graph/conceptAliases.js";
 export * from "./graph/conceptDigest.js";
 export * from "./graph/knowledgeBoundary.js";
 export * from "./graph/knowledgeGraph.js";

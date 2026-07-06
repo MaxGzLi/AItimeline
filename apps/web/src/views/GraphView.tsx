@@ -1,4 +1,4 @@
-import type { KnowledgeBoundaryView, LinkedKnowledgeGraph } from "@aitimeline/core";
+import type { ConceptMergeSuggestion, KnowledgeBoundaryView, LinkedKnowledgeGraph } from "@aitimeline/core";
 import { Fragment, useState } from "react";
 import { LinkedGraphCanvas } from "../components/LinkedGraphCanvas";
 import { t } from "../lib/i18n";
@@ -19,17 +19,22 @@ type GraphTab = "graph" | "boundary";
 export function GraphView({
   boundary,
   cardCountByConcept,
+  conceptMergeSuggestions,
   linkedGraph,
   onOpenCardId,
-  onOpenConcept
+  onOpenConcept,
+  onResolveConceptSuggestion
 }: {
   boundary: KnowledgeBoundaryView;
   cardCountByConcept: Record<string, number>;
+  conceptMergeSuggestions: ConceptMergeSuggestion[];
   linkedGraph: LinkedKnowledgeGraph;
   onOpenCardId: (cardId: string) => void;
   onOpenConcept: (concept: string) => void;
+  onResolveConceptSuggestion: (suggestion: ConceptMergeSuggestion, decision: "merge" | "separate") => Promise<void>;
 }) {
   const [tab, setTab] = useState<GraphTab>("graph");
+  const suggestion = conceptMergeSuggestions[0];
 
   return (
     <>
@@ -52,6 +57,28 @@ export function GraphView({
           </button>
         ))}
       </div>
+
+      {suggestion ? (
+        <section className="x-merge-banner" aria-label={t("graph.merge.aria")}>
+          <div>
+            <p className="x-label">{t("graph.merge.label")}</p>
+            <p className="x-merge-title">{t("graph.merge.title", { left: suggestion.left, right: suggestion.right })}</p>
+            {suggestion.leftExcerpt || suggestion.rightExcerpt ? (
+              <p className="x-merge-copy">
+                {[suggestion.leftExcerpt, suggestion.rightExcerpt].filter(Boolean).join(" / ")}
+              </p>
+            ) : null}
+          </div>
+          <div className="x-merge-actions">
+            <button onClick={() => void onResolveConceptSuggestion(suggestion, "merge")} type="button">
+              {t("graph.merge.accept")}
+            </button>
+            <button onClick={() => void onResolveConceptSuggestion(suggestion, "separate")} type="button">
+              {t("graph.merge.reject")}
+            </button>
+          </div>
+        </section>
+      ) : null}
 
       {tab === "graph" ? (
         linkedGraph.nodes.length === 0 ? (

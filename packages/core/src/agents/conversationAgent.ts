@@ -4,10 +4,10 @@ import type { ModelClient } from "../harness/modelRunner.js";
 import {
   buildKnowledgeBoundary,
   classifyConceptZone,
-  slugConcept,
   type KnowledgeBoundaryView,
   type KnowledgeBoundaryZone
 } from "../graph/knowledgeBoundary.js";
+import { slugConcept } from "../graph/conceptAliases.js";
 import { planDiscoveryQueries } from "../discovery/sourceDiscovery.js";
 import type { InteractionSignal, KnowledgePost, SourceRegistry, UserMemory, UserSignal } from "../types.js";
 import type { AgentTurnRecord } from "../storage/persistenceStore.js";

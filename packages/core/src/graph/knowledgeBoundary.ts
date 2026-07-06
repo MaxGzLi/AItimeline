@@ -1,4 +1,5 @@
 import type { KnowledgeCard, UserMemory, UserSignal } from "../types.js";
+import { createAutomaticConceptAliases, createConceptAliasResolver, type ConceptAliasOptions } from "./conceptAliases.js";
 
 export type KnowledgeBoundaryZone = "inside" | "learning" | "frontier" | "dark";
 
@@ -12,7 +13,7 @@ export interface KnowledgeBoundaryView {
   zoneByConcept: Record<string, Exclude<KnowledgeBoundaryZone, "dark">>;
 }
 
-export interface BuildKnowledgeBoundaryInput {
+export interface BuildKnowledgeBoundaryInput extends ConceptAliasOptions {
   cards: KnowledgeCard[];
   signals?: UserSignal[];
   memory?: UserMemory;
@@ -23,17 +24,22 @@ export interface BuildKnowledgeBoundaryInput {
  * inside > learning > frontier precedence, dark = absent from the view.
  */
 export function buildKnowledgeBoundary(input: BuildKnowledgeBoundaryInput): KnowledgeBoundaryView {
+  const resolver = createConceptAliasResolver([
+    ...(input.conceptAliases ?? []),
+    ...createAutomaticConceptAliases(input.cards, input.conceptAliases)
+  ]);
   const zoneByConcept: Record<string, Exclude<KnowledgeBoundaryZone, "dark">> = {};
   const labels = new Map<string, string>();
   const assign = (concept: string, zone: Exclude<KnowledgeBoundaryZone, "dark">) => {
-    const slug = slugConcept(concept);
+    const label = resolver.resolveConcept(concept);
+    const slug = resolver.slugConcept(label);
 
     if (!slug) {
       return;
     }
 
     if (!labels.has(slug)) {
-      labels.set(slug, concept.trim());
+      labels.set(slug, label);
     }
 
     const current = zoneByConcept[slug];
@@ -50,6 +56,10 @@ export function buildKnowledgeBoundary(input: BuildKnowledgeBoundaryInput): Know
   );
 
   for (const card of input.cards) {
+    if (card.kind === "connection_note") {
+      continue;
+    }
+
     for (const concept of card.concepts) {
       assign(concept, activeCardIds.has(card.id) ? "learning" : "frontier");
     }
@@ -80,8 +90,14 @@ export function buildKnowledgeBoundary(input: BuildKnowledgeBoundaryInput): Know
   return view;
 }
 
-export function classifyConceptZone(view: KnowledgeBoundaryView, concept: string): KnowledgeBoundaryZone {
-  return view.zoneByConcept[slugConcept(concept)] ?? "dark";
+export function classifyConceptZone(
+  view: KnowledgeBoundaryView,
+  concept: string,
+  options: ConceptAliasOptions = {}
+): KnowledgeBoundaryZone {
+  const resolver = createConceptAliasResolver(options.conceptAliases);
+
+  return view.zoneByConcept[resolver.slugConcept(concept)] ?? "dark";
 }
 
 const zonePriority: Record<Exclude<KnowledgeBoundaryZone, "dark">, number> = {
@@ -89,7 +105,3 @@ const zonePriority: Record<Exclude<KnowledgeBoundaryZone, "dark">, number> = {
   learning: 2,
   frontier: 1
 };
-
-export function slugConcept(concept: string): string {
-  return concept.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
-}

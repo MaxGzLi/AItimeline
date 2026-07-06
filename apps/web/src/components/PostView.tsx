@@ -13,6 +13,7 @@ export function PostView({
   card,
   cards,
   connections,
+  dismissedPostIds,
   isFocused,
   onDwell,
   onImpression,
@@ -21,6 +22,7 @@ export function PostView({
   onOpenCardId,
   onOpenConcept,
   onReply,
+  onRestorePost,
   onReviewComplete,
   onSave,
   onSkip,
@@ -32,6 +34,7 @@ export function PostView({
   card: RankedKnowledgeCard;
   cards: KnowledgeCard[];
   connections: CardConnection[];
+  dismissedPostIds?: ReadonlySet<string>;
   isFocused?: boolean;
   onDwell: (card: RankedKnowledgeCard, dwellTimeMs: number) => void;
   onImpression?: (card: RankedKnowledgeCard) => void;
@@ -40,6 +43,7 @@ export function PostView({
   onOpenCardId: (cardId: string) => void;
   onOpenConcept: (concept: string) => void;
   onReply: (card: RankedKnowledgeCard, text: string) => Promise<void>;
+  onRestorePost?: (postId: string) => Promise<void>;
   onReviewComplete?: (card: RankedKnowledgeCard) => void;
   onSave: (card: RankedKnowledgeCard) => void;
   onSkip: (card: RankedKnowledgeCard) => void;
@@ -68,6 +72,7 @@ export function PostView({
   );
   const replyCount = commentBlocks.length;
   const reviewDueDays = card.reviewPrompts?.[0]?.dueInDays;
+  const note = card.kind === "connection_note" ? card.connectionNote : undefined;
 
   useEffect(() => {
     const node = postRef.current;
@@ -204,6 +209,51 @@ export function PostView({
       window.removeEventListener("resize", measure);
     };
   }, [card.id, card.shortBody, card.summary]);
+
+  if (note) {
+    return (
+      <article className={`x-post x-connection-note${isFocused ? " focused" : ""}`} ref={postRef}>
+        <span className="x-avatar agent" aria-hidden="true">
+          {t("connection.avatar")}
+        </span>
+        <div className="x-post-main">
+          <div className="x-head">
+            <span className="x-name">{t("connection.title")}</span>
+            <span className="x-meta">·</span>
+            <span className="x-meta">{formatRelativeTime(card.createdAt)}</span>
+          </div>
+          <div className="x-connection-body">
+            {t("connection.body", {
+              days: note.daysSinceOldCard,
+              oldTitle: note.oldPostTitle,
+              newTitle: note.newPostTitle,
+              evidence: note.evidence
+            })}
+          </div>
+          <div className="x-connection-links">
+            {dismissedPostIds?.has(note.oldPostId) ? null : (
+              <button onClick={() => onOpenCardId(note.oldPostId)} type="button">
+                {t("connection.openOld", { title: note.oldPostTitle })}
+              </button>
+            )}
+            <button onClick={() => onOpenCardId(note.newPostId)} type="button">
+              {t("connection.openNew", { title: note.newPostTitle })}
+            </button>
+            {note.restorePostId && onRestorePost && dismissedPostIds?.has(note.restorePostId) ? (
+              <button onClick={() => void onRestorePost(note.restorePostId ?? "")} type="button">
+                {t("connection.restore")}
+              </button>
+            ) : null}
+          </div>
+          <div className="x-acts">
+            <button className="x-act" onClick={() => onSkip(card)} title={t("post.notInterested")} type="button">
+              <XCircle size={18} />
+            </button>
+          </div>
+        </div>
+      </article>
+    );
+  }
 
   return (
     <>

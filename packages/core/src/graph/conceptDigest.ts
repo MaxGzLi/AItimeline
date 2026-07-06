@@ -1,4 +1,9 @@
-import type { KnowledgeCard, KnowledgeDifficulty, KnowledgeEdgeRelation } from "../types.js";
+import type { KnowledgeCard, KnowledgeDifficulty, KnowledgeEdgeRelation, SourceOrigin } from "../types.js";
+import {
+  createAutomaticConceptAliases,
+  createConceptAliasResolver,
+  type ConceptAliasOptions
+} from "./conceptAliases.js";
 
 export type ConceptDigestRole = "foundation" | "builds" | "applies" | "contrast";
 
@@ -16,6 +21,10 @@ export interface ConceptDigest {
   // Display spelling of the concept, taken from the first matching card.
   concept: string;
   cardCount: number;
+  firstSeenAt?: string;
+  firstCardId?: string;
+  firstCardTitle?: string;
+  firstSourceOrigin?: SourceOrigin;
   entries: ConceptDigestEntry[];
 }
 
@@ -38,21 +47,38 @@ const difficultyOrder: Record<KnowledgeDifficulty, number> = {
  * concept end to end instead of meeting it scattered across the stream. A card counts as
  * touching the concept when it lists the concept or when one of its graph edges names it.
  */
-export function buildConceptDigest(concept: string, allCards: KnowledgeCard[]): ConceptDigest {
-  const targetSlug = slugConcept(concept);
-  let label = concept;
+export function buildConceptDigest(
+  concept: string,
+  allCards: KnowledgeCard[],
+  options: ConceptAliasOptions = {}
+): ConceptDigest {
+  const resolver = createConceptAliasResolver([
+    ...(options.conceptAliases ?? []),
+    ...createAutomaticConceptAliases(allCards, options.conceptAliases)
+  ]);
+  const targetSlug = resolver.slugConcept(concept);
+  let label = resolver.resolveConcept(concept);
   const entries: ConceptDigestEntry[] = [];
+  let firstCard: KnowledgeCard | undefined;
 
   for (const card of allCards) {
-    const conceptLabel = card.concepts.find((candidate) => slugConcept(candidate) === targetSlug);
-    const relations = relationsTouchingConcept(card, targetSlug);
+    if (card.kind === "connection_note") {
+      continue;
+    }
+
+    const conceptLabel = card.concepts.find((candidate) => resolver.slugConcept(candidate) === targetSlug);
+    const relations = relationsTouchingConcept(card, targetSlug, resolver);
 
     if (!conceptLabel && relations.length === 0) {
       continue;
     }
 
     if (conceptLabel && label === concept) {
-      label = conceptLabel;
+      label = resolver.resolveConcept(conceptLabel);
+    }
+
+    if (!firstCard || card.createdAt.localeCompare(firstCard.createdAt) < 0) {
+      firstCard = card;
     }
 
     entries.push({
@@ -67,14 +93,26 @@ export function buildConceptDigest(concept: string, allCards: KnowledgeCard[]): 
 
   entries.sort(compareEntries(allCards));
 
-  return { concept: label, cardCount: entries.length, entries };
+  return {
+    concept: label,
+    cardCount: entries.length,
+    firstSeenAt: firstCard?.createdAt,
+    firstCardId: firstCard?.id,
+    firstCardTitle: firstCard?.title,
+    firstSourceOrigin: firstCard?.sources?.[0]?.origin,
+    entries
+  };
 }
 
-function relationsTouchingConcept(card: KnowledgeCard, targetSlug: string): KnowledgeEdgeRelation[] {
+function relationsTouchingConcept(
+  card: KnowledgeCard,
+  targetSlug: string,
+  resolver: ReturnType<typeof createConceptAliasResolver>
+): KnowledgeEdgeRelation[] {
   const relations: KnowledgeEdgeRelation[] = [];
 
   for (const edge of card.graphEdges ?? []) {
-    if (slugConcept(edge.sourceConcept) === targetSlug || slugConcept(edge.targetConcept) === targetSlug) {
+    if (resolver.slugConcept(edge.sourceConcept) === targetSlug || resolver.slugConcept(edge.targetConcept) === targetSlug) {
       relations.push(edge.relation);
     }
   }
@@ -115,13 +153,4 @@ function compareEntries(allCards: KnowledgeCard[]) {
 
     return (createdAt.get(left.cardId) ?? "").localeCompare(createdAt.get(right.cardId) ?? "");
   };
-}
-
-function slugConcept(concept: string): string {
-  // Keep Unicode letters/digits so non-ASCII concepts (e.g. Chinese) slug to a distinct,
-  // non-empty key instead of collapsing to "" and matching every other concept.
-  return concept
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, "-")
-    .replace(/(^-|-$)/g, "");
 }
