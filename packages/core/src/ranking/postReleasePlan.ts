@@ -34,7 +34,8 @@ export interface CreateSourcePostReleasePlanInput {
 }
 
 export const defaultSourcePostReleasePolicy: SourcePostReleasePolicy = {
-  maxImmediatePostsPerSource: 3,
+  // 与 maxPostsPerRun(4)对齐:论文板块卡固定 3-4 张,须一次性进时间线(spec:不做分批释放)。
+  maxImmediatePostsPerSource: 4,
   maxQueuedPostsPerSource: 12,
   minutesBetweenQueuedPosts: 90
 };
