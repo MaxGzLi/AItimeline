@@ -116,6 +116,8 @@ export function App() {
   const [candidateConcept, setCandidateConcept] = useState(demoProfile.interests[0] ?? "智能体");
   const [sourceImports, setSourceImports] = useState<SourceImport[]>([]);
   const [importedCards, setImportedCards] = useState<KnowledgeCard[]>([]);
+  // 后台同步到、但还没放进列表的新卡:顶部「显示 N 张新卡」点击后才插入(对标 X)。
+  const [pendingCards, setPendingCards] = useState<KnowledgeCard[]>([]);
   const [sourceAssets, setSourceAssets] = useState<SourceAsset[]>([]);
   const [sourceChunks, setSourceChunks] = useState<KnowledgeChunk[]>([]);
   const [sourceCandidates, setSourceCandidates] = useState<SourceCandidateRecord[]>([]);
@@ -163,6 +165,10 @@ export function App() {
   const pendingSignalSignatures = useRef<Record<string, string>>({});
   const curationRunInFlight = useRef(false);
   const refreshSequence = useRef(0);
+  // 缓冲同步要对比「当前列表」,但定时器闭包里的 state 会过期,用 ref 拿最新值。
+  const importedCardsRef = useRef<KnowledgeCard[]>([]);
+  // 本批生产的任务峰值:队列非空时记最大深度,算「生产中 x/N」;清空即复位。
+  const productionPeakRef = useRef(0);
   // Mirror of interactionSignals so stable callbacks (e.g. handleDwell) can read
   // the latest signals without stale closures and without impure state updaters.
   const interactionSignalsRef = useRef<InteractionSignals>({});
@@ -696,7 +702,7 @@ export function App() {
         return;
       }
 
-      void refreshFromApi({ silent: true });
+      void refreshFromApi({ silent: true, mode: "buffer" });
     };
     const interval = window.setInterval(refreshIfVisible, 60000);
 
@@ -712,7 +718,11 @@ export function App() {
     recordInteraction(card, { dwellTimeMs, skippedQuickly: false });
   }, []);
 
-  async function refreshFromApi(options: { silent?: boolean } = {}) {
+  useEffect(() => {
+    importedCardsRef.current = importedCards;
+  }, [importedCards]);
+
+  async function refreshFromApi(options: { silent?: boolean; mode?: "replace" | "buffer" } = {}) {
     const requestId = ++refreshSequence.current;
 
     if (!options.silent) {
@@ -737,12 +747,33 @@ export function App() {
       const registryAssets = snapshot.sourceRegistries.flatMap((record) => record.registry.assets);
       const registryChunks = snapshot.sourceRegistries.flatMap((record) => record.registry.chunks);
 
-      setImportedCards(timeline.posts);
+      // 缓冲模式:不打乱正在阅读的列表——服务端已删除的卡立即移除,已有卡原位
+      // 更新内容,新到的卡进缓冲区等「显示 N 张新卡」一次性插入。
+      const displayed = importedCardsRef.current;
+
+      if (options.mode === "buffer" && displayed.length > 0) {
+        const serverById = new Map(timeline.posts.map((post) => [post.id, post]));
+        const displayedIds = new Set(displayed.map((card) => card.id));
+
+        setImportedCards(
+          displayed.flatMap((card) => {
+            const fresh = serverById.get(card.id);
+            return fresh ? [fresh] : [];
+          })
+        );
+        setPendingCards(timeline.posts.filter((post) => !displayedIds.has(post.id)));
+      } else {
+        setImportedCards(timeline.posts);
+        setPendingCards([]);
+      }
+
       setSourceImports(timeline.sourceImports);
       setSourceAssets(upsertById([], registryAssets));
       setSourceChunks(upsertById([], registryChunks));
       setSourceCandidates(snapshot.sourceCandidates);
       setQueuedJobCount(queuedJobs.jobs.length);
+      productionPeakRef.current =
+        queuedJobs.jobs.length === 0 ? 0 : Math.max(productionPeakRef.current, queuedJobs.jobs.length);
       setAgentTurnCount(snapshot.agentTurns.length);
       setApiStatus("connected");
       setApiMessage("已连接本地 API");
@@ -795,7 +826,7 @@ export function App() {
       }));
     }
 
-    await refreshFromApi({ silent: true });
+    await refreshFromApi({ silent: true, mode: "buffer" });
   }
 
   async function syncMemoryForCard(card: KnowledgeCard, action: MemoryAction, question?: string): Promise<void> {
@@ -992,7 +1023,7 @@ export function App() {
           ? `${scoutLabel}处理了 ${result.records.length} 个任务 · 导入 ${importedCount} 个来源`
           : `${scoutLabel}已检查 · 没有到期任务`
       );
-      await refreshFromApi({ silent: true });
+      await refreshFromApi({ silent: true, mode: "buffer" });
     } catch (error) {
       setApiStatus("offline");
       setApiMessage(error instanceof Error ? error.message : "API 不可用");
@@ -1116,6 +1147,15 @@ export function App() {
     recordInteraction(card, { skippedQuickly: true, dwellTimeMs: 800, openedThread: false });
   }
 
+  function handleShowPendingCards() {
+    setImportedCards((cards) => {
+      const pendingIds = new Set(pendingCards.map((card) => card.id));
+      return [...pendingCards, ...cards.filter((card) => !pendingIds.has(card.id))];
+    });
+    setPendingCards([]);
+    window.scrollTo({ top: 0, behavior: scrollMotion() });
+  }
+
   // Post a public comment on a card: the API appends the user comment plus the
   // observer's grounded reply to the card's thread, and we replace the card so
   // the inline thread updates in place.
@@ -1134,7 +1174,7 @@ export function App() {
         : cards
     );
     recordInteraction(card, { askedQuestion: true, openedThread: true, dwellTimeMs: 12000 });
-    void refreshFromApi({ silent: true });
+    void refreshFromApi({ silent: true, mode: "buffer" });
   }
 
   async function handleDiscoverSources(action: AgentReplyAction) {
@@ -1161,7 +1201,7 @@ export function App() {
       }
 
       setDiscoveryRun({ status: "found", count: result.candidates.length });
-      void refreshFromApi({ silent: true });
+      void refreshFromApi({ silent: true, mode: "buffer" });
     } catch (error) {
       setDiscoveryRun({
         status: "error",
@@ -1388,6 +1428,17 @@ export function App() {
                 question={agentAskedQuestion}
                 response={agentResponse}
               />
+            ) : null}
+
+            {pendingCards.length > 0 ? (
+              <button className="x-newpill" onClick={handleShowPendingCards} type="button">
+                显示 {pendingCards.length} 张新卡
+              </button>
+            ) : queuedJobCount > 0 ? (
+              <div className="x-prodchip" role="status">
+                新内容生产中 {Math.max(0, productionPeakRef.current - queuedJobCount)}/
+                {Math.max(productionPeakRef.current, queuedJobCount)}
+              </div>
             ) : null}
 
             <section className="x-feedlist" aria-label="知识卡片">
