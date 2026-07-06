@@ -513,6 +513,8 @@ body:has(.x-frame) {
 .x-act.like:hover, .x-act.like.on { color: var(--x-like); }
 .x-act.repost:hover { color: var(--x-repost); }
 .x-act.on { color: var(--x-blue); }
+/* 时间线上的到期复习卡:「已复习」确认按钮,扁平蓝字 */
+.x-act.review { color: var(--x-blue); font-weight: 700; }
 /* ---------- 帖内评论线程 ---------- */
 .x-replies {
   margin-top: 4px;

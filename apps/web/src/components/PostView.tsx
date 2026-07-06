@@ -1,5 +1,5 @@
 import type { CardConnection, InteractionSignal, KnowledgeCard, RankedKnowledgeCard } from "@aitimeline/core";
-import { BadgeCheck, Bookmark, Clock, Heart, MessageCircle, Plus, Repeat2, XCircle } from "lucide-react";
+import { BadgeCheck, Bookmark, CheckCircle2, Clock, Heart, MessageCircle, Plus, Repeat2, RotateCcw, XCircle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { getCardMedia, resolveMediaUrl } from "../lib/api";
 import { formatConnectionKind, formatRelativeTime, getAgentInitials, getAgentName, slugConcept } from "../lib/format";
@@ -13,14 +13,17 @@ export function PostView({
   connections,
   isFocused,
   onDwell,
+  onImpression,
   onLike,
   onOpen,
   onOpenCardId,
   onOpenConcept,
   onReply,
+  onReviewComplete,
   onSave,
   onSkip,
   quoteText,
+  reviewDueAt,
   signal,
   wikilinkCandidates
 }: {
@@ -29,14 +32,17 @@ export function PostView({
   connections: CardConnection[];
   isFocused?: boolean;
   onDwell: (card: RankedKnowledgeCard, dwellTimeMs: number) => void;
+  onImpression?: (card: RankedKnowledgeCard) => void;
   onLike: (card: RankedKnowledgeCard) => void;
   onOpen: (card: RankedKnowledgeCard) => void;
   onOpenCardId: (cardId: string) => void;
   onOpenConcept: (concept: string) => void;
   onReply: (card: RankedKnowledgeCard, text: string) => Promise<void>;
+  onReviewComplete?: (card: RankedKnowledgeCard) => void;
   onSave: (card: RankedKnowledgeCard) => void;
   onSkip: (card: RankedKnowledgeCard) => void;
   quoteText?: string;
+  reviewDueAt?: string;
   signal?: InteractionSignal;
   wikilinkCandidates: WikilinkAutocompleteCandidate[];
 }) {
@@ -44,7 +50,7 @@ export function PostView({
   const bodyRef = useRef<HTMLParagraphElement | null>(null);
   const visibleSince = useRef<number | null>(null);
   const reportedDwellMs = useRef(0);
-  const [dismissed, setDismissed] = useState(false);
+  const impressionFired = useRef(false);
   const [threadOpen, setThreadOpen] = useState(false);
   const [bodyOverflows, setBodyOverflows] = useState(false);
   const primaryConcept = card.concepts[0] ?? "知识";
@@ -115,6 +121,56 @@ export function PostView({
     };
   }, [card, onDwell]);
 
+  // 纯曝光:卡片进入视口且持续 ≥1s 记一次(每卡最多一次,交给父级节流上报),
+  // 用于「曝光多次却从不阅读」的自动退场统计。只在时间线列表挂 onImpression。
+  useEffect(() => {
+    if (!onImpression) {
+      return;
+    }
+
+    const node = postRef.current;
+
+    if (!node || !("IntersectionObserver" in window)) {
+      return;
+    }
+
+    let timer: number | null = null;
+    const clearTimer = () => {
+      if (timer !== null) {
+        window.clearTimeout(timer);
+        timer = null;
+      }
+    };
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (impressionFired.current) {
+          return;
+        }
+
+        if (entry?.isIntersecting && entry.intersectionRatio >= 0.5) {
+          if (timer === null) {
+            timer = window.setTimeout(() => {
+              timer = null;
+              impressionFired.current = true;
+              onImpression(card);
+            }, 1000);
+          }
+          return;
+        }
+
+        clearTimer();
+      },
+      { threshold: [0, 0.5] }
+    );
+
+    observer.observe(node);
+
+    return () => {
+      clearTimer();
+      observer.disconnect();
+    };
+  }, [card, onImpression]);
+
   useEffect(() => {
     const node = bodyRef.current;
 
@@ -146,20 +202,16 @@ export function PostView({
     };
   }, [card.id, card.shortBody, card.summary]);
 
-  if (dismissed) {
-    return (
-      <div className="x-dismissed">
-        <span>不感兴趣 —— 以后会少推这类内容。</span>
-        <button onClick={() => setDismissed(false)} type="button">
-          撤销
-        </button>
-      </div>
-    );
-  }
-
   return (
     <>
-      {card.recommendedBecause && !isUserNote ? (
+      {reviewDueAt ? (
+        <div className="x-ctx">
+          <span className="x-ctxicon">
+            <RotateCcw size={15} />
+          </span>
+          复习 · 到期回顾一下这张卡
+        </div>
+      ) : card.recommendedBecause && !isUserNote ? (
         <div className="x-ctx">
           <span className="x-ctxicon">
             <Plus size={15} />
@@ -265,15 +317,18 @@ export function PostView({
               <Clock size={18} />
               {reviewDueDays !== undefined ? `${reviewDueDays} 天` : null}
             </button>
-            <button
-              className="x-act"
-              onClick={() => {
-                onSkip(card);
-                setDismissed(true);
-              }}
-              title="不感兴趣"
-              type="button"
-            >
+            {reviewDueAt && onReviewComplete ? (
+              <button
+                className="x-act review"
+                onClick={() => onReviewComplete(card)}
+                title="标记已复习"
+                type="button"
+              >
+                <CheckCircle2 size={18} />
+                已复习
+              </button>
+            ) : null}
+            <button className="x-act" onClick={() => onSkip(card)} title="不感兴趣" type="button">
               <XCircle size={18} />
             </button>
           </div>
