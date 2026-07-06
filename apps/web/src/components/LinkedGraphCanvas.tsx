@@ -13,6 +13,18 @@ interface SimNode {
   vy: number;
 }
 
+export interface LinkedGraphLayout {
+  nodes: Array<{
+    id: string;
+    kind: LinkedGraphNode["kind"];
+    label: string;
+    weight: number;
+    x: number;
+    y: number;
+    zone?: LinkedGraphNode["zone"];
+  }>;
+}
+
 interface Palette {
   bg: string;
   line: string;
@@ -45,10 +57,12 @@ const FIT_PADDING = 28;
 // are read live from CSS variables so the active theme wins.
 export function LinkedGraphCanvas({
   graph,
+  onLayoutSettled,
   onOpenConcept,
   onOpenCardId
 }: {
   graph: LinkedKnowledgeGraph;
+  onLayoutSettled?: (layout: LinkedGraphLayout) => void;
   onOpenConcept: (concept: string) => void;
   onOpenCardId: (cardId: string) => void;
 }) {
@@ -74,6 +88,8 @@ export function LinkedGraphCanvas({
   const userTookOverRef = useRef(false);
   const graphRef = useRef(graph);
   graphRef.current = graph;
+  const onLayoutSettledRef = useRef(onLayoutSettled);
+  onLayoutSettledRef.current = onLayoutSettled;
 
   // Stable handler refs so the effect below runs once (never tearing down the
   // simulation just because a parent callback identity changed).
@@ -481,6 +497,17 @@ export function LinkedGraphCanvas({
       }
 
       draw();
+      onLayoutSettledRef.current?.({
+        nodes: nodesRef.current.map((node) => ({
+          id: node.id,
+          kind: node.kind,
+          label: node.label,
+          weight: node.weight,
+          x: node.x,
+          y: node.y,
+          zone: node.zone
+        }))
+      });
     }
 
     function pointerToLocal(event: PointerEvent) {
