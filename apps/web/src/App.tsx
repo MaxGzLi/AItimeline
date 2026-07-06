@@ -38,7 +38,9 @@ import {
   Compass,
   GitBranch,
   Home,
+  Pause,
   PenLine,
+  Play,
   Settings,
   XCircle
 } from "lucide-react";
@@ -112,6 +114,7 @@ import type {
 type ViewKey = "timeline" | "discover" | "graph" | "review" | "notifications" | "agent" | "settings";
 
 const languageStorageKey = "aitl-language";
+const autoScoutStorageKey = "aitl-auto-scout";
 
 const navItems: Array<{ key: ViewKey; labelKey: string; icon: typeof Home }> = [
   { key: "timeline", labelKey: "nav.timeline", icon: Home },
@@ -174,7 +177,15 @@ export function App() {
   const [apiStatus, setApiStatus] = useState<ApiStatus>("checking");
   const [apiMessage, setApiMessage] = useState(() => t("api.connecting"));
   const [curationMessage, setCurationMessage] = useState(() => t("curation.default"));
-  const [autoScoutEnabled, setAutoScoutEnabled] = useState(true);
+  // Remembered across reloads: background production burns model credits, so a
+  // pause must survive until the user explicitly resumes.
+  const [autoScoutEnabled, setAutoScoutEnabled] = useState(() => {
+    try {
+      return window.localStorage.getItem(autoScoutStorageKey) !== "0";
+    } catch {
+      return true;
+    }
+  });
   const [lastScoutAt, setLastScoutAt] = useState<string | null>(null);
   const [queuedJobCount, setQueuedJobCount] = useState(0);
   const [agentTurnCount, setAgentTurnCount] = useState(0);
@@ -238,6 +249,14 @@ export function App() {
       // ignore unavailable storage
     }
   }, [language]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(autoScoutStorageKey, autoScoutEnabled ? "1" : "0");
+    } catch {
+      // ignore unavailable storage
+    }
+  }, [autoScoutEnabled]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1885,6 +1904,16 @@ export function App() {
               ))}
             </div>
           ) : null}
+          <button
+            className={`x-scout-toggle${autoScoutEnabled ? "" : " paused"}`}
+            onClick={() => setAutoScoutEnabled((value) => !value)}
+            title={t("scout.toggleTitle")}
+            type="button"
+          >
+            {autoScoutEnabled ? <Pause size={14} /> : <Play size={14} />}
+            <span>{autoScoutEnabled ? t("scout.on") : t("scout.off")}</span>
+            {queuedJobCount > 0 ? <em>{t("scout.queued", { count: queuedJobCount })}</em> : null}
+          </button>
         </header>
 
         {activeView === "timeline" && selectedCard ? (
@@ -1959,10 +1988,12 @@ export function App() {
               </button>
             ) : queuedJobCount > 0 ? (
               <div className="x-prodchip" role="status">
-                {t("feed.production", {
-                  done: Math.max(0, productionPeakRef.current - queuedJobCount),
-                  total: Math.max(productionPeakRef.current, queuedJobCount)
-                })}
+                {autoScoutEnabled
+                  ? t("feed.production", {
+                      done: Math.max(0, productionPeakRef.current - queuedJobCount),
+                      total: Math.max(productionPeakRef.current, queuedJobCount)
+                    })
+                  : t("feed.productionPaused", { count: queuedJobCount })}
               </div>
             ) : null}
 
