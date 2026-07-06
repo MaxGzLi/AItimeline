@@ -103,6 +103,7 @@ import type {
   InteractionSignals,
   LearningFeedbackByPost,
   MemoryAction,
+  NoteApiResponse,
   ReviewDueItem,
   SourceCandidateRecord,
   TimelineCard
@@ -161,6 +162,8 @@ export function App() {
   const [dismissToast, setDismissToast] = useState<{ postId: string; title: string } | null>(null);
   const [aiThreads, setAiThreads] = useState<AiThreads>({});
   const [agentQuestion, setAgentQuestion] = useState("");
+  const [composerMode, setComposerMode] = useState<"question" | "idea">("question");
+  const [pendingThreadId, setPendingThreadId] = useState<string | null>(null);
   const [agentResponse, setAgentResponse] = useState<AgentAskApiResponse | null>(null);
   const [discoveryRun, setDiscoveryRun] = useState<DiscoveryRunState>({ status: "idle" });
   const [agentMessage, setAgentMessage] = useState("");
@@ -1232,6 +1235,7 @@ export function App() {
             "import_source",
             "discover_sources",
             "research_question",
+            "research_idea",
             "generate_followup",
             "schedule_review",
             "cooldown_topic"
@@ -1580,13 +1584,25 @@ export function App() {
     setAgentQuestion("");
 
     try {
-      const result = await apiRequest<AgentAskApiResponse>("/api/agent/ask", {
-        method: "POST",
-        body: { question }
-      });
+      if (composerMode === "idea") {
+        const result = await apiRequest<NoteApiResponse>("/api/notes", {
+          method: "POST",
+          body: { text: question, kind: "idea" }
+        });
 
-      setAgentResponse(result);
+        setAgentResponse(result);
+        setImportedCards((cards) => upsertById(cards, [result.post]));
+      } else {
+        const result = await apiRequest<AgentAskApiResponse>("/api/agent/ask", {
+          method: "POST",
+          body: { question, threadId: pendingThreadId ?? undefined }
+        });
+
+        setAgentResponse(result);
+      }
+
       setDiscoveryRun({ status: "idle" });
+      setPendingThreadId(null);
       void refreshFromApi({ silent: true });
     } catch (error) {
       setAgentMessage(
@@ -1594,6 +1610,61 @@ export function App() {
       );
     } finally {
       setIsAgentAsking(false);
+    }
+  }
+
+  function handleIdeaProbe(action: AgentReplyAction) {
+    const threadId = agentResponse?.turnRecord.threadId;
+
+    if (!threadId) {
+      return;
+    }
+
+    setComposerMode("question");
+    setPendingThreadId(threadId);
+    setAgentMessage(t("agent.idea.probeHint", { question: action.question ?? action.label }));
+    requestAnimationFrame(() => composerInputRef.current?.focus());
+  }
+
+  async function handleResearchIdea(action: AgentReplyAction) {
+    if (!agentResponse?.turnRecord?.id || agentResponse.turnRecord.status === "researching") {
+      return;
+    }
+
+    const question = action.question ?? action.queries?.[0];
+
+    if (!question) {
+      return;
+    }
+
+    setDiscoveryRun({ status: "searching" });
+
+    try {
+      const result = await apiRequest<AgentConfirmApiResponse>("/api/agent/research-idea", {
+        method: "POST",
+        body: {
+          turnId: agentResponse.turnRecord.id,
+          question,
+          concepts: action.concepts
+        }
+      });
+
+      setAgentResponse((current) =>
+        current
+          ? {
+              ...current,
+              turnRecord: result.turnRecord
+            }
+          : current
+      );
+      setQueuedJobCount((count) => Math.max(count, result.records.length));
+      void runCuration("auto");
+      void refreshFromApi({ silent: true, mode: "buffer" });
+    } catch (error) {
+      setDiscoveryRun({
+        status: "error",
+        message: error instanceof Error ? error.message : t("agent.discovery.error")
+      });
     }
   }
 
@@ -1845,6 +1916,13 @@ export function App() {
           <>
             <AskComposer
               isAsking={isAgentAsking}
+              mode={composerMode}
+              onModeChange={(mode) => {
+                setComposerMode(mode);
+                if (mode === "idea") {
+                  setPendingThreadId(null);
+                }
+              }}
               onQuestionChange={setAgentQuestion}
               onSubmit={handleAgentAsk}
               question={agentQuestion}
@@ -1861,10 +1939,13 @@ export function App() {
                 onDismiss={() => {
                   setAgentResponse(null);
                   setAgentAskedQuestion("");
+                  setPendingThreadId(null);
                   setDiscoveryRun({ status: "idle" });
                 }}
                 onOpenCardId={handleOpenCardId}
                 onOpenDiscover={() => setActiveView("discover")}
+                onProbe={handleIdeaProbe}
+                onResearchIdea={handleResearchIdea}
                 question={agentAskedQuestion}
                 response={agentResponse}
                 turnStatus={currentAgentTurnStatus}

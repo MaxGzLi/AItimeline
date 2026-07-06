@@ -14,7 +14,7 @@ export type TrustState = "emerging" | "supported" | "contested";
 
 export type UserSignalType = "like" | "save" | "ask" | "review";
 
-export type KnowledgeCardKind = "knowledge" | "connection_note";
+export type KnowledgeCardKind = "knowledge" | "connection_note" | "idea";
 
 export type ConceptAliasDecisionBy = "auto" | "user";
 

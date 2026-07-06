@@ -17,9 +17,11 @@ await writeFile(join(mediaRootDir, "smoke-source", "1.png"), new Uint8Array([137
 
 let discoveryBaseUrl = "";
 const baseUrl = "http://aitimeline-smoke.local";
+const observedSearchQueries = [];
 const fakeSearchProvider = {
   id: "smoke",
   async search(query) {
+    observedSearchQueries.push(query);
     return [
       {
         url: `${discoveryBaseUrl}/fixtures/article-background?query=${encodeURIComponent(query)}`,
@@ -973,6 +975,7 @@ try {
   });
 
   assert.equal(noteResult.post.sources[0].type, "user_note", "notes should persist as user_note sources");
+  assert.equal(noteResult.post.kind, undefined, "old note calls without kind should not become idea posts");
   assert.equal(noteResult.post.thread[0].kind, "agent_reply", "the observer reply on a note should be an agent_reply block");
   assert.ok(noteResult.post.citations.length > 0, "note posts should cite their own registry chunk");
   assert.equal(noteResult.turn.intent, "grounded_qa", "notes touching library concepts should get grounded replies");
@@ -1018,6 +1021,125 @@ try {
   );
 
   assert.equal(persistedCommentBlocks.length, 2, "the comment and observer reply should persist on the card thread after reload");
+
+  // --- Idea flow: kind=idea notes get library links, probes, testable research, and no card from probe answers ---
+  const firstSourceTitle = firstPost.sources[0]?.title ?? firstPost.title;
+  const ideaResult = await requestJson("/api/notes", {
+    method: "POST",
+    body: {
+      text: `Idea: ${firstTopic} could make citation review cheaper when the graph already knows the source boundary.`,
+      kind: "idea",
+      createdAt: "2026-06-10T03:10:00.000Z"
+    }
+  });
+
+  assert.equal(ideaResult.post.kind, "idea", "kind=idea notes should persist as idea posts");
+  assert.equal(ideaResult.turn.intent, "idea_observation", "idea notes should produce an idea observation turn");
+  assert.match(ideaResult.turn.notes.join("\n"), /库内关联/, "idea replies should include the library-link section");
+  assert.ok(
+    ideaResult.turn.notes.join("\n").includes(firstSourceTitle),
+    "idea library links should cite source titles"
+  );
+  assert.ok(ideaResult.turn.nearestPosts.length > 0, "idea replies should link real in-library cards");
+  assert.ok(ideaResult.turn.nearestPosts.length <= 3, "idea replies should cap library links at three cards");
+
+  const ideaProbeAction = ideaResult.turn.actions.find((action) => action.kind === "idea_probe");
+  const ideaResearchAction = ideaResult.turn.actions.find((action) => action.kind === "research_idea");
+
+  assert.ok(ideaProbeAction, "idea replies should include an idea_probe action");
+  assert.ok(ideaResearchAction?.question, "idea replies should include a testable research_idea action");
+
+  const beforeProbeSnapshot = await requestJson("/api/snapshot");
+  const probeAnswer = await requestJson("/api/agent/ask", {
+    method: "POST",
+    body: {
+      question: "可以先验证 citation review 成本是否随已知边界下降。",
+      threadId: ideaResult.turnRecord.threadId,
+      now: "2026-06-10T03:12:00.000Z"
+    }
+  });
+  const afterProbeSnapshot = await requestJson("/api/snapshot");
+
+  assert.equal(
+    probeAnswer.turnRecord.threadId,
+    ideaResult.turnRecord.threadId,
+    "idea probe answers should stay in the idea thread with previous turns available"
+  );
+  assert.equal(afterProbeSnapshot.posts.length, beforeProbeSnapshot.posts.length, "idea probe answers should not create cards");
+  assert.equal(
+    afterProbeSnapshot.reviewStates.length,
+    beforeProbeSnapshot.reviewStates.length,
+    "idea probe answers should not create review items"
+  );
+
+  const searchQueryStart = observedSearchQueries.length;
+  const ideaResearchRequest = await requestJson("/api/agent/research-idea", {
+    method: "POST",
+    body: {
+      turnId: ideaResult.turnRecord.id,
+      question: ideaResearchAction.question,
+      concepts: ideaResearchAction.concepts,
+      now: "2026-06-10T03:19:00.000Z"
+    }
+  });
+
+  assert.ok(
+    ideaResearchRequest.records.some((record) => record.job.kind === "research_idea"),
+    "idea evidence buttons should enqueue a research_idea curation job"
+  );
+  assert.ok(
+    ideaResearchRequest.records[0].job.researchIdea.supportQueries.some((query) => /evidence|case/i.test(query)),
+    "research_idea jobs should store support-oriented queries"
+  );
+  assert.ok(
+    ideaResearchRequest.records[0].job.researchIdea.challengeQueries.some((query) => /criticism|limitations|counterexample/i.test(query)),
+    "research_idea jobs should store challenge-oriented queries"
+  );
+
+  const ideaResearchRun = await requestJson("/api/curation/run", {
+    method: "POST",
+    body: {
+      now: "2026-06-10T03:20:00.000Z",
+      kinds: ["research_idea"]
+    }
+  });
+  const ideaSearchQueries = observedSearchQueries.slice(searchQueryStart);
+
+  assert.ok(
+    ideaResearchRun.records.some((record) => record.status === "succeeded" && record.job.kind === "research_idea"),
+    "research_idea jobs should run through the curation worker"
+  );
+  assert.ok(
+    ideaResearchRun.records.some((record) => record.result?.ideaResearchQueries?.support?.length > 0),
+    "research_idea results should expose support query groups"
+  );
+  assert.ok(
+    ideaResearchRun.records.some((record) => record.result?.ideaResearchQueries?.challenge?.length > 0),
+    "research_idea results should expose challenge query groups"
+  );
+  assert.ok(
+    ideaSearchQueries.some((query) => /evidence|case/i.test(query)),
+    "support-oriented research_idea queries should be sent to search"
+  );
+  assert.ok(
+    ideaSearchQueries.some((query) => /criticism|limitations|counterexample/i.test(query)),
+    "challenge-oriented research_idea queries should be sent to search"
+  );
+
+  const afterIdeaResearchSnapshot = await requestJson("/api/snapshot");
+  const ideaImports = afterIdeaResearchSnapshot.sourceImports.filter(
+    (record) => record.source.origin?.turnId === ideaResult.turnRecord.id
+  );
+  const ideaNotification = afterIdeaResearchSnapshot.notifications.find(
+    (record) => record.kind === "agent_answer" && record.turnId === ideaResult.turnRecord.id
+  );
+
+  assert.ok(ideaImports.length > 0, "research_idea should import evidence sources");
+  assert.ok(ideaImports.length <= 4, "research_idea should import at most two sources per side");
+  assert.ok(ideaNotification, "research_idea should create an agent_answer notification");
+  assert.match(ideaNotification.body, /支持的证据/, "research_idea notifications should include a support column");
+  assert.match(ideaNotification.body, /相反的声音/, "research_idea notifications should include an opposing column");
+  assert.ok(ideaNotification.citations?.length > 0, "research_idea notifications should carry source citations");
 
   const missingReply = await fetch(`${baseUrl}/api/posts/does-not-exist/replies`, {
     method: "POST",
@@ -1068,6 +1190,51 @@ try {
       assert.equal(barePayload.configured, false, "unconfigured discovery/run should report configured=false");
       assert.deepEqual(barePayload.candidates, [], "unconfigured discovery/run should return no candidates");
 
+      const bareIdea = await requestJsonFromServer(bareServer, "/api/notes", {
+        method: "POST",
+        body: {
+          text: "一个空库里的原创想法需要先找正反证据。",
+          kind: "idea",
+          createdAt: "2026-06-10T03:40:00.000Z"
+        }
+      });
+
+      assert.match(
+        bareIdea.turn.notes.join("\n"),
+        /库内没有相关材料/,
+        "ideas in an empty library should say there is no related material"
+      );
+      assert.ok(
+        bareIdea.turn.actions.some((action) => action.kind === "idea_probe"),
+        "empty-library idea replies should still include probe actions"
+      );
+      const bareIdeaResearchAction = bareIdea.turn.actions.find((action) => action.kind === "research_idea");
+      assert.ok(bareIdeaResearchAction, "empty-library idea replies should still include research actions");
+      await requestJsonFromServer(bareServer, "/api/agent/research-idea", {
+        method: "POST",
+        body: {
+          turnId: bareIdea.turnRecord.id,
+          question: bareIdeaResearchAction.question,
+          concepts: bareIdeaResearchAction.concepts,
+          now: "2026-06-10T03:49:00.000Z"
+        }
+      });
+      await requestJsonFromServer(bareServer, "/api/curation/run", {
+        method: "POST",
+        body: {
+          now: "2026-06-10T03:50:00.000Z",
+          kinds: ["research_idea"]
+        }
+      });
+      const bareIdeaNotifications = await requestJsonFromServer(bareServer, "/api/notifications");
+
+      assert.ok(
+        bareIdeaNotifications.records.some(
+          (record) => record.turnId === bareIdea.turnRecord.id && /搜索服务未配置/.test(record.body)
+        ),
+        "unconfigured idea research should create a clear notification"
+      );
+
       const bareDark = await requestJsonFromServer(bareServer, "/api/agent/ask", {
         method: "POST",
         body: { question: "What is offline-only research?" }
@@ -1096,6 +1263,70 @@ try {
     } finally {
       await closeServer(bareServer);
     }
+  }
+
+  const oneSidedIdeaServer = createApiServer({
+    dataPath: join(tempDir, "one-sided-idea.json"),
+    curationDataPath: join(tempDir, "one-sided-idea-jobs.json"),
+    searchProvider: {
+      id: "one-sided-idea",
+      async search(query) {
+        if (/criticism|limitations|counterexample|contrary/i.test(query)) {
+          return [];
+        }
+
+        return [
+          {
+            url: `${baseUrl}/fixtures/article-background?one-sided=${encodeURIComponent(query)}`,
+            title: `One-sided support source for ${query}`,
+            snippet: "A support-only source for testing one empty side in idea research notifications."
+          }
+        ];
+      }
+    }
+  });
+
+  try {
+    const oneSidedIdea = await requestJsonFromServer(oneSidedIdeaServer, "/api/notes", {
+      method: "POST",
+      body: {
+        text: "A support-only idea should still report when the opposing side is empty.",
+        kind: "idea",
+        createdAt: "2026-06-10T04:10:00.000Z"
+      }
+    });
+    const action = oneSidedIdea.turn.actions.find((item) => item.kind === "research_idea");
+    assert.ok(action, "one-sided idea setup should include a research_idea action");
+    await requestJsonFromServer(oneSidedIdeaServer, "/api/agent/research-idea", {
+      method: "POST",
+      body: {
+        turnId: oneSidedIdea.turnRecord.id,
+        question: action.question,
+        concepts: action.concepts,
+        now: "2026-06-10T04:11:00.000Z"
+      }
+    });
+    await requestJsonFromServer(oneSidedIdeaServer, "/api/curation/run", {
+      method: "POST",
+      body: {
+        now: "2026-06-10T04:12:00.000Z",
+        kinds: ["research_idea"]
+      }
+    });
+    const oneSidedNotifications = await requestJsonFromServer(oneSidedIdeaServer, "/api/notifications");
+    const oneSidedNotification = oneSidedNotifications.records.find(
+      (record) => record.turnId === oneSidedIdea.turnRecord.id
+    );
+
+    assert.ok(oneSidedNotification, "one-sided idea research should still create a notification");
+    assert.match(oneSidedNotification.body, /支持的证据/, "one-sided notifications should include support evidence");
+    assert.match(
+      oneSidedNotification.body,
+      /没找到这一侧的靠谱来源/,
+      "one-sided notifications should state when opposing evidence is empty"
+    );
+  } finally {
+    await closeServer(oneSidedIdeaServer);
   }
 
   const failingImportServer = createApiServer({
