@@ -27,7 +27,7 @@ const { createAgentHarnessConfig, defaultAgentHarnessConfig, validateHarnessPost
   "../packages/core/dist/harness/runner.js"
 );
 const { createModelKnowledgePostRunner } = await import("../packages/core/dist/harness/modelRunner.js");
-const { evaluateInteraction } = await import("../packages/core/dist/harness/feedbackPolicy.js");
+const { evaluateInteraction, scoreInteraction } = await import("../packages/core/dist/harness/feedbackPolicy.js");
 const {
   createFollowupGenerationProtocol,
   createFollowupSourceImportPlan,
@@ -47,7 +47,15 @@ const { createOpenAICompatibleModelClient, createOpenAICompatibleModelClientFrom
   "../packages/core/dist/model/openaiCompatibleClient.js"
 );
 const { createSourcePostReleasePlan } = await import("../packages/core/dist/ranking/postReleasePlan.js");
+const {
+  countSeenReadSignalsByPostId,
+  filterTimelineLifecycle,
+  isPureExposureSignal
+} = await import("../packages/core/dist/ranking/lifecycle.js");
 const { rankPersonalizedTimeline } = await import("../packages/core/dist/ranking/ranker.js");
+const { advanceReviewState, createInitialReviewState, getRestingReviewStates } = await import(
+  "../packages/core/dist/review/reviewState.js"
+);
 const { createOpenAICompatibleSourceImportWorker, createSourceImportWorker } = await import(
   "../packages/core/dist/source/sourceImportWorker.js"
 );
@@ -1093,6 +1101,164 @@ assert.ok(personalizedRanking[0].scoreReasons.length > 0, "personalized ranking 
 assert.ok(
   personalizedRanking.some((card) => card.id === interestSignal.postId && card.recommendationIntent !== "explore"),
   "personalized ranking should react to recent interaction signals"
+);
+
+const makeLifecycleCard = (id, overrides = {}) => ({
+  id,
+  title: `Lifecycle ${id}`,
+  summary: `Lifecycle summary for ${id}.`,
+  keyTakeaway: `Lifecycle takeaway for ${id}.`,
+  concepts: ["Lifecycle"],
+  sources: [{ id: `source-${id}`, title: `Source ${id}`, url: `local://${id}`, type: "manual" }],
+  recommendedBecause: "Lifecycle smoke fixture.",
+  trustState: "emerging",
+  createdAt: "2026-07-09T00:00:00.000Z",
+  estimatedReadMinutes: 1,
+  ...overrides
+});
+const readDecayCards = [
+  makeLifecycleCard("read-heavy", {
+    trustState: "supported",
+    createdAt: "2026-07-10T00:00:00.000Z"
+  }),
+  makeLifecycleCard("fresh-peer", {
+    createdAt: "2026-07-09T00:00:00.000Z"
+  })
+];
+const readDecayBaseline = rankPersonalizedTimeline({
+  cards: readDecayCards,
+  now: "2026-07-10T00:00:00.000Z"
+});
+const readDecayRanking = rankPersonalizedTimeline({
+  cards: readDecayCards,
+  seenReadCounts: { "read-heavy": 3 },
+  now: "2026-07-10T00:00:00.000Z"
+});
+
+assert.equal(readDecayBaseline[0].id, "read-heavy", "supported read fixture should start above its peer");
+assert.equal(readDecayRanking[0].id, "fresh-peer", "seen-read decay should let fresh cards outrank repeats");
+assert.ok(
+  readDecayRanking
+    .find((card) => card.id === "read-heavy")
+    ?.scoreReasons.some((reason) => /Already read/i.test(reason)),
+  "seen-read decay should explain why the repeated card was lowered"
+);
+
+const pureExposureSignal = {
+  postId: "ignored-exposures",
+  topicId: "lifecycle",
+  conceptIds: ["Lifecycle"],
+  impression: true,
+  dwellTimeMs: 0,
+  openedThread: false,
+  liked: false,
+  saved: false,
+  askedQuestion: false,
+  reviewed: false,
+  skippedQuickly: false,
+  createdAt: "2026-07-10T00:00:00.000Z"
+};
+const lifecycleSignals = [
+  ...Array.from({ length: 5 }, (_, index) => ({
+    ...pureExposureSignal,
+    createdAt: `2026-07-0${index + 1}T00:00:00.000Z`
+  })),
+  {
+    ...pureExposureSignal,
+    postId: "note-exposures",
+    createdAt: "2026-07-01T00:00:00.000Z"
+  },
+  {
+    ...pureExposureSignal,
+    postId: "note-exposures",
+    createdAt: "2026-07-02T00:00:00.000Z"
+  },
+  {
+    ...pureExposureSignal,
+    postId: "note-exposures",
+    createdAt: "2026-07-03T00:00:00.000Z"
+  },
+  {
+    ...pureExposureSignal,
+    postId: "note-exposures",
+    createdAt: "2026-07-04T00:00:00.000Z"
+  },
+  {
+    ...pureExposureSignal,
+    postId: "note-exposures",
+    createdAt: "2026-07-05T00:00:00.000Z"
+  },
+  {
+    ...pureExposureSignal,
+    postId: "stale-read",
+    dwellTimeMs: 15000,
+    createdAt: "2026-05-20T00:00:00.000Z"
+  },
+  {
+    ...pureExposureSignal,
+    postId: "due-stale",
+    dwellTimeMs: 15000,
+    createdAt: "2026-05-20T00:00:00.000Z"
+  }
+];
+const lifecycleFilteredPosts = filterTimelineLifecycle({
+  posts: [
+    makeLifecycleCard("dismissed"),
+    makeLifecycleCard("ignored-exposures"),
+    makeLifecycleCard("stale-read"),
+    makeLifecycleCard("due-stale"),
+    makeLifecycleCard("fresh-lifecycle"),
+    makeLifecycleCard("resting-review"),
+    makeLifecycleCard("note-exposures", {
+      sources: [{ id: "source-note", title: "Note", url: "local://note", type: "user_note" }]
+    })
+  ],
+  interactionSignals: lifecycleSignals,
+  dismissedPostIds: ["dismissed"],
+  dueReviewPostIds: ["due-stale"],
+  restingReviewPostIds: ["resting-review"],
+  now: "2026-07-10T00:00:00.000Z"
+});
+const lifecycleIds = lifecycleFilteredPosts.map((post) => post.id);
+
+assert.deepEqual(
+  lifecycleIds.sort(),
+  ["due-stale", "fresh-lifecycle", "note-exposures"].sort(),
+  "lifecycle filtering should retire dismissed, ignored, stale-read and resting-review posts while keeping notes and due reviews"
+);
+assert.deepEqual(
+  getRestingReviewStates(
+    [
+      { postId: "resting", intervalDays: 3, dueAt: "2026-07-12T00:00:00.000Z", lastReviewedAt: "2026-07-09T00:00:00.000Z" },
+      { postId: "due-now", intervalDays: 1, dueAt: "2026-07-10T00:00:00.000Z", lastReviewedAt: "2026-07-09T00:00:00.000Z" },
+      { postId: "liked-never-reviewed", intervalDays: 1, dueAt: "2026-07-12T00:00:00.000Z" }
+    ],
+    "2026-07-10T00:00:00.000Z"
+  ).map((state) => state.postId),
+  ["resting"],
+  "resting review states are reviewed at least once and not yet due; liked-but-unreviewed cards stay in the feed"
+);
+assert.deepEqual(
+  countSeenReadSignalsByPostId(lifecycleSignals),
+  { "stale-read": 1, "due-stale": 1 },
+  "seen read counts should use dwell >=12s or opened threads"
+);
+assert.equal(isPureExposureSignal(pureExposureSignal), true, "pure exposure fixture should match the lifecycle definition");
+assert.equal(scoreInteraction(pureExposureSignal), 0, "pure exposure should be neutral for topic-state scoring");
+
+const reviewIntervals = [];
+let reviewState = createInitialReviewState("review-post", "2026-07-01T00:00:00.000Z");
+reviewIntervals.push(reviewState.intervalDays);
+
+for (let index = 0; index < 5; index += 1) {
+  reviewState = advanceReviewState(reviewState, `2026-07-0${index + 2}T00:00:00.000Z`);
+  reviewIntervals.push(reviewState.intervalDays);
+}
+
+assert.deepEqual(
+  reviewIntervals,
+  [1, 3, 7, 14, 30, 30],
+  "persistent review intervals should progress 1 -> 3 -> 7 -> 14 -> 30 and cap"
 );
 
 const backgroundPlan = createBackgroundCurationPlan({
