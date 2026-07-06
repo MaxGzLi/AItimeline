@@ -72,6 +72,7 @@ export interface BackgroundCurationExecutionHandlers {
   scheduleReview?: (job: BackgroundCurationJob) => Promise<BackgroundCurationJobResult> | BackgroundCurationJobResult;
   askClarifyingQuestion?: (job: BackgroundCurationJob) => Promise<BackgroundCurationJobResult> | BackgroundCurationJobResult;
   cooldownTopic?: (job: BackgroundCurationJob) => Promise<BackgroundCurationJobResult> | BackgroundCurationJobResult;
+  researchQuestion?: (job: BackgroundCurationJob) => Promise<BackgroundCurationJobResult> | BackgroundCurationJobResult;
 }
 
 export interface RunBackgroundCurationJobsOptions {
@@ -267,6 +268,12 @@ async function runJob(
       discoveredSourceCandidates: await handlers.discoverSources(job),
       message: "Discovered source candidates for background curation."
     };
+  }
+
+  if (job.kind === "research_question") {
+    return handlers.researchQuestion
+      ? handlers.researchQuestion(job)
+      : skippedResult(job, "research question handler is not configured.");
   }
 
   if (job.kind === "generate_followup") {
@@ -466,7 +473,8 @@ function createSemanticJobKey(job: BackgroundCurationJob): string {
     job.topicId,
     [...job.conceptIds].sort().join(","),
     job.nextAction ?? "",
-    job.sourceCandidate?.id ?? ""
+    job.sourceCandidate?.id ?? "",
+    job.researchQuestion?.turnId ?? ""
   ].join("|");
 }
 
@@ -505,6 +513,12 @@ function cloneRecord(record: BackgroundCurationJobRecord): BackgroundCurationJob
             ...record.job.sourceCandidate,
             conceptIds: [...record.job.sourceCandidate.conceptIds],
             source: { ...record.job.sourceCandidate.source }
+          }
+        : undefined,
+      researchQuestion: record.job.researchQuestion
+        ? {
+            ...record.job.researchQuestion,
+            choices: { ...record.job.researchQuestion.choices }
           }
         : undefined
     },

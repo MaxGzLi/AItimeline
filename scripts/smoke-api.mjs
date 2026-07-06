@@ -692,10 +692,114 @@ try {
   assert.equal(agentDark.turn.intent, "discovery_proposal", "dark turns should propose discovery, not answer");
   assert.equal(agentDark.turn.answer, null, "the agent must not answer dark questions from model memory");
   assert.ok(
-    agentDark.discoveredCandidates.length > 0,
-    "dark turns should trigger inline discovery when a provider is configured"
+    agentDark.turn.actions.some((action) => action.kind === "confirm_discovery"),
+    "dark turns should return a discovery confirmation action"
+  );
+  assert.equal(
+    agentDark.discoveredCandidates.length,
+    0,
+    "dark turns should not silently send discovery candidates to the inbox before confirmation"
+  );
+  assert.equal(
+    agentDark.turnRecord.status,
+    "pending_confirmation",
+    "dark turns should wait for confirmation before research starts"
   );
   assert.equal(agentDark.snapshotSummary.agentTurns, 2, "agent turns should be metered in the snapshot");
+
+  const candidatesBeforeResearch = (await requestJson("/api/snapshot")).sourceCandidates.length;
+  const confirmResult = await requestJson("/api/agent/confirm", {
+    method: "POST",
+    body: {
+      turnId: agentDark.turnRecord.id,
+      now: "2026-06-10T02:29:00.000Z",
+      choices: {
+        focus: "definition",
+        depth: "quick"
+      }
+    }
+  });
+
+  assert.equal(confirmResult.accepted, true, "agent confirm should accept pending dark turns");
+  assert.ok(
+    confirmResult.records.some((record) => record.job.kind === "research_question"),
+    "agent confirm should enqueue a research_question curation job"
+  );
+  assert.equal(confirmResult.turnRecord.status, "researching", "confirmed turns should move to researching");
+
+  const researchRun = await requestJson("/api/curation/run", {
+    method: "POST",
+    body: {
+      now: "2026-06-10T02:30:00.000Z",
+      kinds: ["research_question"]
+    }
+  });
+
+  assert.ok(
+    researchRun.records.some((record) => record.status === "succeeded" && record.job.kind === "research_question"),
+    "research_question jobs should run through the curation worker"
+  );
+
+  const afterResearchSnapshot = await requestJson("/api/snapshot");
+  const researchTurn = afterResearchSnapshot.agentTurns.find((record) => record.id === agentDark.turnRecord.id);
+  const originImports = afterResearchSnapshot.sourceImports.filter(
+    (record) => record.source.origin?.turnId === agentDark.turnRecord.id
+  );
+  const pendingAfterResearch = afterResearchSnapshot.sourceCandidates.filter(
+    (record) => record.status === "pending" && record.createdAt === "2026-06-10T02:30:00.000Z"
+  );
+  const answerNotification = afterResearchSnapshot.notifications.find(
+    (record) => record.kind === "agent_answer" && record.turnId === agentDark.turnRecord.id
+  );
+
+  assert.equal(researchTurn?.status, "answered", "research worker should close the original turn as answered");
+  assert.ok(originImports.length > 0, "research worker should automatically import top sources");
+  assert.ok(originImports.length <= 2, "quick research should import no more than two sources");
+  assert.ok(
+    afterResearchSnapshot.sourceCandidates.length > candidatesBeforeResearch,
+    "research worker should leave non-imported candidates in Discover"
+  );
+  assert.ok(pendingAfterResearch.length > 0, "remaining research candidates should be pending in Discover");
+  assert.ok(answerNotification, "research worker should create an agent_answer notification");
+  assert.ok(answerNotification.body.includes("依据:"), "agent_answer notifications should include a cited grounded answer");
+  assert.ok(answerNotification.citations?.length > 0, "agent_answer notifications should carry citations");
+  assert.equal(
+    originImports.every((record) => record.source.origin?.question === agentDark.turn.question),
+    true,
+    "auto-imported research sources should record their origin question"
+  );
+
+  const notificationsResponse = await requestJson("/api/notifications");
+  const notificationDetail = notificationsResponse.records.find((record) => record.id === answerNotification.id);
+
+  assert.ok(notificationDetail, "notifications endpoint should include the research answer");
+  assert.ok(notificationDetail.supportPosts.length > 0, "notification details should include support cards");
+
+  const readNotification = await requestJson(`/api/notifications/${encodeURIComponent(answerNotification.id)}/read`, {
+    method: "POST"
+  });
+
+  assert.equal(readNotification.record.readAt.length > 0, true, "notification read endpoint should set readAt");
+
+  const researchPost = afterResearchSnapshot.posts.find((post) =>
+    post.sources.some((source) => source.origin?.turnId === agentDark.turnRecord.id)
+  );
+
+  assert.ok(researchPost, "research imports should create at least one post with source origin");
+
+  const compoundTurn = await requestJson("/api/agent/ask", {
+    method: "POST",
+    body: {
+      postId: researchPost.id,
+      question: "这条来源还能说明什么?"
+    }
+  });
+
+  assert.match(
+    compoundTurn.turn.answer.answer,
+    /这条证据来自你 \d+ 月 \d+ 日的提问/,
+    "later grounded answers citing an originated source should include the compound-interest origin note"
+  );
 
   // --- Notes: user posts become self-grounded posts and get an observer reply ---
   const noteResult = await requestJson("/api/notes", {
@@ -711,7 +815,7 @@ try {
   assert.ok(noteResult.post.citations.length > 0, "note posts should cite their own registry chunk");
   assert.equal(noteResult.turn.intent, "grounded_qa", "notes touching library concepts should get grounded replies");
   assert.ok(noteResult.turn.answer.citations.length > 0, "observer replies to notes should cite source chunks");
-  assert.equal(noteResult.snapshotSummary.agentTurns, 3, "note replies should be metered as agent turns");
+  assert.equal(noteResult.snapshotSummary.agentTurns, 4, "note replies should be metered as agent turns");
 
   const noteTimeline = await requestJson("/api/timeline?now=2026-06-11T00:00:00.000Z");
   const timelineNotePost = noteTimeline.posts.find((post) => post.id === noteResult.post.id);
@@ -724,7 +828,7 @@ try {
 
   assert.equal(
     localUserMemory?.memory.interaction.recentQuestions.length,
-    3,
+    4,
     "agent questions and notes should accumulate into user memory"
   );
 
@@ -743,7 +847,7 @@ try {
   assert.ok(replyKinds.includes("agent_reply"), "a reply should append the observer's reply block");
   assert.equal(replyResult.turn.intent, "grounded_qa", "replies target the card and answer grounded");
   assert.ok(replyResult.turn.answer.citations.length > 0, "observer replies to comments should cite source chunks");
-  assert.equal(replyResult.snapshotSummary.agentTurns, 4, "comment replies should be metered as agent turns");
+  assert.equal(replyResult.snapshotSummary.agentTurns, 5, "comment replies should be metered as agent turns");
 
   const replyTimeline = await requestJson("/api/timeline?now=2026-06-11T00:00:00.000Z");
   const replyTimelinePost = replyTimeline.posts.find((post) => post.id === firstPost.id);
@@ -801,9 +905,83 @@ try {
       assert.equal(bareResponse.status, 200, "unconfigured discovery/run should still respond 200");
       assert.equal(barePayload.configured, false, "unconfigured discovery/run should report configured=false");
       assert.deepEqual(barePayload.candidates, [], "unconfigured discovery/run should return no candidates");
+
+      const bareDark = await requestJsonFromServer(bareServer, "/api/agent/ask", {
+        method: "POST",
+        body: { question: "What is offline-only research?" }
+      });
+      await requestJsonFromServer(bareServer, "/api/agent/confirm", {
+        method: "POST",
+        body: {
+          turnId: bareDark.turnRecord.id,
+          now: "2026-06-10T03:59:00.000Z",
+          choices: { focus: "definition", depth: "quick" }
+        }
+      });
+      await requestJsonFromServer(bareServer, "/api/curation/run", {
+        method: "POST",
+        body: {
+          now: "2026-06-10T04:00:00.000Z",
+          kinds: ["research_question"]
+        }
+      });
+      const bareNotifications = await requestJsonFromServer(bareServer, "/api/notifications");
+
+      assert.ok(
+        bareNotifications.records.some((record) => /搜索服务未配置/.test(record.body)),
+        "unconfigured research should create a clear notification"
+      );
     } finally {
       await closeServer(bareServer);
     }
+  }
+
+  const failingImportServer = createApiServer({
+    dataPath: join(tempDir, "failing-import.json"),
+    curationDataPath: join(tempDir, "failing-import-jobs.json"),
+    searchProvider: {
+      id: "unsupported-source-type",
+      async search(query) {
+        return [
+          {
+            url: `${baseUrl}/unsupported-research-source/${encodeURIComponent(query)}`,
+            title: `Unsupported research source for ${query}`,
+            snippet: "This result is intentionally unsupported by the background ingestion worker.",
+            sourceType: "repo"
+          }
+        ];
+      }
+    }
+  });
+
+  try {
+    const blockedDark = await requestJsonFromServer(failingImportServer, "/api/agent/ask", {
+      method: "POST",
+      body: { question: "What should happen when every research import fails?" }
+    });
+    await requestJsonFromServer(failingImportServer, "/api/agent/confirm", {
+      method: "POST",
+      body: {
+        turnId: blockedDark.turnRecord.id,
+        now: "2026-06-10T04:29:00.000Z",
+        choices: { focus: "definition", depth: "quick" }
+      }
+    });
+    await requestJsonFromServer(failingImportServer, "/api/curation/run", {
+      method: "POST",
+      body: {
+        now: "2026-06-10T04:30:00.000Z",
+        kinds: ["research_question"]
+      }
+    });
+    const blockedNotifications = await requestJsonFromServer(failingImportServer, "/api/notifications");
+
+    assert.ok(
+      blockedNotifications.records.some((record) => /门禁|导入失败/.test(record.body)),
+      "all-blocked or all-failed research imports should create an explanatory notification"
+    );
+  } finally {
+    await closeServer(failingImportServer);
   }
 
   // 完成复习放在最后:休眠期排除会让这张卡退出时间线,中段的排序/整理断言需要它在场。
@@ -896,6 +1074,19 @@ async function dispatchToServer(targetServer, url, options = {}) {
     status: response.statusCode,
     headers: response.headers
   });
+}
+
+async function requestJsonFromServer(targetServer, path, options = {}) {
+  const response = await dispatchToServer(targetServer, `${baseUrl}${path}`, {
+    method: options.method ?? "GET",
+    headers: { "content-type": "application/json", ...(options.headers ?? {}) },
+    body: options.body === undefined ? undefined : JSON.stringify(options.body)
+  });
+  const payload = await response.json();
+
+  assert.equal(response.ok, true, `${path} should respond with 2xx`);
+
+  return payload;
 }
 
 async function normalizeRequestBody(body) {

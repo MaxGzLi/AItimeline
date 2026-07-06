@@ -1696,6 +1696,19 @@ const conversationTurn = await runConversationTurn({
   registry: result.sourceRegistry,
   memory: boundaryMemory,
   userSignals: boundarySignals,
+  previousTurns: [
+    {
+      id: "previous-thread-turn",
+      userId: "local-user",
+      question: "What should I review first?",
+      intent: "grounded_qa",
+      tier: "free",
+      zone: "inside",
+      status: "answered",
+      threadId: "thread-smoke",
+      createdAt: "2026-06-10T00:20:00.000Z"
+    }
+  ],
   now: "2026-06-10T00:30:00.000Z"
 });
 
@@ -1727,8 +1740,13 @@ const englishDarkTurn = await runConversationTurn({
 assert.equal(darkTurn.zone, "dark", "questions outside the library should be dark");
 assert.equal(darkTurn.intent, "discovery_proposal", "dark questions should propose discovery instead of answering");
 assert.equal(darkTurn.answer, null, "the agent must not answer dark questions from model memory");
-assert.equal(darkTurn.actions[0]?.kind, "discover_sources", "dark turns should propose source discovery");
-assert.ok(darkTurn.actions[0]?.queries?.length, "dark turns should carry discovery queries");
+assert.equal(darkTurn.actions[0]?.kind, "confirm_discovery", "dark turns should first ask for discovery confirmation");
+assert.equal(darkTurn.actions[0]?.questions?.length, 2, "dark turns should ask a bounded confirmation block");
+assert.ok(
+  darkTurn.actions.some((action) => action.kind === "discover_sources" && action.queries?.length),
+  "dark turns should keep the legacy discovery action available"
+);
+assert.ok(darkTurn.nearestPosts.length <= 2, "dark turns should return at most two nearest library cards");
 assert.match(
   englishDarkTurn.notes.join(" "),
   /outside your library/i,
@@ -1736,7 +1754,7 @@ assert.match(
 );
 assert.match(
   englishDarkTurn.actions[0]?.label ?? "",
-  /Find sources/i,
+  /Confirm research/i,
   "English mode deterministic dark-zone fallback should use English action labels"
 );
 
@@ -2118,6 +2136,35 @@ appPersistence.saveUserMemory(
   memoryEditResult.events,
   "2026-06-10T00:20:00.000Z"
 );
+appPersistence.saveAgentTurnRecords(
+  [
+    {
+      id: "agent-turn-smoke",
+      userId: "user-smoke",
+      question: "What should I research?",
+      intent: "discovery_proposal",
+      tier: "free",
+      zone: "dark",
+      status: "pending_confirmation",
+      threadId: "agent-thread-smoke",
+      createdAt: "2026-06-10T00:20:00.000Z"
+    }
+  ],
+  "2026-06-10T00:20:00.000Z"
+);
+appPersistence.saveNotifications(
+  [
+    {
+      id: "notification-smoke",
+      kind: "agent_answer",
+      turnId: "agent-turn-smoke",
+      postIds: [result.cards[0].id],
+      body: "Grounded answer smoke.",
+      createdAt: "2026-06-10T00:21:00.000Z"
+    }
+  ],
+  "2026-06-10T00:21:00.000Z"
+);
 
 const rehydratedPersistence = createAITimelinePersistenceStore({
   read: () => persistedAppSnapshot,
@@ -2144,6 +2191,40 @@ assert.equal(appSnapshot.interactionSignals.length, 1, "persistence should store
 assert.equal(appSnapshot.topicStates.length, 1, "persistence should store topic states");
 assert.equal(appSnapshot.sourceCandidates.length, 1, "persistence should store source candidates");
 assert.equal(appSnapshot.sourceCandidates[0]?.status, "pending", "source candidates should preserve status");
+assert.equal(appSnapshot.agentTurns[0]?.status, "pending_confirmation", "agent turn status should persist");
+assert.equal(appSnapshot.agentTurns[0]?.threadId, "agent-thread-smoke", "agent turn thread id should persist");
+assert.equal(appSnapshot.notifications.length, 1, "persistence should store agent notifications");
+
+let legacyAgentTurnSnapshot = JSON.stringify({
+  version: 1,
+  updatedAt: "2026-06-10T00:00:00.000Z",
+  agentTurns: [
+    {
+      id: "legacy-agent-turn",
+      userId: "legacy-user",
+      question: "Legacy question?",
+      intent: "grounded_qa",
+      tier: "free",
+      zone: "inside",
+      createdAt: "2026-06-10T00:00:00.000Z"
+    }
+  ]
+});
+const legacyAgentTurnPersistence = createAITimelinePersistenceStore({
+  read: () => legacyAgentTurnSnapshot,
+  write: (serialized) => {
+    legacyAgentTurnSnapshot = serialized;
+  }
+});
+const legacyAgentTurn = legacyAgentTurnPersistence.getSnapshot().agentTurns[0];
+
+assert.equal(legacyAgentTurn.status, "answered", "legacy agent turns should default to answered");
+assert.equal(legacyAgentTurn.threadId, "legacy-agent-turn", "legacy agent turns should default threadId to their id");
+assert.deepEqual(
+  legacyAgentTurnPersistence.getSnapshot().notifications,
+  [],
+  "legacy snapshots should default notifications to an empty list"
+);
 
 // --- User notes: self-grounded source + post ---
 const { transformUserNote } = await import("../packages/core/dist/transform/noteImport.js");

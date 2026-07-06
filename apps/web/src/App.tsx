@@ -27,6 +27,7 @@ import {
 import {
   ArrowLeft,
   ArrowUp,
+  Bell,
   Bot,
   Brain,
   CheckCircle2,
@@ -52,6 +53,7 @@ import { buildWikilinkAutocompleteCandidates } from "./components/WikilinkAutoco
 import { DiscoverView } from "./views/DiscoverView";
 import { AgentView } from "./views/AgentView";
 import { GraphView } from "./views/GraphView";
+import { NotificationsView } from "./views/NotificationsView";
 import { ReviewView } from "./views/ReviewView";
 import { SettingsView } from "./views/SettingsView";
 import { apiBaseUrl, apiRequest, isYouTubeUrl, sampleSourceUrl } from "./lib/api";
@@ -74,6 +76,10 @@ import {
 } from "./lib/state";
 import type {
   AgentAskApiResponse,
+  AgentConfirmApiResponse,
+  AgentNotification,
+  AgentTurnStatus,
+  AgentTurnSummary,
   AiMessage,
   AiThreads,
   ApiCurationJobsResponse,
@@ -81,6 +87,7 @@ import type {
   ApiDismissedPostsResponse,
   ApiEvidenceResponse,
   ApiImportResponse,
+  ApiNotificationsResponse,
   ApiReviewDueResponse,
   ApiSettings,
   ApiSnapshot,
@@ -97,7 +104,7 @@ import type {
   TimelineCard
 } from "./lib/types";
 
-type ViewKey = "timeline" | "discover" | "graph" | "review" | "agent" | "settings";
+type ViewKey = "timeline" | "discover" | "graph" | "review" | "notifications" | "agent" | "settings";
 
 const languageStorageKey = "aitl-language";
 
@@ -106,6 +113,7 @@ const navItems: Array<{ key: ViewKey; labelKey: string; icon: typeof Home }> = [
   { key: "discover", labelKey: "nav.discover", icon: Compass },
   { key: "graph", labelKey: "nav.graph", icon: GitBranch },
   { key: "review", labelKey: "nav.review", icon: Brain },
+  { key: "notifications", labelKey: "nav.notifications", icon: Bell },
   { key: "agent", labelKey: "nav.agent", icon: Bot },
   { key: "settings", labelKey: "nav.settings", icon: Settings }
 ];
@@ -115,6 +123,7 @@ const viewTitleKeys: Record<ViewKey, { title: string; sub?: string }> = {
   discover: { title: "nav.discover", sub: "nav.discoverSub" },
   graph: { title: "nav.graph", sub: "nav.graphSub" },
   review: { title: "nav.review", sub: "nav.reviewSub" },
+  notifications: { title: "nav.notifications", sub: "nav.notificationsSub" },
   agent: { title: "nav.agent", sub: "nav.agentSub" },
   settings: { title: "nav.settings" }
 };
@@ -140,6 +149,9 @@ export function App() {
   const [sourceChunks, setSourceChunks] = useState<KnowledgeChunk[]>([]);
   const [sourceCandidates, setSourceCandidates] = useState<SourceCandidateRecord[]>([]);
   const [dismissedPosts, setDismissedPosts] = useState<DismissedPostSummary[]>([]);
+  const [agentTurns, setAgentTurns] = useState<AgentTurnSummary[]>([]);
+  const [notifications, setNotifications] = useState<AgentNotification[]>([]);
+  const [selectedNotificationId, setSelectedNotificationId] = useState<string | null>(null);
   const [dismissToast, setDismissToast] = useState<{ postId: string; title: string } | null>(null);
   const [aiThreads, setAiThreads] = useState<AiThreads>({});
   const [agentQuestion, setAgentQuestion] = useState("");
@@ -913,14 +925,15 @@ export function App() {
     const now = new Date().toISOString();
 
     try {
-      const [timeline, snapshot, queuedJobs, reviewDue, dismissed] = await Promise.all([
+      const [timeline, snapshot, queuedJobs, reviewDue, dismissed, notificationsResult] = await Promise.all([
         apiRequest<ApiTimelineResponse>(
           `/api/timeline?userId=local-user&now=${encodeURIComponent(now)}`
         ),
         apiRequest<ApiSnapshot>("/api/snapshot"),
         apiRequest<ApiCurationJobsResponse>("/api/curation/jobs?status=queued"),
         apiRequest<ApiReviewDueResponse>(`/api/review/due?now=${encodeURIComponent(now)}`),
-        apiRequest<ApiDismissedPostsResponse>(`/api/dismissed?now=${encodeURIComponent(now)}`)
+        apiRequest<ApiDismissedPostsResponse>(`/api/dismissed?now=${encodeURIComponent(now)}`),
+        apiRequest<ApiNotificationsResponse>("/api/notifications")
       ]);
 
       // A newer refresh started while this one was in flight; drop the stale result.
@@ -959,6 +972,8 @@ export function App() {
       setSourceChunks(upsertById([], registryChunks));
       setSourceCandidates(snapshot.sourceCandidates);
       setDismissedPosts(dismissed.records);
+      setAgentTurns(snapshot.agentTurns);
+      setNotifications(notificationsResult.records);
       setReviewDueItems(reviewDue.due);
       setQueuedJobCount(queuedJobs.jobs.length);
       productionPeakRef.current =
@@ -1197,7 +1212,14 @@ export function App() {
         body: {
           now: new Date().toISOString(),
           limit: trigger === "auto" ? 4 : 8,
-          kinds: ["import_source", "discover_sources", "generate_followup", "schedule_review", "cooldown_topic"]
+          kinds: [
+            "import_source",
+            "discover_sources",
+            "research_question",
+            "generate_followup",
+            "schedule_review",
+            "cooldown_topic"
+          ]
         }
       });
       const importedCount = result.records.filter((record) => record.result?.sourceImport).length;
@@ -1481,7 +1503,7 @@ export function App() {
       }
 
       if (result.candidates.length === 0) {
-        setDiscoveryRun({ status: "empty" });
+        setDiscoveryRun({ status: "empty", count: pendingDiscoverCount });
         return;
       }
 
@@ -1509,10 +1531,9 @@ export function App() {
     setAgentQuestion("");
 
     try {
-      // Posting a note adds it to the timeline and generates a grounded reply.
-      const result = await apiRequest<AgentAskApiResponse>("/api/notes", {
+      const result = await apiRequest<AgentAskApiResponse>("/api/agent/ask", {
         method: "POST",
-        body: { text: question }
+        body: { question }
       });
 
       setAgentResponse(result);
@@ -1524,6 +1545,66 @@ export function App() {
       );
     } finally {
       setIsAgentAsking(false);
+    }
+  }
+
+  async function handleConfirmDiscovery(action: AgentReplyAction, choices: Record<string, string>) {
+    if (!agentResponse?.turnRecord?.id || agentResponse.turnRecord.status === "researching") {
+      return;
+    }
+
+    try {
+      const result = await apiRequest<AgentConfirmApiResponse>("/api/agent/confirm", {
+        method: "POST",
+        body: {
+          turnId: agentResponse.turnRecord.id,
+          choices
+        }
+      });
+
+      setAgentResponse((current) =>
+        current
+          ? {
+              ...current,
+              turnRecord: result.turnRecord
+            }
+          : current
+      );
+      setQueuedJobCount((count) => Math.max(count, result.records.length));
+      void runCuration("auto");
+      void refreshFromApi({ silent: true, mode: "buffer" });
+    } catch (error) {
+      setDiscoveryRun({
+        status: "error",
+        message: error instanceof Error ? error.message : t("agent.discovery.error")
+      });
+    }
+  }
+
+  async function handleSelectNotification(notification: AgentNotification) {
+    setSelectedNotificationId(notification.id);
+
+    if (notification.readAt) {
+      return;
+    }
+
+    setNotifications((records) =>
+      records.map((record) =>
+        record.id === notification.id ? { ...record, readAt: new Date().toISOString() } : record
+      )
+    );
+
+    try {
+      await apiRequest(`/api/notifications/${encodeURIComponent(notification.id)}/read`, {
+        method: "POST"
+      });
+      void refreshFromApi({ silent: true, mode: "buffer" });
+    } catch {
+      setNotifications((records) =>
+        records.map((record) =>
+          record.id === notification.id ? { ...record, readAt: notification.readAt } : record
+        )
+      );
     }
   }
 
@@ -1561,6 +1642,23 @@ export function App() {
   const pendingDiscoverCount = sourceCandidates.filter(
     (record) => record.status === "pending" || record.status === "queued"
   ).length;
+  const unreadNotificationCount = notifications.filter((notification) => !notification.readAt).length;
+  const agentTurnStatusRank = {
+    pending_confirmation: 0,
+    researching: 1,
+    answered: 2,
+    closed: 2
+  } as const;
+  const rankAgentTurnStatus = (status: AgentTurnStatus | undefined) =>
+    status ? agentTurnStatusRank[status] : -1;
+  const polledAgentTurnStatus = agentResponse?.turnRecord
+    ? agentTurns.find((turn) => turn.id === agentResponse.turnRecord.id)?.status
+    : undefined;
+  const localAgentTurnStatus = agentResponse?.turnRecord?.status;
+  const currentAgentTurnStatus =
+    rankAgentTurnStatus(polledAgentTurnStatus) >= rankAgentTurnStatus(localAgentTurnStatus)
+      ? polledAgentTurnStatus
+      : localAgentTurnStatus;
 
   return (
     <div className="x-frame">
@@ -1580,7 +1678,8 @@ export function App() {
           const label = t(item.labelKey);
           const showDot =
             (item.key === "discover" && pendingDiscoverCount > 0) ||
-            (item.key === "review" && reviewQueue.length > 0);
+            (item.key === "review" && reviewQueue.length > 0) ||
+            (item.key === "notifications" && unreadNotificationCount > 0);
 
           return (
             <button
@@ -1705,6 +1804,7 @@ export function App() {
             {agentResponse && agentAskedQuestion ? (
               <AgentReplyThread
                 discovery={discoveryRun}
+                onConfirm={handleConfirmDiscovery}
                 onDiscover={handleDiscoverSources}
                 onDismiss={() => {
                   setAgentResponse(null);
@@ -1713,9 +1813,9 @@ export function App() {
                 }}
                 onOpenCardId={handleOpenCardId}
                 onOpenDiscover={() => setActiveView("discover")}
-                onOpenImport={() => setActiveView("agent")}
                 question={agentAskedQuestion}
                 response={agentResponse}
+                turnStatus={currentAgentTurnStatus}
               />
             ) : null}
 
@@ -1800,6 +1900,20 @@ export function App() {
             cardsById={reviewCardsById}
             onReviewed={handleReviewComplete}
             queue={reviewQueue}
+          />
+        ) : null}
+
+        {activeView === "notifications" ? (
+          <NotificationsView
+            notifications={notifications}
+            onOpenCardId={(cardId) => {
+              handleOpenCardId(cardId);
+              setActiveView("timeline");
+            }}
+            onSelect={(notification) => {
+              void handleSelectNotification(notification);
+            }}
+            selectedId={selectedNotificationId}
           />
         ) : null}
 

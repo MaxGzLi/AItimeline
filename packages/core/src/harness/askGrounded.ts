@@ -1,5 +1,5 @@
 import { getChunksForSource, getRegistryChunk, getRegistrySource } from "../source/sourceRegistry.js";
-import type { KnowledgeChunk, KnowledgePost, SourceRegistry } from "../types.js";
+import type { KnowledgeChunk, KnowledgePost, SourceOrigin, SourceRegistry } from "../types.js";
 import { getGroundedAnswerLanguagePolicy, type ContentLanguage } from "./contentLanguage.js";
 import type { ModelClient } from "./modelRunner.js";
 
@@ -10,6 +10,7 @@ export interface GroundedAnswerCitation {
   quote: string;
   startTimeSeconds?: number;
   endTimeSeconds?: number;
+  origin?: SourceOrigin;
 }
 
 export interface GroundedAnswer {
@@ -87,7 +88,8 @@ function resolveExcerpts(post: KnowledgePost, registry: SourceRegistry, maxChunk
       chunkId: chunk.id,
       quote: trimQuote(chunk.content),
       startTimeSeconds: chunk.startTimeSeconds,
-      endTimeSeconds: chunk.endTimeSeconds
+      endTimeSeconds: chunk.endTimeSeconds,
+      origin: source?.origin
     };
   });
 }
@@ -274,7 +276,8 @@ function toCitation(excerpt: GroundedExcerpt): GroundedAnswerCitation {
     chunkId: excerpt.chunkId,
     quote: excerpt.quote,
     startTimeSeconds: excerpt.startTimeSeconds,
-    endTimeSeconds: excerpt.endTimeSeconds
+    endTimeSeconds: excerpt.endTimeSeconds,
+    origin: excerpt.origin
   };
 }
 

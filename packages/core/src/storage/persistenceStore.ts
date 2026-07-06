@@ -70,8 +70,33 @@ export interface AgentTurnRecord {
   intent: string;
   tier: string;
   zone: string;
+  status: AgentTurnStatus;
+  threadId: string;
   answerCardId?: string;
   createdAt: string;
+}
+
+export type AgentTurnStatus = "answered" | "pending_confirmation" | "researching" | "closed";
+
+export type AgentNotificationKind = "agent_answer" | "research_progress";
+
+export interface AgentNotificationCitation {
+  sourceId: string;
+  sourceTitle: string;
+  chunkId: string;
+  quote: string;
+}
+
+export interface AgentNotificationRecord {
+  id: string;
+  kind: AgentNotificationKind;
+  turnId: string;
+  postIds: string[];
+  body: string;
+  createdAt: string;
+  readAt?: string;
+  question?: string;
+  citations?: AgentNotificationCitation[];
 }
 
 export interface UserSettings {
@@ -118,6 +143,7 @@ export interface AITimelinePersistenceSnapshot {
   reviewStates: ReviewState[];
   sourceCandidates: SourceCandidateRecord[];
   agentTurns: AgentTurnRecord[];
+  notifications: AgentNotificationRecord[];
   userSettings: UserSettings;
 }
 
@@ -139,6 +165,7 @@ export interface AITimelinePersistenceStore {
   saveDismissedPosts(records: DismissedPostRecord[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
   saveReviewStates(records: ReviewState[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
   saveAgentTurnRecords(records: AgentTurnRecord[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
+  saveNotifications(records: AgentNotificationRecord[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
   saveUserSettings(settings: UserSettings, savedAt?: string | Date): AITimelinePersistenceSnapshot;
   saveUserMemory(
     userId: string,
@@ -270,7 +297,17 @@ export function createAITimelinePersistenceStore(
       snapshot = {
         ...snapshot,
         updatedAt: normalizeDate(savedAt).toISOString(),
-        agentTurns: upsertManyById(snapshot.agentTurns, records)
+        agentTurns: upsertManyById(snapshot.agentTurns, records.map((record) => normalizeAgentTurnRecord(record)))
+      };
+      persist(storage, snapshot);
+
+      return cloneSnapshot(snapshot);
+    },
+    saveNotifications(records, savedAt = new Date()) {
+      snapshot = {
+        ...snapshot,
+        updatedAt: normalizeDate(savedAt).toISOString(),
+        notifications: upsertManyById(snapshot.notifications, records.map(normalizeNotificationRecord))
       };
       persist(storage, snapshot);
 
@@ -352,8 +389,69 @@ function createSnapshot(input: AITimelinePersistenceSnapshotInput = {}): AITimel
     dismissedPosts: normalizeDismissedPosts(input, updatedAt),
     reviewStates: input.reviewStates ?? [],
     sourceCandidates: input.sourceCandidates ?? [],
-    agentTurns: input.agentTurns ?? [],
+    agentTurns: (input.agentTurns ?? []).map((record) => normalizeAgentTurnRecord(record)),
+    notifications: (input.notifications ?? []).map(normalizeNotificationRecord),
     userSettings: normalizeUserSettings(input.userSettings)
+  };
+}
+
+function normalizeAgentTurnRecord(value: AgentTurnRecord | (Partial<AgentTurnRecord> & { id: string })): AgentTurnRecord {
+  const createdAt = typeof value.createdAt === "string" ? value.createdAt : new Date().toISOString();
+  const question = typeof value.question === "string" ? value.question : "";
+  const userId = typeof value.userId === "string" ? value.userId : "local-user";
+  const status = isAgentTurnStatus(value.status) ? value.status : "answered";
+
+  return {
+    id: value.id,
+    userId,
+    question,
+    intent: typeof value.intent === "string" ? value.intent : "unknown",
+    tier: typeof value.tier === "string" ? value.tier : "free",
+    zone: typeof value.zone === "string" ? value.zone : "dark",
+    status,
+    threadId: typeof value.threadId === "string" && value.threadId ? value.threadId : value.id,
+    answerCardId: typeof value.answerCardId === "string" ? value.answerCardId : undefined,
+    createdAt
+  };
+}
+
+function isAgentTurnStatus(value: unknown): value is AgentTurnStatus {
+  return value === "answered" || value === "pending_confirmation" || value === "researching" || value === "closed";
+}
+
+function normalizeNotificationRecord(
+  value: AgentNotificationRecord | (Partial<AgentNotificationRecord> & { id: string })
+): AgentNotificationRecord {
+  const kind = value.kind === "research_progress" ? "research_progress" : "agent_answer";
+
+  return {
+    id: value.id,
+    kind,
+    turnId: typeof value.turnId === "string" ? value.turnId : "",
+    postIds: Array.isArray(value.postIds)
+      ? value.postIds.filter((postId): postId is string => typeof postId === "string")
+      : [],
+    body: typeof value.body === "string" ? value.body : "",
+    createdAt: typeof value.createdAt === "string" ? value.createdAt : new Date().toISOString(),
+    readAt: typeof value.readAt === "string" ? value.readAt : undefined,
+    question: typeof value.question === "string" ? value.question : undefined,
+    citations: Array.isArray(value.citations)
+      ? value.citations
+          .filter(
+            (citation): citation is AgentNotificationCitation =>
+              isRecord(citation) &&
+              typeof citation.sourceId === "string" &&
+              typeof citation.sourceTitle === "string" &&
+              typeof citation.chunkId === "string" &&
+              typeof citation.quote === "string"
+          )
+          .map((citation) => ({
+            sourceId: citation.sourceId,
+            sourceTitle: citation.sourceTitle,
+            chunkId: citation.chunkId,
+            quote: citation.quote
+          }))
+      : undefined
   };
 }
 

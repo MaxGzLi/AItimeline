@@ -26,6 +26,11 @@ export type ApiStatus = "checking" | "connected" | "offline";
 export type SourceCandidateStatus = "pending" | "queued" | "imported" | "dismissed";
 export type GroundingStatus = "passed" | "warning" | "failed";
 export type DismissedPostMode = "soft" | "hard";
+export type AgentTurnStatus = "answered" | "pending_confirmation" | "researching" | "closed";
+export type AgentTurnSummary = AgentTurnRecord & {
+  status: AgentTurnStatus;
+  threadId: string;
+};
 
 export type DismissedPostSummary = {
   id: string;
@@ -102,7 +107,8 @@ export type ApiSnapshot = {
     dismissedAt: string;
     mode: DismissedPostMode;
   }>;
-  agentTurns: AgentTurnRecord[];
+  agentTurns: AgentTurnSummary[];
+  notifications: AgentNotification[];
   userSettings?: ApiSettings["userSettings"];
 };
 
@@ -180,10 +186,45 @@ export type AgentAskApiResponse = {
       runnerKind: "model" | "deterministic";
     } | null;
     answerCardId?: string;
-    actions: Array<{ kind: string; label: string; concepts: string[]; queries?: string[] }>;
+    nearestPosts?: Array<{ postId: string; title: string; overlapScore: number }>;
+    actions: Array<{
+      kind: string;
+      label: string;
+      concepts: string[];
+      queries?: string[];
+      questions?: Array<{
+        id: string;
+        label: string;
+        options: Array<{ id: string; label: string; queryModifier?: string; importLimit?: number }>;
+      }>;
+    }>;
     notes: string[];
   };
   discoveredCandidates: Array<{ id: string }>;
+  turnRecord: AgentTurnSummary;
+};
+
+export type AgentConfirmApiResponse = {
+  accepted: boolean;
+  turnRecord: AgentTurnSummary;
+  records: Array<{ id: string; status: string; job: { kind: string } }>;
+};
+
+export type AgentNotification = {
+  id: string;
+  kind: "agent_answer" | "research_progress";
+  turnId: string;
+  postIds: string[];
+  body: string;
+  createdAt: string;
+  readAt?: string;
+  question?: string;
+  citations?: Array<{ sourceId: string; sourceTitle: string; chunkId: string; quote: string }>;
+  supportPosts?: Array<{ id: string; title: string; dismissed: boolean; missing: boolean }>;
+};
+
+export type ApiNotificationsResponse = {
+  records: AgentNotification[];
 };
 
 export type SourceCandidateRecord = {
