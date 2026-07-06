@@ -1,13 +1,17 @@
 export const apiBaseUrl = (import.meta.env.VITE_AITIMELINE_API_URL ?? "http://127.0.0.1:8787").replace(/\/$/, "");
 export const sampleSourceUrl = `${apiBaseUrl}/fixtures/article`;
 
-export async function apiRequest<T>(path: string, options: { method?: "GET" | "POST"; body?: unknown } = {}): Promise<T> {
+export async function apiRequest<T>(
+  path: string,
+  options: { method?: "GET" | "POST"; body?: unknown; keepalive?: boolean } = {}
+): Promise<T> {
   const response = await fetch(`${apiBaseUrl}${path}`, {
     method: options.method ?? "GET",
     headers: {
       "content-type": "application/json"
     },
-    body: options.body ? JSON.stringify(options.body) : undefined
+    body: options.body ? JSON.stringify(options.body) : undefined,
+    keepalive: options.keepalive
   });
   const payload = (await response.json()) as unknown;
 

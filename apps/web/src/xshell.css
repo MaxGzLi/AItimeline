@@ -513,6 +513,8 @@ body:has(.x-frame) {
 .x-act.like:hover, .x-act.like.on { color: var(--x-like); }
 .x-act.repost:hover { color: var(--x-repost); }
 .x-act.on { color: var(--x-blue); }
+/* 时间线上的到期复习卡:「已复习」确认按钮,扁平蓝字 */
+.x-act.review { color: var(--x-blue); font-weight: 700; }
 /* ---------- 帖内评论线程 ---------- */
 .x-replies {
   margin-top: 4px;
@@ -561,23 +563,6 @@ body:has(.x-frame) {
   padding-left: 42px;
   font-size: 13px;
   color: var(--x-like);
-}
-.x-dismissed {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--x-line);
-  font-size: 14px;
-  color: var(--x-muted);
-}
-.x-dismissed button {
-  color: var(--x-blue);
-  background: none;
-  border: none;
-  cursor: pointer;
-  font: inherit;
 }
 .x-empty {
   padding: 28px 16px;

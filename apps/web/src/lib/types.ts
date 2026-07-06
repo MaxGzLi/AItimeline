@@ -88,8 +88,12 @@ export type ApiSnapshot = {
   agentTurns: AgentTurnRecord[];
 };
 
+// 时间线卡:排序卡 + 服务端为到期复习卡附加的 reviewDueAt(core 的 RankedKnowledgeCard
+// 没有这个字段,不改 core,在 web 侧扩展)。
+export type TimelineCard = RankedKnowledgeCard & { reviewDueAt?: string };
+
 export type ApiTimelineResponse = {
-  posts: RankedKnowledgeCard[];
+  posts: TimelineCard[];
   sourceImports: SourceImport[];
   topicStates?: TopicState[];
   recommendationSummary?: {
@@ -97,6 +101,16 @@ export type ApiTimelineResponse = {
     byIntent: Record<string, number>;
     topReasons: string[];
   };
+};
+
+export type ReviewDueItem = {
+  postId: string;
+  intervalDays: number;
+  dueAt: string;
+};
+
+export type ApiReviewDueResponse = {
+  due: ReviewDueItem[];
 };
 
 export type ApiEvidenceResponse = {

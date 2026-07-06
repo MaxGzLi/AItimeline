@@ -5,7 +5,6 @@ import {
   buildKnowledgeBoundary,
   buildKnowledgeGraph,
   buildLinkedKnowledgeGraph,
-  createReviewQueue,
   demoCards,
   demoProfile,
   demoSignals,
@@ -20,6 +19,7 @@ import {
   type KnowledgeChunk,
   type LearningFeedback,
   type RankedKnowledgeCard,
+  type ReviewItem,
   type SourceAsset,
   type SourceImport,
   type TopicState
@@ -79,6 +79,7 @@ import type {
   ApiCurationRunResponse,
   ApiEvidenceResponse,
   ApiImportResponse,
+  ApiReviewDueResponse,
   ApiSnapshot,
   ApiStatus,
   ApiTimelineResponse,
@@ -87,7 +88,9 @@ import type {
   InteractionSignals,
   LearningFeedbackByPost,
   MemoryAction,
-  SourceCandidateRecord
+  ReviewDueItem,
+  SourceCandidateRecord,
+  TimelineCard
 } from "./lib/types";
 
 type ViewKey = "timeline" | "discover" | "graph" | "review" | "agent" | "settings";
@@ -118,6 +121,9 @@ export function App() {
   const [importedCards, setImportedCards] = useState<KnowledgeCard[]>([]);
   // 后台同步到、但还没放进列表的新卡:顶部「显示 N 张新卡」点击后才插入(对标 X)。
   const [pendingCards, setPendingCards] = useState<KnowledgeCard[]>([]);
+  // 服务端到期复习列表(/api/review/due):复习状态的唯一真源,时间线复习卡、复习 view、
+  // 右栏都读它,避免前端再算一套。
+  const [reviewDueItems, setReviewDueItems] = useState<ReviewDueItem[]>([]);
   const [sourceAssets, setSourceAssets] = useState<SourceAsset[]>([]);
   const [sourceChunks, setSourceChunks] = useState<KnowledgeChunk[]>([]);
   const [sourceCandidates, setSourceCandidates] = useState<SourceCandidateRecord[]>([]);
@@ -174,6 +180,14 @@ export function App() {
   const interactionSignalsRef = useRef<InteractionSignals>({});
   const composerInputRef = useRef<HTMLInputElement | null>(null);
   const detailReturnScrollY = useRef(0);
+  // 纯曝光上报:已报过的卡 id(每次会话每卡最多一条)+ 等待 flush 的队列。故意用 ref
+  // 而非 state,避免惊动 interactionSignals 的同步管线和本地反馈。
+  const impressionReportedIds = useRef<Set<string>>(new Set());
+  const impressionQueue = useRef<Map<string, KnowledgeCard>>(new Map());
+  // 本会话内已 ✕ 退场 / 已复习确认的卡:本地立即隐藏(demo 兜底卡也生效),并防止
+  // 在途的 buffer 刷新把它们当「新卡」复活。ref 供刷新闭包读最新值,state 驱动渲染过滤。
+  const locallyRemovedIdsRef = useRef<Set<string>>(new Set());
+  const [locallyRemovedIds, setLocallyRemovedIds] = useState<ReadonlySet<string>>(() => new Set());
 
   useEffect(() => {
     interactionSignalsRef.current = interactionSignals;
@@ -229,10 +243,11 @@ export function App() {
 
   const rankedImportedCards = useMemo(() => ensureRankedCards(importedCards), [importedCards]);
   const demoRankedCards = useMemo(() => rankKnowledgeCards(demoCards, demoProfile), []);
-  const rankedCards = useMemo(
-    () => (rankedImportedCards.length > 0 ? rankedImportedCards : demoRankedCards),
-    [demoRankedCards, rankedImportedCards]
-  );
+  const rankedCards = useMemo(() => {
+    const cards = rankedImportedCards.length > 0 ? rankedImportedCards : demoRankedCards;
+    // 已 ✕ / 已复习的卡本地立即退场,与服务端时间线的过滤结果保持一致。
+    return locallyRemovedIds.size === 0 ? cards : cards.filter((card) => !locallyRemovedIds.has(card.id));
+  }, [demoRankedCards, locallyRemovedIds, rankedImportedCards]);
   // "For you" keeps the personalized ranking; "Latest" re-sorts the same cards
   // newest-first by createdAt; "Saved" narrows to bookmarked cards.
   const displayedCards = useMemo(() => {
@@ -291,6 +306,23 @@ export function App() {
 
     return byId;
   }, [allCards]);
+  // 复习页要能取到还躺在 pendingCards 缓冲区里的到期卡本体,否则题面退化成裸 postId、
+  // 评分也推进不了服务端状态;在 cardsById 之上补上缓冲卡。
+  const reviewCardsById = useMemo(() => {
+    if (pendingCards.length === 0) {
+      return cardsById;
+    }
+
+    const byId = { ...cardsById };
+
+    for (const card of ensureRankedCards(pendingCards)) {
+      if (!byId[card.id]) {
+        byId[card.id] = card;
+      }
+    }
+
+    return byId;
+  }, [cardsById, pendingCards]);
   const cardCountByConcept = useMemo(() => {
     const byConcept: Record<string, number> = {};
 
@@ -474,9 +506,17 @@ export function App() {
     () => (selectedCardId ? buildCardNeighborhoodGraph(linkedGraph, selectedCardId) : null),
     [linkedGraph, selectedCardId]
   );
-  const reviewQueue = useMemo(
-    () => createReviewQueue(allCards, allSignals),
-    [allCards, allSignals]
+  // 复习队列直接由服务端到期列表(/api/review/due)派生,不再前端另算一套调度。
+  const reviewQueue = useMemo<ReviewItem[]>(
+    () =>
+      reviewDueItems.map((item) => ({
+        cardId: item.postId,
+        concept: reviewCardsById[item.postId]?.concepts[0] ?? item.postId,
+        dueAt: item.dueAt,
+        intervalDays: item.intervalDays,
+        strength: 0
+      })),
+    [reviewDueItems, cardsById]
   );
   const boundary = useMemo(
     () => buildKnowledgeBoundary({ cards: allCards, signals: allSignals }),
@@ -718,6 +758,61 @@ export function App() {
     recordInteraction(card, { dwellTimeMs, skippedQuickly: false });
   }, []);
 
+  // 卡片进入视口 ≥1s(PostView 内计时)后进曝光队列;实际上报由下面的节流 flush 负责。
+  const handleImpression = useCallback((card: KnowledgeCard) => {
+    if (impressionReportedIds.current.has(card.id) || impressionQueue.current.has(card.id)) {
+      return;
+    }
+
+    impressionQueue.current.set(card.id, card);
+  }, []);
+
+  // 轻量 sender:一次一条纯曝光走 POST /api/signals(服务端当作主题中性、只计生命周期),
+  // 故意不走 syncInteractionSignal——那条路每次都 refreshFromApi,滚动会打爆接口。
+  const flushImpressions = useCallback(() => {
+    if (impressionQueue.current.size === 0) {
+      return;
+    }
+
+    const pending = Array.from(impressionQueue.current.values());
+    impressionQueue.current.clear();
+
+    for (const card of pending) {
+      // 乐观标记:每卡每次会话至多一条,失败也不重报(纯曝光是尽力而为的统计信号)。
+      // keepalive 让关标签页前的最后一批 flush 也能送达。
+      impressionReportedIds.current.add(card.id);
+      void apiRequest<unknown>("/api/signals", {
+        method: "POST",
+        keepalive: true,
+        body: {
+          generatedAt: new Date().toISOString(),
+          signal: createInteractionSignal(card),
+          sourceCandidates: []
+        }
+      }).catch(() => {
+        // 上报失败就丢弃,不影响阅读。
+      });
+    }
+  }, []);
+
+  // 每 5 秒 flush 一次曝光队列;页面切走时立即 flush,尽量不丢关闭前的曝光。
+  useEffect(() => {
+    const interval = window.setInterval(flushImpressions, 5000);
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        flushImpressions();
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      flushImpressions();
+    };
+  }, [flushImpressions]);
+
   useEffect(() => {
     importedCardsRef.current = importedCards;
   }, [importedCards]);
@@ -730,13 +825,16 @@ export function App() {
       setApiMessage("正在刷新本地 API 状态");
     }
 
+    const now = new Date().toISOString();
+
     try {
-      const [timeline, snapshot, queuedJobs] = await Promise.all([
+      const [timeline, snapshot, queuedJobs, reviewDue] = await Promise.all([
         apiRequest<ApiTimelineResponse>(
-          `/api/timeline?userId=local-user&now=${encodeURIComponent(new Date().toISOString())}`
+          `/api/timeline?userId=local-user&now=${encodeURIComponent(now)}`
         ),
         apiRequest<ApiSnapshot>("/api/snapshot"),
-        apiRequest<ApiCurationJobsResponse>("/api/curation/jobs?status=queued")
+        apiRequest<ApiCurationJobsResponse>("/api/curation/jobs?status=queued"),
+        apiRequest<ApiReviewDueResponse>(`/api/review/due?now=${encodeURIComponent(now)}`)
       ]);
 
       // A newer refresh started while this one was in flight; drop the stale result.
@@ -761,7 +859,11 @@ export function App() {
             return fresh ? [fresh] : [];
           })
         );
-        setPendingCards(timeline.posts.filter((post) => !displayedIds.has(post.id)));
+        setPendingCards(
+          timeline.posts.filter(
+            (post) => !displayedIds.has(post.id) && !locallyRemovedIdsRef.current.has(post.id)
+          )
+        );
       } else {
         setImportedCards(timeline.posts);
         setPendingCards([]);
@@ -771,6 +873,7 @@ export function App() {
       setSourceAssets(upsertById([], registryAssets));
       setSourceChunks(upsertById([], registryChunks));
       setSourceCandidates(snapshot.sourceCandidates);
+      setReviewDueItems(reviewDue.due);
       setQueuedJobCount(queuedJobs.jobs.length);
       productionPeakRef.current =
         queuedJobs.jobs.length === 0 ? 0 : Math.max(productionPeakRef.current, queuedJobs.jobs.length);
@@ -1143,8 +1246,40 @@ export function App() {
     void syncMemoryForCard(card, "save");
   }
 
+  // 本地立即退场:渲染层(rankedCards)马上隐藏,在途刷新也不会再把它当「新卡」缓冲。
+  function markLocallyRemoved(postId: string) {
+    locallyRemovedIdsRef.current.add(postId);
+    setLocallyRemovedIds(new Set(locallyRemovedIdsRef.current));
+  }
+
   function handleSkip(card: RankedKnowledgeCard) {
+    // 保留原有的同主题降权信号(skippedQuickly)。
     recordInteraction(card, { skippedQuickly: true, dwellTimeMs: 800, openedThread: false });
+    // 持久化退场:/api/timeline 过滤 dismissed,刷新后不会再回来。
+    void apiRequest(`/api/posts/${encodeURIComponent(card.id)}/dismiss`, { method: "POST" }).catch(() => {
+      // 幂等接口,失败不影响本地移除。
+    });
+    markLocallyRemoved(card.id);
+  }
+
+  // 「已复习」:服务端推进复习间隔(1→3→7→14→30 天)并落盘,该卡到下次到期前不再进流。
+  async function completeReview(card: KnowledgeCard) {
+    try {
+      await apiRequest(`/api/review/${encodeURIComponent(card.id)}/complete`, {
+        method: "POST",
+        body: { reviewedAt: new Date().toISOString() }
+      });
+    } catch {
+      // 服务端不可用时尽力而为;下次刷新会与服务端对齐。
+    }
+
+    await refreshFromApi({ silent: true, mode: "buffer" });
+  }
+
+  function handleReviewComplete(card: RankedKnowledgeCard) {
+    // 立即从流里移除(到下次到期前不再出现),再静默推进服务端间隔。
+    markLocallyRemoved(card.id);
+    void completeReview(card);
   }
 
   function handleShowPendingCards() {
@@ -1459,14 +1594,17 @@ export function App() {
                     isFocused={index === focusedIndex}
                     key={card.id}
                     onDwell={handleDwell}
+                    onImpression={handleImpression}
                     onLike={handleLike}
                     onOpen={handleOpenCard}
                     onOpenCardId={handleOpenCardId}
                     onOpenConcept={handleOpenConcept}
                     onReply={handleReply}
+                    onReviewComplete={handleReviewComplete}
                     onSave={handleSave}
                     onSkip={handleSkip}
                     quoteText={quoteByCard[card.id]}
+                    reviewDueAt={(card as TimelineCard).reviewDueAt}
                     signal={interactionSignals[card.id]}
                     wikilinkCandidates={wikilinkCandidates}
                   />
@@ -1503,8 +1641,8 @@ export function App() {
 
         {activeView === "review" ? (
           <ReviewView
-            cardsById={cardsById}
-            onReviewed={(card) => recordInteraction(card, { reviewed: true, skippedQuickly: false })}
+            cardsById={reviewCardsById}
+            onReviewed={handleReviewComplete}
             queue={reviewQueue}
           />
         ) : null}
