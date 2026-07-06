@@ -184,6 +184,7 @@ try {
     "curation run should import a background source"
   );
 
+  const beforeFollowupSnapshot = await requestJson("/api/snapshot");
   const followupRun = await requestJson("/api/curation/run", {
     method: "POST",
     body: {
@@ -193,23 +194,83 @@ try {
   });
 
   assert.ok(followupRun.records.length > 0, "curation run should process follow-up jobs");
+  const followupRecord = followupRun.records.find(
+    (record) =>
+      record.status === "succeeded" &&
+      record.result?.sourceImport?.importRecord.status === "ready" &&
+      record.result?.followupProtocol
+  );
+
+  assert.ok(followupRecord, "follow-up run should produce a grounded source import and protocol");
   assert.ok(
-    followupRun.records.some(
-      (record) =>
-        record.status === "succeeded" &&
-        record.result?.sourceImport?.importRecord.status === "ready" &&
-        record.result?.followupProtocol
-    ),
-    "follow-up run should produce a grounded source import and protocol"
+    followupRecord.result.sourceImport.posts.length > 0,
+    "the first follow-up for a seed post should persist its card"
+  );
+
+  // 第二轮:同一种子再触发一次跟进,产物与第一轮同题,必须被去重跳过。
+  const afterFirstFollowupSnapshot = await requestJson("/api/snapshot");
+
+  await requestJson("/api/signals", {
+    method: "POST",
+    body: {
+      generatedAt: "2026-06-10T01:00:00.000Z",
+      topicState: {
+        topicId: firstTopic,
+        interestScore: 0.82,
+        fatigueScore: 0.12,
+        comprehensionScore: 0.72
+      },
+      signal: {
+        postId: firstPost.id,
+        topicId: firstTopic,
+        conceptIds: firstPost.concepts,
+        impression: true,
+        dwellTimeMs: 18000,
+        openedThread: true,
+        liked: true,
+        saved: false,
+        askedQuestion: false,
+        reviewed: false,
+        skippedQuickly: false,
+        createdAt: "2026-06-10T01:00:00.000Z"
+      }
+    }
+  });
+
+  const repeatFollowupRun = await requestJson("/api/curation/run", {
+    method: "POST",
+    body: {
+      now: "2026-06-10T01:00:00.000Z",
+      kinds: ["generate_followup"]
+    }
+  });
+  const repeatFollowupRecord = repeatFollowupRun.records.find(
+    (record) => record.status === "succeeded" && record.result?.sourceImport
+  );
+
+  assert.ok(repeatFollowupRecord, "repeat follow-up run should still process the job");
+  assert.deepEqual(
+    repeatFollowupRecord.result.sourceImport.posts,
+    [],
+    "duplicate-titled follow-up posts should be skipped before persistence"
   );
 
   const snapshot = await requestJson("/api/snapshot");
 
   assert.ok(snapshot.sourceImports.length >= 3, "snapshot should include direct, background, and follow-up imports");
+  assert.equal(
+    snapshot.posts.length,
+    afterFirstFollowupSnapshot.posts.length,
+    "duplicate-titled follow-up posts should not increase the persisted post count"
+  );
+  assert.ok(
+    snapshot.posts.length > beforeFollowupSnapshot.posts.length,
+    "the first follow-up card should have increased the post count"
+  );
   assert.ok(snapshot.posts.length >= importResult.posts.length, "snapshot should persist posts");
   assert.ok(snapshot.curationJobs.length >= signalResult.records.length, "snapshot should persist curation records");
   assert.equal(snapshot.userMemories.length, 1, "snapshot should persist user memory");
-  assert.equal(snapshot.interactionSignals.length, 1, "snapshot should persist interaction signals");
+  assert.equal(snapshot.interactionSignals.length, 2, "snapshot should persist both interaction signals");
   assert.equal(snapshot.topicStates.length, 1, "snapshot should persist topic states");
   assert.equal(snapshot.sourceCandidates.length, 1, "snapshot should persist source candidates");
   assert.equal(snapshot.sourceCandidates[0].status, "imported", "imported source candidate should be marked imported");

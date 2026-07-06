@@ -84,6 +84,23 @@ Language policy:
 
 const protocolVersion = "followup-harness-v0" as const;
 const requiredThreadKinds: ThreadBlockKind[] = ["explain", "example", "contrast", "extension", "quiz"];
+const followupSourceUrlSegment = "aitimeline.local/followups/";
+
+export function isFollowupSource(source: Pick<Source, "id" | "url"> | undefined): boolean {
+  if (!source) {
+    return false;
+  }
+
+  return source.id.startsWith("followup-") || source.url.includes(followupSourceUrlSegment);
+}
+
+export function isFollowupPost(post: Pick<KnowledgePost, "sources"> | undefined): boolean {
+  return isFollowupSource(post?.sources[0]);
+}
+
+export function isFollowupPostId(postId: string | undefined): boolean {
+  return typeof postId === "string" && postId.startsWith("followup-");
+}
 
 export function createFollowupGenerationProtocol(
   input: CreateFollowupGenerationProtocolInput

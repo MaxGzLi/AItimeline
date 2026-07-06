@@ -1,4 +1,5 @@
 import { scoreInteraction } from "./feedbackPolicy.js";
+import { isFollowupPostId } from "./followupHarness.js";
 import type {
   AgentExpansionJob,
   AgentExpansionPlan,
@@ -36,6 +37,18 @@ export function createExpansionPlan(input: CreateExpansionPlanInput): AgentExpan
   const jobsPerTopic = new Map<string, number>();
 
   for (const signal of input.signals) {
+    // Expansion policy only receives signal ids, not full posts. Follow-up posts
+    // created by the harness use a followup-* post id prefix, so suppress them
+    // here before they can enqueue follow-up, discovery, or import jobs.
+    if (isFollowupPostId(signal.postId)) {
+      suppressions.push({
+        postId: signal.postId,
+        topicId: signal.topicId,
+        reason: "Follow-up posts do not start another background curation chain."
+      });
+      continue;
+    }
+
     const feedback = feedbackByPost.get(signal.postId) ?? createFallbackFeedback(signal);
     const topicState = topicStateById.get(signal.topicId);
     const suppression = getSuppression(signal, topicState, generatedAt, config);
