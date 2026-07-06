@@ -21,6 +21,9 @@ import {
   fetchArticle,
   fetchYouTubeTranscript,
   filterTimelineLifecycle,
+  getHardDismissedPostIds,
+  getSoftDismissalReturnAt,
+  isTimelineDismissalActive,
   getDueReviewStates,
   getRestingReviewStates,
   isPureExposureSignal,
@@ -63,7 +66,7 @@ export function createApiServer(options = {}) {
 
   return createServer(async (request, response) => {
     response.setHeader("Access-Control-Allow-Origin", "*");
-    response.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+    response.setHeader("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS");
     response.setHeader("Access-Control-Allow-Headers", "content-type");
 
     if (request.method === "OPTIONS") {
@@ -137,24 +140,49 @@ export function createApiServer(options = {}) {
         return;
       }
 
+      if (request.method === "GET" && url.pathname === "/api/dismissed") {
+        sendJson(response, 200, getDismissedPostsResponse(persistenceStore.getSnapshot(), url.searchParams.get("now")));
+        return;
+      }
+
       if (request.method === "POST" && /^\/api\/posts\/[^/]+\/dismiss$/.test(url.pathname)) {
+        const postId = decodeURIComponent(
+          url.pathname.replace(/^\/api\/posts\//, "").replace(/\/dismiss$/, "")
+        );
+        const body = await readJsonBody(request);
+        const now = new Date().toISOString();
+        const snapshot = persistenceStore.getSnapshot();
+        const mode = parseDismissedPostMode(body && typeof body === "object" ? body.mode : undefined);
+        const record = {
+          postId,
+          dismissedAt: now,
+          mode
+        };
+        const nextDismissedPosts = upsertDismissedPostRecord(snapshot.dismissedPosts, record);
+
+        persistenceStore.saveDismissedPosts(nextDismissedPosts, now);
+        sendJson(response, 200, { dismissed: true, record });
+        return;
+      }
+
+      if (request.method === "DELETE" && /^\/api\/posts\/[^/]+\/dismiss$/.test(url.pathname)) {
         const postId = decodeURIComponent(
           url.pathname.replace(/^\/api\/posts\//, "").replace(/\/dismiss$/, "")
         );
         const now = new Date().toISOString();
         const snapshot = persistenceStore.getSnapshot();
-        const dismissedPostIds = Array.from(new Set([...snapshot.dismissedPostIds, postId]));
+        const nextDismissedPosts = snapshot.dismissedPosts.filter((record) => record.postId !== postId);
 
-        persistenceStore.saveDismissedPostIds(dismissedPostIds, now);
-        sendJson(response, 200, { dismissed: true });
+        persistenceStore.saveDismissedPosts(nextDismissedPosts, now);
+        sendJson(response, 200, { dismissed: false, restored: true, postId });
         return;
       }
 
       if (request.method === "GET" && url.pathname === "/api/review/due") {
         const snapshot = persistenceStore.getSnapshot();
-        const dismissedPostIds = new Set(snapshot.dismissedPostIds);
+        const hardDismissedPostIds = getHardDismissedPostIds(snapshot.dismissedPosts);
         const due = getDueReviewStates(snapshot.reviewStates, url.searchParams.get("now") ?? new Date())
-          .filter((state) => !dismissedPostIds.has(state.postId))
+          .filter((state) => !hardDismissedPostIds.has(state.postId))
           .map(({ postId, intervalDays, dueAt }) => ({ postId, intervalDays, dueAt }));
 
         sendJson(response, 200, { due });
@@ -1490,9 +1518,9 @@ function getTimelineResponse(snapshot, nowValue, userId = "local-user") {
   const posts = releaseItems.length
     ? snapshot.posts.filter((post) => releasedPostIds.has(post.id) || !plannedPostIds.has(post.id))
     : snapshot.posts;
-  const dismissedPostIds = new Set(snapshot.dismissedPostIds);
+  const hardDismissedPostIds = getHardDismissedPostIds(snapshot.dismissedPosts);
   const dueReviewStates = getDueReviewStates(snapshot.reviewStates, now).filter(
-    (state) => !dismissedPostIds.has(state.postId)
+    (state) => !hardDismissedPostIds.has(state.postId)
   );
   const dueReviewStateByPostId = new Map(dueReviewStates.map((state) => [state.postId, state]));
   const dueReviewPostIds = dueReviewStates.map((state) => state.postId);
@@ -1503,7 +1531,7 @@ function getTimelineResponse(snapshot, nowValue, userId = "local-user") {
   const lifecyclePosts = filterTimelineLifecycle({
     posts: candidatePosts,
     interactionSignals,
-    dismissedPostIds: snapshot.dismissedPostIds,
+    dismissedPosts: snapshot.dismissedPosts,
     dueReviewPostIds,
     restingReviewPostIds: getRestingReviewStates(snapshot.reviewStates, now).map((state) => state.postId),
     now
@@ -1531,6 +1559,53 @@ function getTimelineResponse(snapshot, nowValue, userId = "local-user") {
     recommendationSummary: summarizeRecommendation(rankedPosts),
     snapshotSummary: summarizeSnapshot(snapshot)
   };
+}
+
+function getDismissedPostsResponse(snapshot, nowValue) {
+  const now = nowValue ? new Date(nowValue) : new Date();
+
+  return {
+    records: snapshot.dismissedPosts
+      .map((record) => {
+        const post = snapshot.posts.find((candidate) => candidate.id === record.postId);
+        const autoReturnAt = record.mode === "soft" ? getSoftDismissalReturnAt(record).toISOString() : null;
+        const daysUntilReturn = autoReturnAt
+          ? Math.max(0, Math.ceil((new Date(autoReturnAt).getTime() - now.getTime()) / (24 * 60 * 60 * 1000)))
+          : null;
+
+        return {
+          id: record.postId,
+          postId: record.postId,
+          title: post?.title ?? record.postId,
+          mode: record.mode,
+          dismissedAt: record.dismissedAt,
+          autoReturnAt,
+          daysUntilReturn,
+          isActive: isTimelineDismissalActive(record, now)
+        };
+      })
+      .sort((a, b) => b.dismissedAt.localeCompare(a.dismissedAt))
+  };
+}
+
+function parseDismissedPostMode(value) {
+  if (value === undefined) {
+    return "soft";
+  }
+
+  if (value === "soft" || value === "hard") {
+    return value;
+  }
+
+  throw new HttpError(400, "dismiss mode must be \"soft\" or \"hard\".");
+}
+
+function upsertDismissedPostRecord(records, nextRecord) {
+  const byPostId = new Map(records.map((record) => [record.postId, record]));
+
+  byPostId.set(nextRecord.postId, nextRecord);
+
+  return Array.from(byPostId.values());
 }
 
 // 卡片的 media 只存 assetId;对外返回时补上 registry 里图片资产的 url 和图号,前端才能直接渲染。
@@ -1609,7 +1684,7 @@ function summarizeSnapshot(snapshot) {
     memories: snapshot.userMemories.length,
     interactionSignals: snapshot.interactionSignals.length,
     topicStates: snapshot.topicStates.length,
-    dismissedPostIds: snapshot.dismissedPostIds.length,
+    dismissedPosts: snapshot.dismissedPosts.length,
     reviewStates: snapshot.reviewStates.length,
     sourceCandidates: snapshot.sourceCandidates.length,
     agentTurns: snapshot.agentTurns.length

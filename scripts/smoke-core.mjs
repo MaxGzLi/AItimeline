@@ -1262,6 +1262,8 @@ const lifecycleSignals = [
 const lifecycleFilteredPosts = filterTimelineLifecycle({
   posts: [
     makeLifecycleCard("dismissed"),
+    makeLifecycleCard("soft-dismissed"),
+    makeLifecycleCard("soft-expired"),
     makeLifecycleCard("ignored-exposures"),
     makeLifecycleCard("stale-read"),
     makeLifecycleCard("due-stale"),
@@ -1272,7 +1274,11 @@ const lifecycleFilteredPosts = filterTimelineLifecycle({
     })
   ],
   interactionSignals: lifecycleSignals,
-  dismissedPostIds: ["dismissed"],
+  dismissedPosts: [
+    { postId: "dismissed", dismissedAt: "2026-07-01T00:00:00.000Z", mode: "hard" },
+    { postId: "soft-dismissed", dismissedAt: "2026-07-01T00:00:00.000Z", mode: "soft" },
+    { postId: "soft-expired", dismissedAt: "2026-06-01T00:00:00.000Z", mode: "soft" }
+  ],
   dueReviewPostIds: ["due-stale"],
   restingReviewPostIds: ["resting-review"],
   now: "2026-07-10T00:00:00.000Z"
@@ -1281,8 +1287,8 @@ const lifecycleIds = lifecycleFilteredPosts.map((post) => post.id);
 
 assert.deepEqual(
   lifecycleIds.sort(),
-  ["due-stale", "fresh-lifecycle", "note-exposures"].sort(),
-  "lifecycle filtering should retire dismissed, ignored, stale-read and resting-review posts while keeping notes and due reviews"
+  ["due-stale", "fresh-lifecycle", "note-exposures", "soft-expired"].sort(),
+  "lifecycle filtering should retire hard dismissed, active soft dismissed, ignored, stale-read and resting-review posts while keeping expired soft dismissals, notes and due reviews"
 );
 assert.deepEqual(
   getRestingReviewStates(

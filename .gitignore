@@ -1,4 +1,4 @@
-node_modules/
+node_modules
 dist/
 .vite/
 .env
@@ -8,6 +8,5 @@ dist/
 *.log
 coverage/
 *.tsbuildinfo
-apps/api/data/*.json
-apps/api/data/*.tmp
+apps/api/data/
 .claude/

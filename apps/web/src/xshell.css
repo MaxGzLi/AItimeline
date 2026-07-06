@@ -862,6 +862,8 @@ body:has(.x-frame) {
   color: var(--x-ink);
 }
 .x-setrow:hover { background: var(--x-hover); }
+.x-setrow-static { cursor: default; }
+.x-setrow-static:hover { background: none; }
 .x-setrow .x-smain { flex: 1; }
 .x-setrow .x-sname { font-size: 15px; margin: 0; font-weight: 500; }
 .x-setrow .x-ssub {
@@ -871,6 +873,37 @@ body:has(.x-frame) {
   max-width: 40em;
 }
 .x-setrow .x-sval { flex: none; font-size: 13.5px; color: var(--x-muted); }
+.x-settings-section {
+  border-bottom: 1px solid var(--x-line);
+}
+.x-settings-section-head {
+  padding: 18px 16px 8px;
+}
+.x-settings-section-head h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 800;
+}
+.x-settings-section-head p {
+  margin: 4px 0 0;
+  color: var(--x-muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+.x-dismissed-row {
+  align-items: flex-start;
+}
+.x-dismissed-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.x-dismissed-actions .x-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
 
 /* ---------- 焦点与响应式 ---------- */
 .x-frame button:focus-visible,
@@ -1469,6 +1502,34 @@ body:has(.x-frame) {
 }
 .x-scrolltop:hover { background: var(--x-blue-hover); }
 
+.x-dismiss-toast {
+  position: fixed;
+  left: 24px;
+  bottom: 24px;
+  z-index: 45;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  max-width: min(360px, calc(100vw - 48px));
+  min-height: 44px;
+  padding: 0 14px;
+  border-radius: 4px;
+  background: #0f1419;
+  color: #fff;
+  box-shadow: 0 8px 24px rgba(15, 20, 25, 0.24);
+  font-size: 14px;
+}
+.x-dismiss-toast button {
+  border: none;
+  background: none;
+  color: #fff;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0;
+}
+.x-dismiss-toast button:hover { text-decoration: underline; }
+
 /* ---------- 双链 wikilinks ---------- */
 .x-richtext {
   white-space: pre-line;
@@ -1587,6 +1648,11 @@ button.x-chip {
   cursor: pointer;
 }
 .x-chip.action:hover { background: var(--x-blue-soft, var(--x-hover)); }
+.x-chip.action.danger {
+  color: var(--x-red);
+  border-color: var(--x-red);
+}
+.x-chip.action.danger:hover { background: rgba(244, 33, 46, 0.08); }
 .x-chip.action:disabled {
   color: var(--x-muted);
   border-color: var(--x-line);

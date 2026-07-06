@@ -5,7 +5,7 @@ export const sampleSourceUrl = `${apiBaseUrl}/fixtures/article`;
 
 export async function apiRequest<T>(
   path: string,
-  options: { method?: "GET" | "POST"; body?: unknown; keepalive?: boolean } = {}
+  options: { method?: "GET" | "POST" | "DELETE"; body?: unknown; keepalive?: boolean } = {}
 ): Promise<T> {
   const response = await fetch(`${apiBaseUrl}${path}`, {
     method: options.method ?? "GET",

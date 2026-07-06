@@ -25,6 +25,18 @@ export type LearningFeedbackByPost = Record<string, LearningFeedback>;
 export type ApiStatus = "checking" | "connected" | "offline";
 export type SourceCandidateStatus = "pending" | "queued" | "imported" | "dismissed";
 export type GroundingStatus = "passed" | "warning" | "failed";
+export type DismissedPostMode = "soft" | "hard";
+
+export type DismissedPostSummary = {
+  id: string;
+  postId: string;
+  title: string;
+  mode: DismissedPostMode;
+  dismissedAt: string;
+  autoReturnAt: string | null;
+  daysUntilReturn: number | null;
+  isActive: boolean;
+};
 
 export type EvidenceLedger = {
   postId: string;
@@ -85,6 +97,11 @@ export type ApiSnapshot = {
   }>;
   posts: KnowledgeCard[];
   sourceCandidates: SourceCandidateRecord[];
+  dismissedPosts?: Array<{
+    postId: string;
+    dismissedAt: string;
+    mode: DismissedPostMode;
+  }>;
   agentTurns: AgentTurnRecord[];
   userSettings?: ApiSettings["userSettings"];
 };
@@ -118,6 +135,10 @@ export type ReviewDueItem = {
 
 export type ApiReviewDueResponse = {
   due: ReviewDueItem[];
+};
+
+export type ApiDismissedPostsResponse = {
+  records: DismissedPostSummary[];
 };
 
 export type ApiEvidenceResponse = {
