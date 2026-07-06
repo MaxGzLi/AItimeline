@@ -1,5 +1,6 @@
 import type { InteractionSignal, KnowledgeCard, RankedKnowledgeCard, SourceImport, TopicState } from "@aitimeline/core";
 import { getTopicId } from "./format";
+import { t } from "./i18n";
 import type { PersistedMvpState } from "./types";
 
 const storageKey = "aitimeline.mvp.v3";
@@ -19,7 +20,7 @@ export function ensureRankedCards(cards: KnowledgeCard[]): RankedKnowledgeCard[]
     return {
       ...card,
       score: 0,
-      scoreReasons: [card.recommendedBecause || "导入的来源已经可以开始探索"]
+      scoreReasons: [card.recommendedBecause || t("state.scoreReason.default")]
     };
   });
 }

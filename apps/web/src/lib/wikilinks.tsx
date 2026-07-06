@@ -1,6 +1,7 @@
 import type { KnowledgeCard } from "@aitimeline/core";
 import { parseWikilinks, resolveWikilink } from "@aitimeline/core";
 import type { ReactNode } from "react";
+import { t } from "./i18n";
 
 export interface WikilinkHandlers {
   onOpenConcept: (concept: string) => void;
@@ -38,7 +39,7 @@ export function renderWithWikilinks(
 
     if (resolved.kind === "ghost") {
       nodes.push(
-        <span className="x-wikilink ghost" key={key} title="还没有这条内容">
+        <span className="x-wikilink ghost" key={key} title={t("wikilink.ghost")}>
           {resolved.label}
         </span>
       );

@@ -2,6 +2,7 @@ import type { SourceImport } from "@aitimeline/core";
 import { CheckCircle2, Link, LoaderCircle, Send, Video, XCircle } from "lucide-react";
 import type { FormEvent } from "react";
 import { formatStatus } from "../lib/format";
+import { t } from "../lib/i18n";
 import type { ApiStatus } from "../lib/types";
 
 export function SourceImportPanel({
@@ -29,12 +30,18 @@ export function SourceImportPanel({
     <section className="x-import">
       <div className="x-import-head">
         <div>
-          <p className="x-label">来源智能体</p>
-          <h2>URL 导入</h2>
+          <p className="x-label">{t("import.label")}</p>
+          <h2>{t("import.title")}</h2>
         </div>
         <div className={`x-import-conn ${apiStatus}`}>
           {apiStatus === "connected" ? <CheckCircle2 size={17} /> : <Video size={17} />}
-          <span>{apiStatus === "connected" ? "已连接" : apiStatus === "checking" ? "连接中" : "离线"}</span>
+          <span>
+            {apiStatus === "connected"
+              ? t("api.status.connected")
+              : apiStatus === "checking"
+                ? t("api.status.checking")
+                : t("api.status.offline")}
+          </span>
         </div>
       </div>
 
@@ -42,15 +49,15 @@ export function SourceImportPanel({
         <label className="x-import-field">
           <Link size={18} />
           <input
-            aria-label="来源 URL"
+            aria-label={t("import.sourceUrl")}
             onChange={(event) => onUrlChange(event.target.value)}
-            placeholder="粘贴文章或 YouTube 链接"
+            placeholder={t("import.placeholder")}
             value={url}
           />
         </label>
         <button className="x-pill start" disabled={isImporting} type="submit">
           {isImporting ? <LoaderCircle className="x-spin" size={18} /> : <Send size={18} />}
-          <span>{isImporting ? "导入中" : "导入"}</span>
+          <span>{isImporting ? t("import.working") : t("import.start")}</span>
         </button>
       </form>
 
@@ -62,7 +69,7 @@ export function SourceImportPanel({
           </span>
         ) : (
           <span>
-            {latestImport ? formatStatus(latestImport.status) : "就绪"} · 生成了 {cardCount} 张卡 · {apiMessage}
+            {latestImport ? formatStatus(latestImport.status) : t("import.ready")} · {t("import.cardCount", { count: cardCount })} · {apiMessage}
           </span>
         )}
       </div>

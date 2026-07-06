@@ -3,6 +3,7 @@ import { BadgeCheck, Bookmark, CheckCircle2, Clock, Heart, MessageCircle, Plus, 
 import { useEffect, useRef, useState } from "react";
 import { getCardMedia, resolveMediaUrl } from "../lib/api";
 import { formatConnectionKind, formatRelativeTime, getAgentInitials, getAgentName, slugConcept } from "../lib/format";
+import { t } from "../lib/i18n";
 import { renderWithWikilinks } from "../lib/wikilinks";
 import { PostReplyThread } from "./PostReplyThread";
 import type { WikilinkAutocompleteCandidate } from "./WikilinkAutocomplete";
@@ -51,13 +52,11 @@ export function PostView({
   const visibleSince = useRef<number | null>(null);
   const reportedDwellMs = useRef(0);
   const impressionFired = useRef(false);
-  // 曝光计时期间 card 对象会被后台刷新换成新身份;曝光 effect 只跟 card.id 走
-  // (避免计时器被每次刷新清零),上报时从 ref 取最新卡。
   const impressionCard = useRef(card);
   impressionCard.current = card;
   const [threadOpen, setThreadOpen] = useState(false);
   const [bodyOverflows, setBodyOverflows] = useState(false);
-  const primaryConcept = card.concepts[0] ?? "知识";
+  const primaryConcept = card.concepts[0] ?? t("common.concept");
   const source = card.sources[0];
   const isUserNote = source?.type === "user_note";
   const topConnection = connections[0];
@@ -69,8 +68,6 @@ export function PostView({
   const replyCount = commentBlocks.length;
   const reviewDueDays = card.reviewPrompts?.[0]?.dueInDays;
 
-  // Viewport dwell tracking: report when the post has been ≥60% visible long
-  // enough, so ranking learns from real reading instead of impressions.
   useEffect(() => {
     const node = postRef.current;
 
@@ -125,8 +122,6 @@ export function PostView({
     };
   }, [card, onDwell]);
 
-  // 纯曝光:卡片进入视口且持续 ≥1s 记一次(每卡最多一次,交给父级节流上报),
-  // 用于「曝光多次却从不阅读」的自动退场统计。只在时间线列表挂 onImpression。
   useEffect(() => {
     if (!onImpression) {
       return;
@@ -147,8 +142,6 @@ export function PostView({
     };
     const observer = new IntersectionObserver(
       (entries) => {
-        // 主线程繁忙时「进入+离开」两条 entry 可能合并在同一批送达,只按最新一条
-        // 判断,否则快速滚过的卡会漏掉离开事件、被误报曝光。
         const entry = entries[entries.length - 1];
 
         if (impressionFired.current) {
@@ -177,7 +170,6 @@ export function PostView({
       clearTimer();
       observer.disconnect();
     };
-    // card.id 而非 card:后台刷新只换对象身份,不该打断进行中的 1s 曝光计时。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [card.id, onImpression]);
 
@@ -219,29 +211,31 @@ export function PostView({
           <span className="x-ctxicon">
             <RotateCcw size={15} />
           </span>
-          复习 · 到期回顾一下这张卡
+          {t("post.review")}
         </div>
       ) : card.recommendedBecause && !isUserNote ? (
         <div className="x-ctx">
           <span className="x-ctxicon">
             <Plus size={15} />
           </span>
-          为你推荐 · {card.recommendedBecause}
+          {t("post.recommend", { reason: card.recommendedBecause })}
         </div>
       ) : null}
       <article className={`x-post${isFocused ? " focused" : ""}`} ref={postRef}>
         <span className={`x-avatar${isUserNote ? "" : " agent"}`} aria-hidden="true">
-          {isUserNote ? "你" : getAgentInitials(primaryConcept)}
+          {isUserNote ? t("common.you") : getAgentInitials(primaryConcept)}
         </span>
         <div className="x-post-main">
           <div className="x-head">
-            <span className="x-name">{isUserNote ? "你的笔记" : getAgentName(primaryConcept)}</span>
-            {isUserNote ? null : <BadgeCheck aria-label="有出处" className="x-verified" size={17} />}
+            <span className="x-name">{isUserNote ? t("post.userNote") : getAgentName(primaryConcept)}</span>
+            {isUserNote ? null : <BadgeCheck aria-label={t("post.hasSource")} className="x-verified" size={17} />}
             <span className="x-meta">@{isUserNote ? "you" : slugConcept(primaryConcept)}</span>
             <span className="x-meta">·</span>
             <span className="x-meta">{formatRelativeTime(card.createdAt)}</span>
             <span className="x-meta">·</span>
-            <span className="x-meta">{isUserNote ? "笔记" : `${card.estimatedReadMinutes} 分钟读完`}</span>
+            <span className="x-meta">
+              {isUserNote ? t("post.note") : t("post.readMinutes", { count: card.estimatedReadMinutes })}
+            </span>
           </div>
 
           <button className="x-open" onClick={() => onOpen(card)} type="button">
@@ -249,7 +243,7 @@ export function PostView({
             <p className="x-body x-body-clamp" ref={bodyRef}>
               {renderWithWikilinks(card.shortBody ?? card.summary, cards, { onOpenConcept, onOpenCardId })}
             </p>
-            {bodyOverflows ? <span className="x-showmore">显示更多</span> : null}
+            {bodyOverflows ? <span className="x-showmore">{t("post.showMore")}</span> : null}
           </button>
 
           {leadMedia?.url ? (
@@ -275,8 +269,8 @@ export function PostView({
           {quoteText && !isUserNote ? (
             <button className="x-quote" onClick={() => onOpen(card)} type="button">
               <span className="x-qhead">
-                <span className="x-name">原文出处</span>
-                <span className="x-meta">· {source?.title ?? "未知来源"}</span>
+                <span className="x-name">{t("post.originalSource")}</span>
+                <span className="x-meta">· {source?.title ?? t("format.unknownSource")}</span>
               </span>
               <p className="x-qtext">“{quoteText}”</p>
             </button>
@@ -287,7 +281,7 @@ export function PostView({
               aria-expanded={threadOpen}
               className={`x-act${threadOpen ? " on" : ""}`}
               onClick={() => setThreadOpen((open) => !open)}
-              title="回复"
+              title={t("post.reply")}
               type="button"
             >
               <MessageCircle size={18} />
@@ -300,7 +294,7 @@ export function PostView({
               title={
                 topConnection
                   ? `${formatConnectionKind(topConnection.kind)} · ${topConnection.title}`
-                  : "还没有关联卡片"
+                  : t("post.link.none")
               }
               type="button"
             >
@@ -310,7 +304,7 @@ export function PostView({
             <button
               className={`x-act like${signal?.liked ? " on" : ""}`}
               onClick={() => onLike(card)}
-              title="赞"
+              title={t("post.like")}
               type="button"
             >
               <Heart size={18} />
@@ -318,27 +312,27 @@ export function PostView({
             <button
               className={`x-act${signal?.saved ? " on" : ""}`}
               onClick={() => onSave(card)}
-              title="收藏"
+              title={t("post.save")}
               type="button"
             >
               <Bookmark size={18} />
             </button>
-            <button className="x-act" onClick={() => onOpen(card)} title="复习计划" type="button">
+            <button className="x-act" onClick={() => onOpen(card)} title={t("post.reviewPlan")} type="button">
               <Clock size={18} />
-              {reviewDueDays !== undefined ? `${reviewDueDays} 天` : null}
+              {reviewDueDays !== undefined ? t("post.reviewDays", { days: reviewDueDays }) : null}
             </button>
             {reviewDueAt && onReviewComplete ? (
               <button
                 className="x-act review"
                 onClick={() => onReviewComplete(card)}
-                title="标记已复习"
+                title={t("post.reviewCompleteTitle")}
                 type="button"
               >
                 <CheckCircle2 size={18} />
-                已复习
+                {t("post.reviewComplete")}
               </button>
             ) : null}
-            <button className="x-act" onClick={() => onSkip(card)} title="不感兴趣" type="button">
+            <button className="x-act" onClick={() => onSkip(card)} title={t("post.notInterested")} type="button">
               <XCircle size={18} />
             </button>
           </div>

@@ -1,4 +1,5 @@
 import type { Source, SourceAsset, SourceImport } from "../types.js";
+import type { ContentLanguage } from "../harness/contentLanguage.js";
 import {
   transformTranscriptToCards,
   type TranscriptSegment,
@@ -10,7 +11,11 @@ export interface MockYouTubeImportResult extends TranscriptTransformResult {
   importRecord: SourceImport;
 }
 
-export function transformMockYouTubeUrl(url: string, createdAt = new Date().toISOString()): MockYouTubeImportResult {
+export function transformMockYouTubeUrl(
+  url: string,
+  createdAt = new Date().toISOString(),
+  contentLanguage?: ContentLanguage
+): MockYouTubeImportResult {
   const videoId = parseYouTubeVideoId(url);
 
   if (!videoId) {
@@ -38,7 +43,11 @@ export function transformMockYouTubeUrl(url: string, createdAt = new Date().toIS
   const transformed = transformTranscriptToCards(source, demoYouTubeTranscript, {
     asset,
     createdAt,
-    recommendedBecause: "你导入了这个 YouTube 视频,所以把带时间点的要点转成了时间线卡片。"
+    contentLanguage,
+    recommendedBecause:
+      contentLanguage === "en"
+        ? "You imported this YouTube video, so timestamped highlights were turned into timeline cards."
+        : "你导入了这个 YouTube 视频,所以把带时间点的要点转成了时间线卡片。"
   });
 
   return {

@@ -1,5 +1,6 @@
 import { createModelKnowledgePostRunner, type CreateModelKnowledgePostRunnerOptions } from "../harness/modelRunner.js";
 import { deterministicKnowledgePostRunner } from "../harness/runner.js";
+import type { ContentLanguage } from "../harness/contentLanguage.js";
 import {
   createOpenAICompatibleModelClientFromEnv,
   type OpenAICompatibleModelClientEnv,
@@ -30,6 +31,7 @@ export interface SourceImportWorkerInput {
   chunks: KnowledgeChunk[];
   sourceRegistry?: SourceRegistry;
   paperDigest?: PaperDigestInput;
+  contentLanguage?: ContentLanguage;
   createdAt?: string;
   recommendedBecause?: string;
   config?: AgentHarnessConfig;
@@ -55,6 +57,7 @@ export interface SourceImportWorker {
 
 export interface CreateSourceImportWorkerOptions {
   runner?: KnowledgePostAgentRunner;
+  contentLanguage?: ContentLanguage;
 }
 
 export interface CreateModelSourceImportWorkerOptions
@@ -74,7 +77,7 @@ export function createSourceImportWorker(
 
   return {
     runner,
-    run: (input) => runSourceImport(input, runner)
+    run: (input) => runSourceImport(input, runner, options.contentLanguage)
   };
 }
 
@@ -100,9 +103,11 @@ export function createOpenAICompatibleSourceImportWorker(
 
 export async function runSourceImport(
   input: SourceImportWorkerInput,
-  runner: KnowledgePostAgentRunner = deterministicKnowledgePostRunner
+  runner: KnowledgePostAgentRunner = deterministicKnowledgePostRunner,
+  defaultContentLanguage?: ContentLanguage
 ): Promise<SourceImportWorkerResult> {
   const createdAt = input.createdAt ?? new Date().toISOString();
+  const contentLanguage = input.contentLanguage ?? defaultContentLanguage;
   const assets = input.assets ?? [];
   const sourceRegistry =
     input.sourceRegistry ??
@@ -122,6 +127,7 @@ export async function runSourceImport(
       paperDigest: input.paperDigest,
       createdAt,
       recommendedBecause: input.recommendedBecause,
+      contentLanguage,
       config: input.config,
       userContext: input.userContext
     });

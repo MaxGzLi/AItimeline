@@ -1,6 +1,7 @@
 import type { KnowledgeCard, RankedKnowledgeCard } from "@aitimeline/core";
 import { BadgeCheck } from "lucide-react";
 import { useState, type FormEvent } from "react";
+import { t } from "../lib/i18n";
 import { renderWithWikilinks } from "../lib/wikilinks";
 import { WikilinkInput, type WikilinkAutocompleteCandidate } from "./WikilinkAutocomplete";
 
@@ -45,14 +46,14 @@ export function PostReplyThread({
       await onReply(card, text);
       setReplyText("");
     } catch (error) {
-      setReplyError(error instanceof Error ? error.message : "回复失败,请稍后再试。");
+      setReplyError(error instanceof Error ? error.message : t("reply.error"));
     } finally {
       setSending(false);
     }
   }
 
   return (
-    <div className={`x-replies${className ? ` ${className}` : ""}`} aria-label="评论线程">
+    <div className={`x-replies${className ? ` ${className}` : ""}`} aria-label={t("reply.thread")}>
       {commentBlocks.length === 0 && emptyMessage ? (
         <p className="x-muted-copy x-replies-empty">{emptyMessage}</p>
       ) : null}
@@ -63,12 +64,12 @@ export function PostReplyThread({
         return (
           <div className="x-reply" key={block.id}>
             <span className={`x-avatar x-reply-avatar${isAgent ? " agent" : ""}`} aria-hidden="true">
-              {isAgent ? "AI" : "你"}
+              {isAgent ? t("common.ai") : t("common.you")}
             </span>
             <div className="x-reply-main">
               <div className="x-head">
                 <span className="x-name">{block.title}</span>
-                {isAgent ? <BadgeCheck aria-label="有出处" className="x-verified" size={15} /> : null}
+                {isAgent ? <BadgeCheck aria-label={t("post.hasSource")} className="x-verified" size={15} /> : null}
               </div>
               <p className="x-body">
                 {renderWithWikilinks(block.body, cards, { onOpenConcept, onOpenCardId })}
@@ -80,19 +81,19 @@ export function PostReplyThread({
 
       <form className="x-reply-form" onSubmit={handleReplySubmit}>
         <span className="x-avatar x-reply-avatar" aria-hidden="true">
-          你
+          {t("common.you")}
         </span>
         <WikilinkInput
-          aria-label="回复"
+          aria-label={t("reply.form")}
           candidates={wikilinkCandidates}
           className="x-reply-input"
           disabled={sending}
           onValueChange={setReplyText}
-          placeholder="回复…"
+          placeholder={t("reply.placeholder")}
           value={replyText}
         />
         <button className="x-pill" disabled={sending || !replyText.trim()} type="submit">
-          {sending ? "发送中" : "发送"}
+          {sending ? t("reply.sending") : t("reply.send")}
         </button>
       </form>
 

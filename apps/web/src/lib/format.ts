@@ -8,10 +8,9 @@ import type {
   TransformationStatus,
   TrustState
 } from "@aitimeline/core";
+import { getDateLocale, getI18nLanguage, t } from "./i18n";
 import type { AgentBoundaryZone, AskApiResult, GroundingStatus, SourceCandidateStatus } from "./types";
 
-// JS smooth-scroll ignores prefers-reduced-motion (unlike CSS, which we honor
-// everywhere). Fall back to an instant jump when the user asked for reduced motion.
 export function scrollMotion(): ScrollBehavior {
   return typeof window !== "undefined" &&
     window.matchMedia("(prefers-reduced-motion: reduce)").matches
@@ -21,18 +20,18 @@ export function scrollMotion(): ScrollBehavior {
 
 export function formatBoundaryZone(zone: AgentBoundaryZone): string {
   if (zone === "inside") {
-    return "已在你的知识边界内";
+    return t("boundary.inside");
   }
 
   if (zone === "learning") {
-    return "在你的学习区";
+    return t("boundary.learning");
   }
 
   if (zone === "frontier") {
-    return "在你的知识前沿";
+    return t("boundary.frontier");
   }
 
-  return "在你的知识库之外";
+  return t("boundary.dark");
 }
 
 export function getTimelineThreadPreview(card: KnowledgeCard): NonNullable<KnowledgeCard["thread"]> {
@@ -44,13 +43,13 @@ export function getTimelineThreadPreview(card: KnowledgeCard): NonNullable<Knowl
 }
 
 export function getAgentName(concept: string): string {
-  if (concept === "RAG") return "RAG 实战笔记";
-  if (concept === "智能体") return "智能体实验室";
-  if (concept === "产品策略") return "产品闭环";
-  if (concept === "知识图谱") return "图谱工作台";
-  if (concept === "评估") return "评估台";
+  if (concept === "RAG") return t("format.agent.rag");
+  if (concept === "\u667a\u80fd\u4f53") return t("format.agent.smartAgent");
+  if (concept === "\u4ea7\u54c1\u7b56\u7565") return t("format.agent.product");
+  if (concept === "\u77e5\u8bc6\u56fe\u8c31") return t("format.agent.graph");
+  if (concept === "\u8bc4\u4f30") return t("format.agent.evaluation");
 
-  return `${concept} 观察员`;
+  return t("format.agent.default", { concept });
 }
 
 export function getAgentInitials(concept: string): string {
@@ -66,7 +65,7 @@ export function getReadBlock(card: KnowledgeCard): { title: string; body: string
   const explainBlock = card.thread?.find((block) => block.kind === "explain");
 
   return {
-    title: explainBlock?.title ?? "核心观点",
+    title: explainBlock?.title ?? t("format.readBlockTitle"),
     body: explainBlock?.body ?? card.thesis ?? card.shortBody ?? card.summary
   };
 }
@@ -76,26 +75,25 @@ export function getTopicId(card: KnowledgeCard): string {
 }
 
 export function slugConcept(concept: string): string {
-  // Keep Unicode letters/digits so non-ASCII concepts (e.g. Chinese) slug to a distinct key.
   return concept.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/(^-|-$)/g, "");
 }
 
 export function formatTrustState(state: TrustState): string {
   const labels: Record<TrustState, string> = {
-    emerging: "萌芽",
-    supported: "已支撑",
-    contested: "有争议"
+    emerging: t("format.trust.emerging"),
+    supported: t("format.trust.supported"),
+    contested: t("format.trust.contested")
   };
   return labels[state];
 }
 
 export function formatStatus(status: TransformationStatus): string {
   const labels: Record<TransformationStatus, string> = {
-    queued: "排队中",
-    extracting: "抽取中",
-    transforming: "转化中",
-    ready: "就绪",
-    failed: "失败"
+    queued: t("format.status.queued"),
+    extracting: t("format.status.extracting"),
+    transforming: t("format.status.transforming"),
+    ready: t("format.status.ready"),
+    failed: t("format.status.failed")
   };
 
   return labels[status];
@@ -103,10 +101,10 @@ export function formatStatus(status: TransformationStatus): string {
 
 export function formatCandidateStatus(status: SourceCandidateStatus): string {
   const labels: Record<SourceCandidateStatus, string> = {
-    pending: "待处理",
-    queued: "已排队",
-    imported: "已导入",
-    dismissed: "已忽略"
+    pending: t("format.candidate.pending"),
+    queued: t("format.candidate.queued"),
+    imported: t("format.candidate.imported"),
+    dismissed: t("format.candidate.dismissed")
   };
 
   return labels[status];
@@ -114,35 +112,35 @@ export function formatCandidateStatus(status: SourceCandidateStatus): string {
 
 export function formatLearningState(state: LearningFeedback["inferredState"]): string {
   const labels: Record<LearningFeedback["inferredState"], string> = {
-    interested: "感兴趣",
-    confused: "有困惑",
-    fatigued: "疲劳",
-    not_relevant: "信号弱",
-    needs_review: "待复习"
+    interested: t("format.learning.interested"),
+    confused: t("format.learning.confused"),
+    fatigued: t("format.learning.fatigued"),
+    not_relevant: t("format.learning.not_relevant"),
+    needs_review: t("format.learning.needs_review")
   };
 
   return labels[state];
 }
 
 export function formatSignalChips(signal: InteractionSignal): string[] {
-  const chips = ["曝光"];
+  const chips = [t("format.signal.exposure")];
 
-  if (signal.dwellTimeMs > 0) chips.push(`停留 ${Math.round(signal.dwellTimeMs / 1000)} 秒`);
-  if (signal.openedThread) chips.push("展开了卡");
-  if (signal.liked) chips.push("点赞");
-  if (signal.saved) chips.push("收藏");
-  if (signal.askedQuestion) chips.push("追问");
-  if (signal.reviewed) chips.push("已复习");
-  if (signal.skippedQuickly) chips.push("划走");
+  if (signal.dwellTimeMs > 0) chips.push(t("format.signal.dwell", { seconds: Math.round(signal.dwellTimeMs / 1000) }));
+  if (signal.openedThread) chips.push(t("format.signal.openThread"));
+  if (signal.liked) chips.push(t("format.signal.like"));
+  if (signal.saved) chips.push(t("format.signal.save"));
+  if (signal.askedQuestion) chips.push(t("format.signal.ask"));
+  if (signal.reviewed) chips.push(t("format.signal.reviewed"));
+  if (signal.skippedQuickly) chips.push(t("format.signal.skip"));
 
   return chips;
 }
 
 export function formatDifficulty(value: NonNullable<KnowledgeCard["difficulty"]>): string {
   const labels: Record<NonNullable<KnowledgeCard["difficulty"]>, string> = {
-    beginner: "入门",
-    intermediate: "进阶",
-    advanced: "高级"
+    beginner: t("format.difficulty.beginner"),
+    intermediate: t("format.difficulty.intermediate"),
+    advanced: t("format.difficulty.advanced")
   };
 
   return labels[value];
@@ -150,10 +148,10 @@ export function formatDifficulty(value: NonNullable<KnowledgeCard["difficulty"]>
 
 export function formatConnectionKind(kind: CardConnection["kind"]): string {
   const labels: Record<CardConnection["kind"], string> = {
-    builds_on: "承接自",
-    leads_to: "延伸到",
-    contrast: "对比",
-    related: "相关"
+    builds_on: t("format.connection.builds_on"),
+    leads_to: t("format.connection.leads_to"),
+    contrast: t("format.connection.contrast"),
+    related: t("format.connection.related")
   };
 
   return labels[kind];
@@ -163,10 +161,10 @@ export type ConceptDigestRole = ConceptDigest["entries"][number]["role"];
 
 export function formatConceptRole(role: ConceptDigestRole): string {
   const labels: Record<ConceptDigestRole, string> = {
-    foundation: "基础",
-    builds: "递进",
-    applies: "应用",
-    contrast: "对比"
+    foundation: t("format.digest.foundation"),
+    builds: t("format.digest.builds"),
+    applies: t("format.digest.applies"),
+    contrast: t("format.digest.contrast")
   };
 
   return labels[role];
@@ -174,9 +172,9 @@ export function formatConceptRole(role: ConceptDigestRole): string {
 
 export function formatConfidence(value: NonNullable<KnowledgeCard["confidence"]>): string {
   const labels: Record<NonNullable<KnowledgeCard["confidence"]>, string> = {
-    low: "置信度低",
-    medium: "置信度中",
-    high: "置信度高"
+    low: t("format.confidence.low"),
+    medium: t("format.confidence.medium"),
+    high: t("format.confidence.high")
   };
 
   return labels[value];
@@ -184,13 +182,13 @@ export function formatConfidence(value: NonNullable<KnowledgeCard["confidence"]>
 
 export function formatThreadKind(value: NonNullable<KnowledgeCard["thread"]>[number]["kind"]): string {
   const labels: Record<NonNullable<KnowledgeCard["thread"]>[number]["kind"], string> = {
-    explain: "讲解",
-    example: "例子",
-    contrast: "对比",
-    extension: "延伸",
-    quiz: "小测",
-    user_comment: "评论",
-    agent_reply: "回复"
+    explain: t("format.thread.explain"),
+    example: t("format.thread.example"),
+    contrast: t("format.thread.contrast"),
+    extension: t("format.thread.extension"),
+    quiz: t("format.thread.quiz"),
+    user_comment: t("format.thread.user_comment"),
+    agent_reply: t("format.thread.agent_reply")
   };
 
   return labels[value];
@@ -198,12 +196,12 @@ export function formatThreadKind(value: NonNullable<KnowledgeCard["thread"]>[num
 
 export function formatNextAction(action: NonNullable<KnowledgeCard["nextActions"]>[number]): string {
   const labels: Record<NonNullable<KnowledgeCard["nextActions"]>[number], string> = {
-    continue_deeper: "深入",
-    expand_broader: "拓宽",
-    reframe_simpler: "简化",
-    cooldown_topic: "降温",
-    schedule_review: "复习",
-    ask_clarifying_question: "追问澄清"
+    continue_deeper: t("format.next.continue_deeper"),
+    expand_broader: t("format.next.expand_broader"),
+    reframe_simpler: t("format.next.reframe_simpler"),
+    cooldown_topic: t("format.next.cooldown_topic"),
+    schedule_review: t("format.next.schedule_review"),
+    ask_clarifying_question: t("format.next.ask_clarifying_question")
   };
 
   return labels[action];
@@ -211,9 +209,9 @@ export function formatNextAction(action: NonNullable<KnowledgeCard["nextActions"
 
 export function formatGroundingStatus(status: GroundingStatus): string {
   const labels: Record<GroundingStatus, string> = {
-    passed: "通过",
-    warning: "警告",
-    failed: "失败"
+    passed: t("format.grounding.passed"),
+    warning: t("format.grounding.warning"),
+    failed: t("format.grounding.failed")
   };
 
   return labels[status];
@@ -221,12 +219,12 @@ export function formatGroundingStatus(status: GroundingStatus): string {
 
 export function formatEdgeRelation(relation: NonNullable<KnowledgeCard["graphEdges"]>[number]["relation"]): string {
   const labels: Record<NonNullable<KnowledgeCard["graphEdges"]>[number]["relation"], string> = {
-    requires: "需要",
-    extends: "延伸",
-    contrasts: "对比",
-    applies: "应用",
-    evaluates: "评估",
-    summarizes: "总结"
+    requires: t("format.edge.requires"),
+    extends: t("format.edge.extends"),
+    contrasts: t("format.edge.contrasts"),
+    applies: t("format.edge.applies"),
+    evaluates: t("format.edge.evaluates"),
+    summarizes: t("format.edge.summarizes")
   };
 
   return labels[relation];
@@ -234,10 +232,10 @@ export function formatEdgeRelation(relation: NonNullable<KnowledgeCard["graphEdg
 
 export function formatReviewPromptKind(kind: NonNullable<KnowledgeCard["reviewPrompts"]>[number]["kind"]): string {
   const labels: Record<NonNullable<KnowledgeCard["reviewPrompts"]>[number]["kind"], string> = {
-    recall: "回忆",
-    compare: "比较",
-    apply: "应用",
-    explain: "解释"
+    recall: t("format.review.recall"),
+    compare: t("format.review.compare"),
+    apply: t("format.review.apply"),
+    explain: t("format.review.explain")
   };
 
   return labels[kind];
@@ -245,11 +243,11 @@ export function formatReviewPromptKind(kind: NonNullable<KnowledgeCard["reviewPr
 
 export function formatEvidenceFieldPath(path: string): string {
   if (path.startsWith("$.thread")) {
-    return "延展";
+    return t("format.evidence.thread");
   }
 
   if (path.startsWith("$.graphEdges")) {
-    return "图谱";
+    return t("format.evidence.graph");
   }
 
   return path.replace(/^\$\./, "").replace(/([A-Z])/g, " $1");
@@ -260,7 +258,7 @@ export function formatCardSource(card: KnowledgeCard): string {
   const citation = card.citations?.[0];
 
   if (!source) {
-    return "未知来源";
+    return t("format.unknownSource");
   }
 
   if (source.type === "youtube" && citation?.startTimeSeconds !== undefined) {
@@ -271,20 +269,19 @@ export function formatCardSource(card: KnowledgeCard): string {
 }
 
 export function formatDueDate(value: string): string {
-  return new Intl.DateTimeFormat("zh-CN", {
+  return new Intl.DateTimeFormat(getDateLocale(), {
     month: "short",
     day: "numeric"
   }).format(new Date(value));
 }
 
 export function formatShortTime(value: string): string {
-  return new Intl.DateTimeFormat("zh-CN", {
+  return new Intl.DateTimeFormat(getDateLocale(), {
     hour: "2-digit",
     minute: "2-digit"
   }).format(new Date(value));
 }
 
-// 类微博的相对时间:"刚刚" / "5分钟" / "3小时" / "2天",更早的显示日期。
 export function formatRelativeTime(value: string): string {
   const then = new Date(value).getTime();
   if (Number.isNaN(then)) {
@@ -293,37 +290,36 @@ export function formatRelativeTime(value: string): string {
 
   const minutes = Math.floor((Date.now() - then) / 60000);
   if (minutes < 1) {
-    return "刚刚";
+    return t("format.relative.justNow");
   }
   if (minutes < 60) {
-    return `${minutes}分钟`;
+    return t("format.relative.minute", { count: minutes });
   }
 
   const hours = Math.floor(minutes / 60);
   if (hours < 24) {
-    return `${hours}小时`;
+    return t("format.relative.hour", { count: hours });
   }
 
   const days = Math.floor(hours / 24);
   if (days < 7) {
-    return `${days}天`;
+    return t("format.relative.day", { count: days });
   }
 
   const date = new Date(value);
-  return new Intl.DateTimeFormat("zh-CN", {
+  return new Intl.DateTimeFormat(getDateLocale(), {
     month: "short",
     day: "numeric",
     ...(date.getFullYear() === new Date().getFullYear() ? {} : { year: "numeric" })
   }).format(date);
 }
 
-// 鼠标悬停在时间上时显示的完整时间戳(相对时间会丢失精度)。
 export function formatFullTimestamp(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
     return "";
   }
-  return new Intl.DateTimeFormat("zh-CN", { dateStyle: "full", timeStyle: "short" }).format(date);
+  return new Intl.DateTimeFormat(getDateLocale(), { dateStyle: "full", timeStyle: "short" }).format(date);
 }
 
 export function buildTimestampUrl(url: string | undefined, seconds: number): string {
@@ -365,7 +361,7 @@ export function formatAskAnswer(result: AskApiResult): string {
     ).values()
   ).join("\n");
 
-  return `${result.answer}\n\n来源:\n${sources}`;
+  return `${result.answer}\n\n${t("format.ask.sources")}\n${sources}`;
 }
 
 export function buildGroundedAnswer(card: KnowledgeCard, chunks: KnowledgeChunk[], prompt: string): string {
@@ -375,13 +371,22 @@ export function buildGroundedAnswer(card: KnowledgeCard, chunks: KnowledgeChunk[
     chunks.find((chunk) => chunk.id === citation?.chunkId) ?? chunks.find((chunk) => chunk.sourceId === source?.id);
   const timestamp =
     citation?.startTimeSeconds !== undefined ? `(${formatTimestamp(citation.startTimeSeconds)})` : "";
-  const conceptLine = card.concepts.length > 0 ? `涉及概念:${card.concepts.join("、")}。` : "";
+  const separator = getI18nLanguage() === "en" ? ", " : "、";
+  const conceptLine = card.concepts.length > 0
+    ? t("format.groundedAnswer.concepts", { concepts: card.concepts.join(separator) })
+    : "";
 
   return [
-    `根据《${source?.title ?? "这个来源"}》${timestamp},这张卡片想说的是:${card.keyTakeaway}`,
-    groundedChunk ? `依据:${groundedChunk.content}` : `依据:${card.summary}`,
-    card.nextActions?.length ? `下一步建议:${card.nextActions.map(formatNextAction).join("、")}。` : "",
-    `${conceptLine}你的问题是:「${prompt}」。`
+    t("format.groundedAnswer.summary", {
+      title: source?.title ?? t("format.unknownSource"),
+      timestamp,
+      takeaway: card.keyTakeaway
+    }),
+    t("format.groundedAnswer.evidence", { evidence: groundedChunk ? groundedChunk.content : card.summary }),
+    card.nextActions?.length
+      ? t("format.groundedAnswer.next", { actions: card.nextActions.map(formatNextAction).join(separator) })
+      : "",
+    `${conceptLine}${t("format.groundedAnswer.question", { prompt })}`
   ]
     .filter(Boolean)
     .join("\n\n");

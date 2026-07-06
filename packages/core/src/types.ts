@@ -380,6 +380,7 @@ export interface AgentHarnessRunInput {
   chunks: KnowledgeChunk[];
   sourceRegistry?: SourceRegistry;
   paperDigest?: PaperDigestInput;
+  contentLanguage?: import("./harness/contentLanguage.js").ContentLanguage;
   createdAt?: string;
   recommendedBecause?: string;
   config?: AgentHarnessConfig;

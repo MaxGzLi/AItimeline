@@ -10,7 +10,7 @@ import type {
 } from "../types.js";
 import { createAgentHarnessConfig, selectAgentHarnessInputChunks, validateHarnessPosts } from "./runner.js";
 import { knowledgePostJsonSchema } from "./schema.js";
-import { agentHarnessSystemPrompt } from "./systemPrompt.js";
+import { getAgentHarnessSystemPrompt } from "./systemPrompt.js";
 import {
   type ContentLanguage,
   validateKnowledgePostContentLanguage
@@ -83,10 +83,10 @@ export async function runModelAgentHarness(
       chunks,
       createdAt
     });
-  const recommendedBecause =
-    input.recommendedBecause ?? "这个来源已导入,并转成了可以进时间线的知识卡片。";
+  const contentLanguage = input.contentLanguage ?? options.contentLanguage;
+  const recommendedBecause = input.recommendedBecause ?? getDefaultRecommendedBecause(contentLanguage);
   const maxRepairAttempts = options.maxRepairAttempts ?? 2;
-  const messages = buildInitialMessages(input, sourceRegistry, createdAt, recommendedBecause, options.contentLanguage);
+  const messages = buildInitialMessages(input, sourceRegistry, createdAt, recommendedBecause, contentLanguage);
   let currentMessages = messages;
   let finalAttempt: ModelRunAttempt = {
     candidates: [],
@@ -109,8 +109,8 @@ export async function runModelAgentHarness(
     const harnessValidation = parsed.validation.length
       ? parsed.validation
       : validateHarnessPosts(parsed.posts, config, sourceRegistry);
-    const validation = options.contentLanguage === "zh"
-      ? appendContentLanguageValidation(harnessValidation, parsed.posts)
+    const validation = contentLanguage
+      ? appendContentLanguageValidation(harnessValidation, parsed.posts, contentLanguage)
       : harnessValidation;
 
     finalAttempt = {
@@ -131,7 +131,7 @@ export async function runModelAgentHarness(
         },
         {
           role: "user",
-          content: buildRepairPrompt(validation, response.content)
+          content: buildRepairPrompt(validation, response.content, contentLanguage)
         }
       ];
     }
@@ -187,11 +187,7 @@ function buildInitialMessages(
         "- Use graphEdges for durable concept links that can power review and recommendation.",
         "- Use nextActions to say whether the user should go deeper, broader, simpler, review, or cool down.",
         "- Do not include markdown, comments, or prose outside JSON.",
-        ...(contentLanguage === "zh"
-          ? [
-              "- 所有面向用户的字段(title、hook、thesis、shortBody、keyTakeaway、summary、thread、reviewPrompts、recommendedBecause)必须以简体中文书写,技术术语保留英文;graphEdges 的 evidence 保持来源原文语言。"
-            ]
-          : [])
+        ...formatHardRequirementLanguagePolicy(contentLanguage)
       ]
     : [
         "Hard requirements:",
@@ -205,11 +201,7 @@ function buildInitialMessages(
         "- Use graphEdges for durable concept links that can power review and recommendation.",
         "- Use nextActions to say whether the user should go deeper, broader, simpler, review, or cool down.",
         "- Do not include markdown, comments, or prose outside JSON.",
-        ...(contentLanguage === "zh"
-          ? [
-              "- 所有面向用户的字段(title、hook、thesis、shortBody、keyTakeaway、summary、thread、reviewPrompts、recommendedBecause)必须以简体中文书写,技术术语保留英文;graphEdges 的 evidence 保持来源原文语言。"
-            ]
-          : [])
+        ...formatHardRequirementLanguagePolicy(contentLanguage)
       ];
   // 桶映射只列真正进了提示词的 chunkId,避免模型引用它没见过内容的 chunk。
   const sampledChunkIds = new Set(chunks.map((chunk) => chunk.id));
@@ -242,7 +234,7 @@ function buildInitialMessages(
   return [
     {
       role: "system",
-      content: agentHarnessSystemPrompt
+      content: getAgentHarnessSystemPrompt(contentLanguage ?? "zh")
     },
     {
       role: "user",
@@ -297,7 +289,11 @@ function buildInitialMessages(
   ];
 }
 
-function buildRepairPrompt(validation: HarnessValidationResult[], previousResponse: string): string {
+function buildRepairPrompt(
+  validation: HarnessValidationResult[],
+  previousResponse: string,
+  contentLanguage?: ContentLanguage
+): string {
   const truncationGuidance = hasJsonParseValidationError(validation)
     ? [
         "",
@@ -313,7 +309,9 @@ function buildRepairPrompt(validation: HarnessValidationResult[], previousRespon
   const overlapGuidance = hasSourceFactOverlapValidationError(validation)
     ? [
         "",
-        "For weak source-fact overlap: when rewriting the failing field, keep key English terms and numbers from the cited chunks verbatim as anchors (method names, model names, metric names, etc.), then organize the Simplified Chinese wording around those anchors. Do not use a pure-Chinese paraphrase for source facts."
+        contentLanguage === "en"
+          ? "For weak source-fact overlap: when rewriting the failing field, keep key source terms and numbers from the cited chunks verbatim as anchors (method names, model names, metric names, etc.), then organize the English wording around those anchors. Do not use a generic paraphrase that drops source terms."
+          : "For weak source-fact overlap: when rewriting the failing field, keep key English terms and numbers from the cited chunks verbatim as anchors (method names, model names, metric names, etc.), then organize the Simplified Chinese wording around those anchors. Do not use a pure-Chinese paraphrase for source facts."
       ]
     : [];
 
@@ -453,10 +451,11 @@ function hasValidationErrors(validation: readonly HarnessValidationResult[]): bo
 
 function appendContentLanguageValidation(
   validation: readonly HarnessValidationResult[],
-  candidates: readonly unknown[]
+  candidates: readonly unknown[],
+  contentLanguage: ContentLanguage
 ): HarnessValidationResult[] {
   return validation.map((result, index) => {
-    const languageIssues = validateKnowledgePostContentLanguage(candidates[index]);
+    const languageIssues = validateKnowledgePostContentLanguage(candidates[index], contentLanguage);
 
     if (!languageIssues.length) {
       return result;
@@ -468,6 +467,30 @@ function appendContentLanguageValidation(
       issues: [...result.issues, ...languageIssues]
     };
   });
+}
+
+function getDefaultRecommendedBecause(contentLanguage?: ContentLanguage): string {
+  return contentLanguage === "en"
+    ? "This source was imported and turned into timeline-ready knowledge cards."
+    : "这个来源已导入,并转成了可以进时间线的知识卡片。";
+}
+
+function formatHardRequirementLanguagePolicy(contentLanguage?: ContentLanguage): string[] {
+  // The full language policy already lives in the system prompt; hard
+  // requirements repeat only a single emphasis line in the target language.
+  if (!contentLanguage) {
+    return [];
+  }
+
+  if (contentLanguage === "en") {
+    return [
+      "- All user-facing fields (title, hook, thesis, shortBody, keyTakeaway, summary, thread, reviewPrompts, recommendedBecause) must be written in natural English; keep technical terms in their original wording; graphEdges evidence stays in the source language."
+    ];
+  }
+
+  return [
+    "- 所有面向用户的字段(title、hook、thesis、shortBody、keyTakeaway、summary、thread、reviewPrompts、recommendedBecause)必须以简体中文书写,技术术语保留英文;graphEdges 的 evidence 保持来源原文语言。"
+  ];
 }
 
 function createValidationResult(issue: HarnessValidationIssue): HarnessValidationResult {

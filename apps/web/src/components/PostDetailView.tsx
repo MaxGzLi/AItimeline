@@ -45,6 +45,7 @@ import {
   slugConcept
 } from "../lib/format";
 import { getCardMedia, resolveMediaUrl } from "../lib/api";
+import { t } from "../lib/i18n";
 import type { AiMessage, EvidenceLedger } from "../lib/types";
 import { renderWithWikilinks } from "../lib/wikilinks";
 import { PostReplyThread } from "./PostReplyThread";
@@ -96,7 +97,7 @@ export function PostDetailView({
   const handlers = { onOpenConcept, onOpenCardId };
   const citation = card.citations?.[0];
   const source = card.sources[0];
-  const primaryConcept = card.concepts[0] ?? "知识";
+  const primaryConcept = card.concepts[0] ?? t("common.concept");
   const isUserNote = source?.type === "user_note";
   const commentCount =
     card.thread?.filter((block) => block.kind === "user_comment" || block.kind === "agent_reply").length ?? 0;
@@ -111,12 +112,12 @@ export function PostDetailView({
     <article className="x-detail">
       <section className="x-detail-post">
         <span className={`x-avatar${isUserNote ? "" : " agent"}`} aria-hidden="true">
-          {isUserNote ? "你" : getAgentInitials(primaryConcept)}
+          {isUserNote ? t("common.you") : getAgentInitials(primaryConcept)}
         </span>
         <div className="x-detail-main">
           <div className="x-head">
-            <span className="x-name">{isUserNote ? "你的笔记" : getAgentName(primaryConcept)}</span>
-            {isUserNote ? null : <BadgeCheck aria-label="有出处" className="x-verified" size={17} />}
+            <span className="x-name">{isUserNote ? t("post.userNote") : getAgentName(primaryConcept)}</span>
+            {isUserNote ? null : <BadgeCheck aria-label={t("post.hasSource")} className="x-verified" size={17} />}
             <span className="x-meta">@{isUserNote ? "you" : slugConcept(primaryConcept)}</span>
           </div>
 
@@ -139,7 +140,11 @@ export function PostDetailView({
                     </a>
                     <figcaption>
                       <span className="x-mediatag">
-                        {item.origin === "derived" ? "派生图" : `图源：论文 ${item.figureLabel ?? "插图"}`}
+                        {item.origin === "derived"
+                          ? t("detail.derivedImage")
+                          : item.figureLabel
+                            ? t("detail.figureSource", { label: item.figureLabel })
+                            : t("detail.figureSourceNoLabel")}
                       </span>
                       {captionText}
                     </figcaption>
@@ -160,8 +165,8 @@ export function PostDetailView({
           <div className="x-detail-quote">
             <div className="x-detail-quote-head">
               <Quote size={17} />
-              <span className="x-name">原文出处</span>
-              <span className="x-meta">· {source?.title ?? "未知来源"}</span>
+              <span className="x-name">{t("detail.sourceQuote")}</span>
+              <span className="x-meta">· {source?.title ?? t("format.unknownSource")}</span>
             </div>
             {citation?.startTimeSeconds !== undefined ? (
               <a className="x-detail-time" href={buildTimestampUrl(source?.url, citation.startTimeSeconds)}>
@@ -169,20 +174,20 @@ export function PostDetailView({
                 {formatTimestamp(citation.endTimeSeconds ?? citation.startTimeSeconds)}
               </a>
             ) : null}
-            <p>{sourceQuote ?? "这张示例卡片还没有导入转录文本。"}</p>
+            <p>{sourceQuote ?? t("detail.noTranscript")}</p>
           </div>
 
           <div className="x-detail-meta">
             <time dateTime={card.createdAt}>{formatFullTimestamp(card.createdAt)}</time>
             <span>·</span>
-            <span>{card.estimatedReadMinutes} 分钟读完</span>
+            <span>{t("detail.readMinutes", { count: card.estimatedReadMinutes })}</span>
           </div>
 
           <div className="x-detail-acts">
             <button
               className="x-act"
               onClick={() => document.querySelector<HTMLInputElement>(".x-detail-replies input")?.focus()}
-              title="评论"
+              title={t("detail.comments")}
               type="button"
             >
               <MessageCircle size={19} />
@@ -195,7 +200,7 @@ export function PostDetailView({
               title={
                 topConnection
                   ? `${formatConnectionKind(topConnection.kind)} · ${topConnection.title}`
-                  : "还没有关联卡片"
+                  : t("post.link.none")
               }
               type="button"
             >
@@ -205,7 +210,7 @@ export function PostDetailView({
             <button
               className={`x-act like${signal?.liked ? " on" : ""}`}
               onClick={() => onLike(card)}
-              title="赞"
+              title={t("post.like")}
               type="button"
             >
               <Heart size={19} />
@@ -213,7 +218,7 @@ export function PostDetailView({
             <button
               className={`x-act${signal?.saved ? " on" : ""}`}
               onClick={() => onSave(card)}
-              title="收藏"
+              title={t("post.save")}
               type="button"
             >
               <Bookmark size={19} />
@@ -226,7 +231,7 @@ export function PostDetailView({
         card={card}
         cards={cards}
         className="x-detail-replies"
-        emptyMessage="还没有评论。"
+        emptyMessage={t("reply.empty")}
         onOpenCardId={onOpenCardId}
         onOpenConcept={onOpenConcept}
         onReply={onReply}
@@ -236,20 +241,20 @@ export function PostDetailView({
       <section className="x-detail-sec">
         <div className="x-detail-sechead">
           <GraduationCap size={18} />
-          <h3>问 AI</h3>
+          <h3>{t("detail.ai")}</h3>
         </div>
-        <div className="x-detail-chat" aria-label="问 AI 对话">
+        <div className="x-detail-chat" aria-label={t("detail.aiDialog")}>
           {messages.length > 0 ? (
             messages.map((message) => (
               <div className={`x-detail-msg ${message.role}`} key={message.id}>
                 <span className={`x-avatar x-reply-avatar${message.role === "assistant" ? " agent" : ""}`}>
-                  {message.role === "assistant" ? "AI" : "你"}
+                  {message.role === "assistant" ? t("common.ai") : t("common.you")}
                 </span>
                 <div className="x-detail-msg-main">
                   <div className="x-head">
-                    <span className="x-name">{message.role === "assistant" ? "AITimeline" : "你"}</span>
+                    <span className="x-name">{message.role === "assistant" ? "AITimeline" : t("common.you")}</span>
                     {message.role === "assistant" ? (
-                      <BadgeCheck aria-label="有出处" className="x-verified" size={15} />
+                      <BadgeCheck aria-label={t("post.hasSource")} className="x-verified" size={15} />
                     ) : null}
                   </div>
                   <p>{renderWithWikilinks(message.content, cards, handlers)}</p>
@@ -257,18 +262,18 @@ export function PostDetailView({
               </div>
             ))
           ) : (
-            <p className="x-muted-copy">问问它和你的记忆、图谱或复习队列怎么连起来。</p>
+            <p className="x-muted-copy">{t("detail.askHint")}</p>
           )}
         </div>
 
         <form className="x-detail-ask" onSubmit={onAsk}>
           <input
-            aria-label="就这张卡片问 AI"
+            aria-label={t("detail.aiPrompt")}
             onChange={(event) => onPromptChange(event.target.value)}
-            placeholder="就这个来源提问"
+            placeholder={t("detail.aiPromptPlaceholder")}
             value={prompt}
           />
-          <button className="x-iconbtn" title="发送问题" type="submit">
+          <button className="x-iconbtn" title={t("detail.sendQuestion")} type="submit">
             <Send size={18} />
           </button>
         </form>
@@ -277,7 +282,7 @@ export function PostDetailView({
       <section className="x-detail-sec">
         <div className="x-detail-sechead">
           <Sparkles size={18} />
-          <h3>智能体要点</h3>
+          <h3>{t("detail.agentTakeaway")}</h3>
         </div>
         <p>{renderWithWikilinks(card.keyTakeaway, cards, handlers)}</p>
       </section>
@@ -286,7 +291,7 @@ export function PostDetailView({
         <section className="x-detail-sec">
           <div className="x-detail-sechead">
             <MessageCircle size={18} />
-            <h3>知识块</h3>
+            <h3>{t("detail.threadBlocks")}</h3>
           </div>
           <div className="x-detail-blocks">
             {knowledgeBlocks.map((block) => (
@@ -303,7 +308,7 @@ export function PostDetailView({
       <section className="x-detail-sec">
         <div className="x-detail-sechead">
           <FileText size={18} />
-          <h3>来源片段</h3>
+          <h3>{t("detail.sourceChunks")}</h3>
         </div>
         <div className="x-detail-chunks">
           {chunks.length > 0 ? (
@@ -314,7 +319,7 @@ export function PostDetailView({
               </div>
             ))
           ) : (
-            <p className="x-muted-copy">{asset?.content ?? "这张示例卡片还没有导入转录文本。"}</p>
+            <p className="x-muted-copy">{asset?.content ?? t("detail.noTranscript")}</p>
           )}
         </div>
       </section>
@@ -323,7 +328,7 @@ export function PostDetailView({
         <section className="x-detail-sec">
           <div className="x-detail-sechead">
             <Route size={18} />
-            <h3>图谱关系</h3>
+            <h3>{t("detail.graphRelations")}</h3>
           </div>
           <div className="x-detail-edges">
             {card.graphEdges.map((edge) => (
@@ -343,13 +348,16 @@ export function PostDetailView({
         <section className="x-detail-sec">
           <div className="x-detail-sechead">
             <ListChecks size={18} />
-            <h3>复习与下一步</h3>
+            <h3>{t("detail.reviewAndNext")}</h3>
           </div>
           <div className="x-detail-prompts">
             {card.reviewPrompts?.map((reviewPrompt) => (
               <div className="x-detail-prompt" key={reviewPrompt.id}>
                 <span>
-                  {formatReviewPromptKind(reviewPrompt.kind)} · {reviewPrompt.dueInDays} 天后
+                  {t("detail.reviewDue", {
+                    kind: formatReviewPromptKind(reviewPrompt.kind),
+                    days: reviewPrompt.dueInDays
+                  })}
                 </span>
                 <p>{reviewPrompt.prompt}</p>
                 <small>{reviewPrompt.answerHint}</small>
@@ -371,7 +379,7 @@ export function PostDetailView({
       <section className="x-detail-sec">
         <div className="x-detail-sechead">
           <Brain size={18} />
-          <h3>反馈闭环</h3>
+          <h3>{t("detail.feedback")}</h3>
         </div>
         {feedback ? (
           <div className={`x-detail-fb ${feedback.inferredState}`}>
@@ -380,10 +388,10 @@ export function PostDetailView({
               <strong>{formatNextAction(feedback.nextAction)}</strong>
             </div>
             <p>{feedback.reason}</p>
-            <small>信号强度 {feedback.signalStrength}</small>
+            <small>{t("detail.signalStrength", { value: feedback.signalStrength })}</small>
           </div>
         ) : (
-          <p className="x-muted-copy">展开、点赞、收藏、追问或划走这张卡,都会生成反馈。</p>
+          <p className="x-muted-copy">{t("detail.feedbackHint")}</p>
         )}
         {signal ? (
           <div className="x-detail-signals">
@@ -398,21 +406,21 @@ export function PostDetailView({
         <section className="x-detail-sec">
           <div className="x-detail-sechead">
             <GitBranch size={18} />
-            <h3>关联</h3>
+            <h3>{t("detail.linked")}</h3>
           </div>
-          <p className="x-muted-copy">这张碎片和你收集过的卡片怎么连起来。</p>
+          <p className="x-muted-copy">{t("detail.cardConnections")}</p>
           <div className="x-detail-conns">
             {connections.map((connection) => (
               <button
                 className="x-detail-conn"
                 key={`${connection.kind}-${connection.cardId}`}
                 onClick={() => onOpenCardId(connection.cardId)}
-                title={`打开「${connection.title}」`}
+                title={t("detail.openTitle", { title: connection.title })}
                 type="button"
               >
                 <span className="x-detail-connkind">{formatConnectionKind(connection.kind)}</span>
                 <strong>{connection.title}</strong>
-                <small>通过「{connection.concept}」</small>
+                <small>{t("detail.connectionVia", { concept: connection.concept })}</small>
               </button>
             ))}
           </div>
@@ -423,16 +431,16 @@ export function PostDetailView({
         <section className="x-detail-sec">
           <div className="x-detail-sechead">
             <Link2 size={18} />
-            <h3>反向链接</h3>
+            <h3>{t("detail.backlinks")}</h3>
           </div>
-          <p className="x-muted-copy">哪些笔记和评论用 [[…]] 提到了这张卡或它的概念。</p>
+          <p className="x-muted-copy">{t("detail.backlinksHint")}</p>
           <div className="x-backlinks">
             {backlinks.map((backlink) => (
               <button
                 className="x-backlink"
                 key={`${backlink.fromPostId}-${backlink.snippet}`}
                 onClick={() => onOpenCardId(backlink.fromPostId)}
-                title={`打开「${backlink.fromTitle}」`}
+                title={t("detail.openTitle", { title: backlink.fromTitle })}
                 type="button"
               >
                 <span className="x-backlink-from">{backlink.fromTitle}</span>
@@ -451,24 +459,24 @@ function EvidenceLedgerPanel({ ledger }: { ledger?: EvidenceLedger | null }) {
     <section className="x-detail-sec x-detail-ev">
       <div className="x-detail-sechead">
         <CheckCircle2 size={18} />
-        <h3>证据账本</h3>
+        <h3>{t("detail.evidence")}</h3>
       </div>
 
       {ledger === undefined ? (
-        <p className="x-muted-copy">正在核对来源依据……</p>
+        <p className="x-muted-copy">{t("detail.evidenceLoading")}</p>
       ) : ledger === null ? (
-        <p className="x-muted-copy">这张卡片暂时还没有证据账本。</p>
+        <p className="x-muted-copy">{t("detail.evidenceEmpty")}</p>
       ) : (
         <>
           <div className="x-ev-summary">
-            <span className="x-ev-stat passed">{ledger.summary.passed} 通过</span>
-            <span className="x-ev-stat warning">{ledger.summary.warnings} 警告</span>
-            <span className="x-ev-stat failed">{ledger.summary.failed} 失败</span>
+            <span className="x-ev-stat passed">{t("detail.passed", { count: ledger.summary.passed })}</span>
+            <span className="x-ev-stat warning">{t("detail.warning", { count: ledger.summary.warnings })}</span>
+            <span className="x-ev-stat failed">{t("detail.failed", { count: ledger.summary.failed })}</span>
           </div>
           <div className="x-ev-meta">
-            <span>{ledger.summary.citedSources} 个来源</span>
-            <span>{ledger.summary.citedChunks} 个片段</span>
-            <span>{ledger.summary.totalClaims} 条主张</span>
+            <span>{t("detail.sourceCount", { count: ledger.summary.citedSources })}</span>
+            <span>{t("detail.chunkCount", { count: ledger.summary.citedChunks })}</span>
+            <span>{t("detail.claims", { count: ledger.summary.totalClaims })}</span>
           </div>
           <div className="x-ev-claims">
             {ledger.claims.slice(0, 5).map((claim) => (
@@ -480,10 +488,13 @@ function EvidenceLedgerPanel({ ledger }: { ledger?: EvidenceLedger | null }) {
                 <p>{claim.claim}</p>
                 {claim.evidence[0] ? (
                   <small>
-                    {claim.evidence[0].sourceTitle} · 重叠 {Math.round(claim.evidence[0].overlapScore * 100)}%
+                    {t("detail.overlap", {
+                      title: claim.evidence[0].sourceTitle,
+                      score: Math.round(claim.evidence[0].overlapScore * 100)
+                    })}
                   </small>
                 ) : (
-                  <small>没有匹配到来源片段</small>
+                  <small>{t("detail.missingEvidence")}</small>
                 )}
               </div>
             ))}

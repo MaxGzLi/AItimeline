@@ -1,6 +1,6 @@
 import type { HarnessValidationIssue } from "../types.js";
 
-export type ContentLanguage = "zh";
+export type ContentLanguage = "zh" | "en";
 
 export const defaultContentLanguageThreshold = 0.3;
 
@@ -21,6 +21,7 @@ export function calculateCjkRatio(text: string): number {
 
 export function validateKnowledgePostContentLanguage(
   post: unknown,
+  language: ContentLanguage = "zh",
   threshold = defaultContentLanguageThreshold
 ): HarnessValidationIssue[] {
   if (!isRecord(post)) {
@@ -28,12 +29,72 @@ export function validateKnowledgePostContentLanguage(
   }
 
   return collectLanguageFields(post)
-    .filter(({ value }) => calculateCjkRatio(value) < threshold)
+    .filter(({ value }) =>
+      language === "zh" ? calculateCjkRatio(value) < threshold : calculateCjkRatio(value) >= threshold
+    )
     .map(({ path }) => ({
       path,
-      message: `${path} must be rewritten primarily in Simplified Chinese, keeping key English terms.`,
+      message:
+        language === "zh"
+          ? `${path} must be rewritten primarily in Simplified Chinese, keeping key English terms.`
+          : `${path} must be rewritten primarily in English, preserving verbatim source quotes and key source terms.`,
       severity: "error"
     }));
+}
+
+export function parseContentLanguage(value: unknown): ContentLanguage | undefined {
+  return value === "zh" || value === "en" ? value : undefined;
+}
+
+export function getKnowledgePostLanguagePolicy(language: ContentLanguage): string[] {
+  if (language === "en") {
+    return [
+      "Language policy:",
+      "- Write all user-facing text fields (title, hook, thesis, shortBody, keyTakeaway, summary, thread, reviewPrompts, recommendedBecause) in natural English.",
+      "- Preserve source quotes verbatim in the source language.",
+      "- Keep technical terms, proper nouns, concepts, and graphEdges concept names in their original wording so graph nodes stay continuous.",
+      "- Except inside citation quote fields, never copy source sentences verbatim; explain in your own English words while retaining key source terms and numbers.",
+      "- Numbers must match the cited evidence exactly.",
+      "- graphEdges evidence must stay in the source language: quote or closely paraphrase the cited chunk; do not translate it.",
+      "- Every source-fact field (summary, thesis, shortBody, graphEdges evidence) must retain at least one key term or number taken from the cited evidence."
+    ];
+  }
+
+  return [
+    "Language policy:",
+    "- Write all user-facing text in Simplified Chinese.",
+    "- Keep technical terms, proper nouns, and concept names in their original English (e.g., AI Agent, RAG, LLM); do not translate them.",
+    "- Quotes from sources must stay verbatim in the source language.",
+    "- Except inside citation quote fields, never copy sentences from the evidence verbatim; explain in your own words in Simplified Chinese while keeping the key English terms.",
+    "- Numbers must match the cited evidence exactly.",
+    "- Keep concepts and graphEdges concept names in English so graph nodes stay continuous.",
+    "- graphEdges evidence must stay in the source language: quote or closely paraphrase the cited chunk; do not translate it into Chinese.",
+    "- Every source-fact field (summary, thesis, shortBody, graphEdges evidence) must retain at least one key English term or number taken from the cited evidence."
+  ];
+}
+
+export function getGroundedAnswerLanguagePolicy(language: ContentLanguage): string[] {
+  if (language === "en") {
+    return [
+      "Language policy:",
+      "- Write the user-facing answer in natural English.",
+      "- Preserve source quotes verbatim in the source language.",
+      "- Keep technical terms, proper nouns, and concept names in their original wording.",
+      "- Except inside citation quote fields, never copy source sentences verbatim; answer in your own English words while retaining key source terms and numbers.",
+      "- Numbers must match the cited evidence exactly.",
+      "- Every source-grounded answer must retain at least one key term or number taken from the cited evidence."
+    ];
+  }
+
+  return [
+    "Language policy:",
+    "- Write all user-facing text in Simplified Chinese.",
+    "- Keep technical terms, proper nouns, and concept names in their original English (e.g., AI Agent, RAG, LLM); do not translate them.",
+    "- Quotes from sources must stay verbatim in the source language.",
+    "- Except inside citation quote fields, never copy sentences from the evidence verbatim; explain in your own words in Simplified Chinese while keeping the key English terms.",
+    "- Numbers must match the cited evidence exactly.",
+    "- Every source-grounded answer must retain at least one key English term or number taken from the cited evidence."
+  ];
 }
 
 function collectLanguageFields(post: Record<string, unknown>): { path: string; value: string }[] {

@@ -1,15 +1,20 @@
-import { Keyboard, Moon, Server, Sun } from "lucide-react";
+import { Keyboard, Languages, Moon, Server, Sun } from "lucide-react";
+import { t, type Language } from "../lib/i18n";
 import type { ApiStatus } from "../lib/types";
 
 export function SettingsView({
   apiMessage,
   apiStatus,
+  language,
+  onLanguageChange,
   onShowShortcuts,
   onToggleTheme,
   theme
 }: {
   apiMessage: string;
   apiStatus: ApiStatus;
+  language: Language;
+  onLanguageChange: (value: Language) => void;
   onShowShortcuts: () => void;
   onToggleTheme: () => void;
   theme: "light" | "dark";
@@ -19,36 +24,64 @@ export function SettingsView({
       <button className="x-setrow" onClick={onToggleTheme} type="button">
         {theme === "dark" ? <Sun size={19} /> : <Moon size={19} />}
         <span className="x-smain">
-          <p className="x-sname">主题</p>
-          <p className="x-ssub">跟随此开关切换深浅色，也可以按 t</p>
+          <p className="x-sname">{t("settings.theme")}</p>
+          <p className="x-ssub">{t("settings.theme.hint")}</p>
         </span>
-        <span className="x-sval">{theme === "dark" ? "深色" : "浅色"}</span>
+        <span className="x-sval">{theme === "dark" ? t("settings.theme.dark") : t("settings.theme.light")}</span>
       </button>
+
+      <div className="x-setrow" role="group" aria-label={t("settings.language")}>
+        <Languages size={19} />
+        <span className="x-smain">
+          <p className="x-sname">{t("settings.language")}</p>
+          <p className="x-ssub">{t("settings.languageHint")}</p>
+        </span>
+        <span className="x-sval">
+          <button
+            className={`x-chip action${language === "zh" ? " active" : ""}`}
+            onClick={() => onLanguageChange("zh")}
+            type="button"
+          >
+            {t("settings.language.zh")}
+          </button>
+          <button
+            className={`x-chip action${language === "en" ? " active" : ""}`}
+            onClick={() => onLanguageChange("en")}
+            type="button"
+          >
+            {t("settings.language.en")}
+          </button>
+        </span>
+      </div>
 
       <div className="x-setrow" role="status">
         <Server size={19} />
         <span className="x-smain">
-          <p className="x-sname">本地 API</p>
+          <p className="x-sname">{t("settings.api")}</p>
           <p className="x-ssub">{apiMessage}</p>
         </span>
         <span className="x-sval">
-          {apiStatus === "connected" ? "已连接" : apiStatus === "checking" ? "连接中" : "离线"}
+          {apiStatus === "connected"
+            ? t("api.status.connected")
+            : apiStatus === "checking"
+              ? t("api.status.checking")
+              : t("api.status.offline")}
         </span>
       </div>
 
       <div className="x-setrow" role="note">
         <Server size={19} />
         <span className="x-smain">
-          <p className="x-sname">模型配置</p>
-          <p className="x-ssub">通过 AITIMELINE_MODEL_* 环境变量在服务端配置；未配置时走确定性回退。</p>
+          <p className="x-sname">{t("settings.model")}</p>
+          <p className="x-ssub">{t("settings.modelHint")}</p>
         </span>
       </div>
 
       <button className="x-setrow" onClick={onShowShortcuts} type="button">
         <Keyboard size={19} />
         <span className="x-smain">
-          <p className="x-sname">键盘快捷键</p>
-          <p className="x-ssub">j / k 移动焦点，Enter 展开，/ 搜索，? 查看全部</p>
+          <p className="x-sname">{t("settings.keyboard")}</p>
+          <p className="x-ssub">{t("settings.keyboardHint")}</p>
         </span>
       </button>
     </>

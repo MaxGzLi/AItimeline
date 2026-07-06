@@ -86,10 +86,17 @@ export type ApiSnapshot = {
   posts: KnowledgeCard[];
   sourceCandidates: SourceCandidateRecord[];
   agentTurns: AgentTurnRecord[];
+  userSettings?: ApiSettings["userSettings"];
 };
 
-// 时间线卡:排序卡 + 服务端为到期复习卡附加的 reviewDueAt(core 的 RankedKnowledgeCard
-// 没有这个字段,不改 core,在 web 侧扩展)。
+export type ApiSettings = {
+  contentLanguage: "zh" | "en";
+  userSettings: {
+    contentLanguage?: "zh" | "en";
+  };
+  environmentContentLanguage: "zh" | "en" | null;
+};
+
 export type TimelineCard = RankedKnowledgeCard & { reviewDueAt?: string };
 
 export type ApiTimelineResponse = {

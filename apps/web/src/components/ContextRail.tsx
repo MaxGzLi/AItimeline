@@ -9,19 +9,16 @@ import type {
 import { classifyConceptZone } from "@aitimeline/core";
 import { Search } from "lucide-react";
 import { formatDueDate } from "../lib/format";
+import { t } from "../lib/i18n";
 import { LinkedGraphCanvas } from "./LinkedGraphCanvas";
 
 const zoneBadges: Record<KnowledgeBoundaryZone, { label: string; className: string }> = {
-  inside: { label: "已掌握", className: "inside" },
-  learning: { label: "学习区", className: "learning" },
-  frontier: { label: "前沿区", className: "frontier" },
-  dark: { label: "未接触", className: "dark" }
+  inside: { label: "graph.zone.inside.title", className: "inside" },
+  learning: { label: "graph.zone.learning.title", className: "learning" },
+  frontier: { label: "graph.zone.frontier.title", className: "frontier" },
+  dark: { label: "boundary.dark", className: "dark" }
 };
 
-// Right rail = learning state only (review due, knowledge boundary, concepts),
-// mirroring X's "what's happening" column. With an open post (detailCard) the
-// rail pivots to that post's context: where its concepts sit on the knowledge
-// boundary, plus the local patch of the knowledge graph around it.
 export function ContextRail({
   boundary,
   detailCard,
@@ -52,23 +49,23 @@ export function ContextRail({
     !!detailGraph && detailGraph.nodes.length > 1 && detailGraph.edges.length > 0;
 
   return (
-    <aside className="x-rail" aria-label="学习状态">
+    <aside className="x-rail" aria-label={t("rail.state")}>
       <div className="x-search">
         <Search size={17} />
         <input
-          aria-label="搜索时间线"
+          aria-label={t("rail.search")}
           onChange={(event) => onSearchChange(event.target.value)}
-          placeholder="搜索你的知识库"
+          placeholder={t("rail.searchPlaceholder")}
           value={searchQuery}
         />
       </div>
 
       {detailCard ? (
         <>
-          <section className="x-module" aria-label="知识定位">
-            <h2 className="x-module-head">知识定位</h2>
+          <section className="x-module" aria-label={t("rail.position")}>
+            <h2 className="x-module-head">{t("rail.position")}</h2>
             {detailCard.concepts.length === 0 ? (
-              <p className="x-mrnote">这张卡还没有沉淀出概念。</p>
+              <p className="x-mrnote">{t("rail.detailEmpty")}</p>
             ) : (
               detailCard.concepts.map((concept) => {
                 const badge = zoneBadges[classifyConceptZone(boundary, concept)];
@@ -78,7 +75,7 @@ export function ContextRail({
                     <span className="x-mmain">
                       <p className="x-mname">#{concept.replace(/\s+/g, "")}</p>
                     </span>
-                    <span className={`x-zonechip ${badge.className}`}>{badge.label}</span>
+                    <span className={`x-zonechip ${badge.className}`}>{t(badge.label)}</span>
                   </button>
                 );
               })
@@ -86,22 +83,22 @@ export function ContextRail({
           </section>
 
           {hasDetailGraph ? (
-            <section className="x-module" aria-label="局部图谱">
-              <h2 className="x-module-head">在你的图谱里</h2>
+            <section className="x-module" aria-label={t("rail.localGraph")}>
+              <h2 className="x-module-head">{t("rail.graphInLibrary")}</h2>
               <div className="x-localgraph">
                 <LinkedGraphCanvas graph={detailGraph} onOpenCardId={onOpenCardId} onOpenConcept={onOpenConcept} />
               </div>
               <button className="x-mmore" onClick={onOpenGraph} type="button">
-                查看完整图谱
+                {t("rail.openFullGraph")}
               </button>
             </section>
           ) : null}
         </>
       ) : null}
 
-      <section className="x-module" aria-label="今日复习">
-        <h2 className="x-module-head">今日复习</h2>
-        {reviewQueue.length === 0 ? <p className="x-mrnote">暂时没有到期的复习。</p> : null}
+      <section className="x-module" aria-label={t("rail.review")}>
+        <h2 className="x-module-head">{t("rail.review")}</h2>
+        {reviewQueue.length === 0 ? <p className="x-mrnote">{t("rail.reviewEmpty")}</p> : null}
         {reviewQueue.slice(0, 3).map((item) => (
           <button
             className="x-mrow"
@@ -110,22 +107,22 @@ export function ContextRail({
             type="button"
           >
             <span className="x-mmain">
-              <p className="x-mmeta">{formatDueDate(item.dueAt)} 到期 · 间隔 {item.intervalDays} 天</p>
+              <p className="x-mmeta">{t("rail.dueLine", { date: formatDueDate(item.dueAt), days: item.intervalDays })}</p>
               <p className="x-mname">{item.concept}</p>
             </span>
           </button>
         ))}
         {reviewQueue.length > 0 ? (
           <button className="x-mmore" onClick={onOpenReview} type="button">
-            开始复习（{reviewQueue.length}）
+            {t("rail.startReview", { count: reviewQueue.length })}
           </button>
         ) : null}
       </section>
 
       {detailCard ? null : (
         <>
-          <section className="x-module" aria-label="知识边界">
-            <h2 className="x-module-head">知识边界</h2>
+          <section className="x-module" aria-label={t("rail.boundary")}>
+            <h2 className="x-module-head">{t("rail.boundary")}</h2>
             <div className="x-bar" aria-hidden="true">
               <span style={{ background: "var(--x-blue)", width: `${(boundary.inside.length / zoneTotal) * 100}%` }} />
               <span style={{ background: "var(--x-repost)", width: `${(boundary.learning.length / zoneTotal) * 100}%` }} />
@@ -133,40 +130,40 @@ export function ContextRail({
             </div>
             <button className="x-mrow" onClick={onOpenGraph} type="button">
               <span className="x-mmain">
-                <p className="x-mname">已掌握</p>
-                <p className="x-msub">互动多、复习过的概念</p>
+                <p className="x-mname">{t("graph.zone.inside.title")}</p>
+                <p className="x-msub">{t("rail.inside.sub")}</p>
               </span>
               <span className="x-mnum">{boundary.inside.length}</span>
             </button>
             <button className="x-mrow" onClick={onOpenGraph} type="button">
               <span className="x-mmain">
-                <p className="x-mname">学习区</p>
-                <p className="x-msub">正在建立理解</p>
+                <p className="x-mname">{t("graph.zone.learning.title")}</p>
+                <p className="x-msub">{t("rail.learning.sub")}</p>
               </span>
               <span className="x-mnum">{boundary.learning.length}</span>
             </button>
             <button className="x-mrow" onClick={onOpenGraph} type="button">
               <span className="x-mmain">
-                <p className="x-mname">前沿区</p>
-                <p className="x-msub">刚接触的新概念</p>
+                <p className="x-mname">{t("graph.zone.frontier.title")}</p>
+                <p className="x-msub">{t("rail.frontier.sub")}</p>
               </span>
               <span className="x-mnum">{boundary.frontier.length}</span>
             </button>
           </section>
 
-          <section className="x-module" aria-label="沉淀的概念">
-            <h2 className="x-module-head">沉淀的概念</h2>
+          <section className="x-module" aria-label={t("rail.concepts")}>
+            <h2 className="x-module-head">{t("rail.concepts")}</h2>
             {graph.nodes.slice(0, 5).map((node) => (
               <button className="x-mrow" key={node.id} onClick={() => onOpenConcept(node.label)} type="button">
                 <span className="x-mmain">
-                  <p className="x-mmeta">概念</p>
+                  <p className="x-mmeta">{t("rail.conceptLabel")}</p>
                   <p className="x-mname">#{node.label.replace(/\s+/g, "")}</p>
                 </span>
                 <span className="x-mnum">{node.weight}</span>
               </button>
             ))}
             <button className="x-mmore" onClick={onOpenGraph} type="button">
-              查看知识图谱
+              {t("rail.openGraph")}
             </button>
           </section>
         </>
@@ -175,9 +172,9 @@ export function ContextRail({
       <p className="x-raillinks">
         <span>AITimeline</span>
         <span>·</span>
-        <span>所有回答都有出处</span>
+        <span>{t("rail.allGrounded")}</span>
         <span>·</span>
-        <span>本地优先</span>
+        <span>{t("common.localFirst")}</span>
       </p>
     </aside>
   );

@@ -5,6 +5,7 @@ import type {
   SourceAsset,
   SourceImport
 } from "../types.js";
+import type { ContentLanguage } from "../harness/contentLanguage.js";
 import { runSourceImport } from "../source/sourceImportWorker.js";
 import { createSourceRegistry } from "../source/sourceRegistry.js";
 import {
@@ -38,6 +39,7 @@ export interface YouTubeTranscriptFetchResult {
 export interface YouTubeTransformOptions extends YouTubeTranscriptFetchOptions {
   recommendedBecause?: string;
   runner?: KnowledgePostAgentRunner;
+  contentLanguage?: ContentLanguage;
 }
 
 export interface YouTubeTransformResult extends Omit<TranscriptTransformResult, "harnessRun"> {
@@ -154,10 +156,13 @@ export async function transformYouTubeUrl(
       assets: [fetched.asset],
       chunks,
       sourceRegistry,
+      contentLanguage: options.contentLanguage,
       createdAt,
       recommendedBecause:
         options.recommendedBecause ??
-        "你导入了这个 YouTube 视频,所以把字幕里的要点转成了时间线卡片。"
+        (options.contentLanguage === "en"
+          ? "You imported this YouTube video, so transcript highlights were turned into timeline cards."
+          : "你导入了这个 YouTube 视频,所以把字幕里的要点转成了时间线卡片。")
     },
     options.runner
   );

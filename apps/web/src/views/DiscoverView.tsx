@@ -1,15 +1,8 @@
 import { LoaderCircle, RefreshCw } from "lucide-react";
 import { formatCandidateStatus, formatRelativeTime } from "../lib/format";
+import { getI18nLanguage, t } from "../lib/i18n";
 import type { SourceCandidateRecord } from "../lib/types";
 
-const intakeLabels: Record<SourceCandidateRecord["intakeKind"], string> = {
-  user_paste: "你贴的链接",
-  browser_share: "浏览器分享",
-  agent_discovery: "观察员发现",
-  manual: "手动加入"
-};
-
-// Discovery feed: candidate sources the observer wants to turn into cards.
 export function DiscoverView({
   isRunning,
   message,
@@ -34,24 +27,24 @@ export function DiscoverView({
           <div className="x-composer-foot">
             <button className="x-pill start" disabled={isRunning} onClick={onRunCuration} type="button">
               {isRunning ? <LoaderCircle className="x-spin" size={16} /> : <RefreshCw size={16} />}
-              {isRunning ? "整理中" : "立即整理"}
+              {isRunning ? t("discover.running") : t("discover.run")}
             </button>
           </div>
         </div>
       </div>
 
       {records.length === 0 ? (
-        <p className="x-empty">还没有候选来源。观察员发现新来源后会先在这里排队。</p>
+        <p className="x-empty">{t("discover.empty")}</p>
       ) : (
         records.map((record) => (
           <div className="x-cand" key={record.id}>
             <span className="x-avatar small" aria-hidden="true">
-              {(record.candidate.conceptIds[0] ?? "源").slice(0, 2)}
+              {(record.candidate.conceptIds[0] ?? t("common.source")).slice(0, 2)}
             </span>
             <div className="x-cmain">
               <p className="x-cmeta">
-                {intakeLabels[record.intakeKind]} · {formatRelativeTime(record.createdAt)} ·{" "}
-                {record.candidate.conceptIds.slice(0, 3).join("、")}
+                {t(`discover.intake.${record.intakeKind}`)} · {formatRelativeTime(record.createdAt)} ·{" "}
+                {record.candidate.conceptIds.slice(0, 3).join(getI18nLanguage() === "en" ? ", " : "、")}
               </p>
               <p className="x-ctitle">{record.candidate.source.title}</p>
               <p className="x-cwhy">{record.candidate.reason}</p>

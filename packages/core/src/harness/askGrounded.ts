@@ -1,5 +1,6 @@
 import { getChunksForSource, getRegistryChunk, getRegistrySource } from "../source/sourceRegistry.js";
 import type { KnowledgeChunk, KnowledgePost, SourceRegistry } from "../types.js";
+import { getGroundedAnswerLanguagePolicy, type ContentLanguage } from "./contentLanguage.js";
 import type { ModelClient } from "./modelRunner.js";
 
 export interface GroundedAnswerCitation {
@@ -26,6 +27,7 @@ export interface AskGroundedInput {
 
 export interface AskGroundedOptions {
   client?: ModelClient;
+  contentLanguage?: ContentLanguage;
   maxChunks?: number;
   temperature?: number;
 }
@@ -44,10 +46,10 @@ export async function askGrounded(
   const excerpts = resolveExcerpts(input.post, input.registry, options.maxChunks ?? defaultMaxChunks);
 
   if (!options.client) {
-    return buildDeterministicAnswer(input, excerpts);
+    return buildDeterministicAnswer(input, excerpts, options.contentLanguage ?? "zh");
   }
 
-  return buildModelAnswer(input, excerpts, options.client, options.temperature ?? 0.2);
+  return buildModelAnswer(input, excerpts, options.client, options.temperature ?? 0.2, options.contentLanguage ?? "zh");
 }
 
 function resolveExcerpts(post: KnowledgePost, registry: SourceRegistry, maxChunks: number): GroundedExcerpt[] {
@@ -94,11 +96,12 @@ async function buildModelAnswer(
   input: AskGroundedInput,
   excerpts: GroundedExcerpt[],
   client: ModelClient,
-  temperature: number
+  temperature: number,
+  contentLanguage: ContentLanguage
 ): Promise<GroundedAnswer> {
   const response = await client.complete({
     messages: [
-      { role: "system", content: askSystemPrompt },
+      { role: "system", content: getAskSystemPrompt(contentLanguage) },
       { role: "user", content: buildAskUserPrompt(input.post, input.question, excerpts) }
     ],
     responseFormat: "json_object",
@@ -128,15 +131,25 @@ async function buildModelAnswer(
   };
 }
 
-function buildDeterministicAnswer(input: AskGroundedInput, excerpts: GroundedExcerpt[]): GroundedAnswer {
+function buildDeterministicAnswer(
+  input: AskGroundedInput,
+  excerpts: GroundedExcerpt[],
+  contentLanguage: ContentLanguage
+): GroundedAnswer {
   const source = input.post.sources[0];
   const top = excerpts[0];
   const timestamp = top?.startTimeSeconds !== undefined ? ` (${formatTimestamp(top.startTimeSeconds)})` : "";
-  const answer = [
-    `根据《${source?.title ?? "这个来源"}》${timestamp}:${input.post.keyTakeaway}`,
-    top ? `依据:${top.quote}` : `依据:${input.post.summary}`,
-    `你的问题是:「${input.question}」。`
-  ]
+  const answer = (contentLanguage === "en"
+    ? [
+        `From "${source?.title ?? "this source"}"${timestamp}: ${input.post.keyTakeaway}`,
+        top ? `Evidence: ${top.quote}` : `Evidence: ${input.post.summary}`,
+        `Your question: "${input.question}".`
+      ]
+    : [
+        `根据《${source?.title ?? "这个来源"}》${timestamp}:${input.post.keyTakeaway}`,
+        top ? `依据:${top.quote}` : `依据:${input.post.summary}`,
+        `你的问题是:「${input.question}」。`
+      ])
     .filter(Boolean)
     .join("\n\n");
 
@@ -148,20 +161,18 @@ function buildDeterministicAnswer(input: AskGroundedInput, excerpts: GroundedExc
   };
 }
 
-export const askSystemPrompt = `You are the AITimeline study assistant.
+export function getAskSystemPrompt(language: ContentLanguage = "zh"): string {
+  return `You are the AITimeline study assistant.
 
 Answer the learner's question using only the numbered source excerpts provided. Do not use outside knowledge. Cite the excerpts you used by their number. If the excerpts do not contain the answer, say you cannot find it in the source instead of guessing.
 
-Language policy:
-- Write all user-facing text in Simplified Chinese.
-- Keep technical terms, proper nouns, and concept names in their original English (e.g., AI Agent, RAG, LLM); do not translate them.
-- Quotes from sources must stay verbatim in the source language.
-- Except inside citation quote fields, never copy sentences from the evidence verbatim; explain in your own words in Simplified Chinese while keeping the key English terms.
-- Numbers must match the cited evidence exactly.
-- Every source-grounded answer must retain at least one key English term or number taken from the cited evidence.
+${getGroundedAnswerLanguagePolicy(language).join("\n")}
 
 Return exactly one JSON object in this shape and nothing else:
 {"answer": string, "citedExcerpts": number[]}`;
+}
+
+export const askSystemPrompt = getAskSystemPrompt("zh");
 
 function buildAskUserPrompt(post: KnowledgePost, question: string, excerpts: GroundedExcerpt[]): string {
   const excerptText = excerpts.length

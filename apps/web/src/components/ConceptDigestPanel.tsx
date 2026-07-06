@@ -1,6 +1,7 @@
 import type { Backlink, ConceptDigest } from "@aitimeline/core";
 import { Layers, Link2, XCircle } from "lucide-react";
 import { formatConceptRole } from "../lib/format";
+import { t } from "../lib/i18n";
 
 export function ConceptDigestPanel({
   backlinks,
@@ -15,7 +16,7 @@ export function ConceptDigestPanel({
 }) {
   return (
     <div
-      aria-label={`关于「${digest.concept}」的全部碎片`}
+      aria-label={t("concept.aria", { concept: digest.concept })}
       aria-modal="true"
       className="x-overlay"
       onClick={onClose}
@@ -25,12 +26,12 @@ export function ConceptDigestPanel({
         <div className="x-concept-head">
           <div>
             <p className="x-label x-concept-eyebrow">
-              <Layers size={14} aria-hidden="true" /> 概念
+              <Layers size={14} aria-hidden="true" /> {t("common.concept")}
             </p>
             <h2>{digest.concept}</h2>
-            <p className="x-concept-sub">{digest.cardCount} 张碎片,连成一整篇</p>
+            <p className="x-concept-sub">{t("concept.subtitle", { count: digest.cardCount })}</p>
           </div>
-          <button aria-label="关闭概念视图" className="x-iconbtn" onClick={onClose} type="button">
+          <button aria-label={t("concept.close")} className="x-iconbtn" onClick={onClose} type="button">
             <XCircle size={18} />
           </button>
         </div>
@@ -52,7 +53,7 @@ export function ConceptDigestPanel({
         {backlinks.length > 0 ? (
           <div className="x-concept-backlinks">
             <p className="x-label x-concept-eyebrow">
-              <Link2 size={14} aria-hidden="true" /> 反向链接
+              <Link2 size={14} aria-hidden="true" /> {t("concept.backlinks")}
             </p>
             <div className="x-backlinks">
               {backlinks.map((backlink) => (
@@ -60,7 +61,7 @@ export function ConceptDigestPanel({
                   className="x-backlink"
                   key={`${backlink.fromPostId}-${backlink.snippet}`}
                   onClick={() => onOpenCardId(backlink.fromPostId)}
-                  title={`打开「${backlink.fromTitle}」`}
+                  title={t("detail.openTitle", { title: backlink.fromTitle })}
                   type="button"
                 >
                   <span className="x-backlink-from">{backlink.fromTitle}</span>
