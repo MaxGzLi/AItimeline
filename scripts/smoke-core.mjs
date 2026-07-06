@@ -31,6 +31,9 @@ const { evaluateInteraction } = await import("../packages/core/dist/harness/feed
 const {
   createFollowupGenerationProtocol,
   createFollowupSourceImportPlan,
+  isFollowupPost,
+  isFollowupPostId,
+  isFollowupSource,
   validateFollowupGenerationProtocol
 } = await import(
   "../packages/core/dist/harness/followupHarness.js"
@@ -1154,9 +1157,18 @@ const followupChunkContent = followupSourcePlan.input.chunks[0]?.content ?? "";
 const seedPostText = collectStrings(followupSeedPost)
   .map((value) => value.replace(/\s+/g, " ").trim())
   .join("\n\n");
+const followupLoopPostId = "followup-ai-agent-xxx-post-1";
 
 assert.equal(followupProtocol.intent, "expand_broader", "follow-up protocol should encode broaden intent");
 assert.equal(followupProtocolValidation.valid, true, "follow-up protocol should validate");
+assert.equal(isFollowupSource(followupSourcePlan.input.source), true, "follow-up source helper should identify local follow-up sources");
+assert.equal(
+  isFollowupPost({ sources: [followupSourcePlan.input.source] }),
+  true,
+  "follow-up post helper should identify posts backed by follow-up sources"
+);
+assert.equal(isFollowupPostId(followupLoopPostId), true, "follow-up id helper should identify generated follow-up posts");
+assert.equal(isFollowupPostId(interestSignal.postId), false, "follow-up id helper should not match ordinary posts");
 assert.doesNotMatch(followupChunkContent, followupInstructionPattern, "follow-up chunks should not contain instructions");
 assert.equal(
   followupChunkContent.includes(followupJob.reason),
@@ -1175,6 +1187,51 @@ assert.ok(followupChunkContent.includes(followupSeedPost.keyTakeaway), "follow-u
 for (const segment of followupChunkContent.split(/\n\n+/).filter(Boolean)) {
   assert.ok(seedPostText.includes(segment), `follow-up chunk segment should come from seed post text: ${segment}`);
 }
+
+const followupLoopSignal = {
+  ...interestSignal,
+  postId: followupLoopPostId,
+  createdAt: "2026-06-10T00:01:00.000Z"
+};
+const followupLoopFeedback = {
+  ...interestFeedback,
+  postId: followupLoopPostId
+};
+const followupLoopPlan = createBackgroundCurationPlan({
+  signals: [followupLoopSignal],
+  feedback: [followupLoopFeedback],
+  topicStates: [interestedTopicState],
+  generatedAt: "2026-06-10T00:01:00.000Z",
+  sourceCandidates: [
+    {
+      id: "candidate-followup-loop",
+      source: {
+        id: "article-followup-loop",
+        title: "A source that should not be queued from a follow-up card",
+        url: "https://example.com/followup-loop",
+        type: "article"
+      },
+      topicId: "knowledge-graph",
+      conceptIds: ["Knowledge Graph", "Memory"],
+      relevanceScore: 0.95,
+      noveltyScore: 0.8,
+      qualityScore: 0.9,
+      reason: "This candidate would match if follow-up signals were allowed to expand.",
+      discoveredAt: "2026-06-10T00:01:00.000Z"
+    }
+  ]
+});
+
+assert.equal(followupLoopPlan.jobs.length, 0, "follow-up card signals should not enqueue any curation jobs");
+assert.equal(
+  followupLoopPlan.acceptedSourceCandidateIds.length,
+  0,
+  "follow-up card signals should not pull discovery or import candidates into the chain"
+);
+assert.ok(
+  followupLoopPlan.expansionPlan.suppressions.some((suppression) => suppression.postId === followupLoopPostId),
+  "follow-up card signals should be recorded as suppressed at the expansion source"
+);
 
 const skipSignal = {
   postId: result.cards[0].id,

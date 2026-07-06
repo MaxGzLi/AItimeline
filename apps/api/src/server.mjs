@@ -290,14 +290,26 @@ export function createApiServer(options = {}) {
             kinds: body.kinds
           }
         );
-        let snapshot = persistenceStore.saveCurationJobRecords(batch.records);
+        const records = filterDuplicateFollowupCurationRecords(
+          batch.records,
+          persistenceStore.getSnapshot().posts
+        );
 
-        for (const record of batch.records) {
+        records.forEach((record, index) => {
+          if (record !== batch.records[index]) {
+            curationStore.update(record);
+          }
+        });
+
+        const filteredBatch = { ...batch, records };
+        let snapshot = persistenceStore.saveCurationJobRecords(filteredBatch.records);
+
+        for (const record of filteredBatch.records) {
           if (record.result?.discoveredSourceCandidates?.length) {
             snapshot = persistDiscoveredCandidates(
               persistenceStore,
               record.result.discoveredSourceCandidates,
-              record.completedAt ?? batch.completedAt
+              record.completedAt ?? filteredBatch.completedAt
             );
           }
 
@@ -317,8 +329,8 @@ export function createApiServer(options = {}) {
                   {
                     ...candidateRecord,
                     status: "imported",
-                    updatedAt: record.completedAt ?? batch.completedAt,
-                    importedAt: record.completedAt ?? batch.completedAt
+                    updatedAt: record.completedAt ?? filteredBatch.completedAt,
+                    importedAt: record.completedAt ?? filteredBatch.completedAt
                   }
                 ]);
               }
@@ -327,7 +339,7 @@ export function createApiServer(options = {}) {
         }
 
         sendJson(response, 200, {
-          ...batch,
+          ...filteredBatch,
           snapshotSummary: summarizeSnapshot(snapshot)
         });
         return;
@@ -973,6 +985,83 @@ function persistImportAndReleasePlan(persistenceStore, importResult) {
   const snapshot = persistenceStore.saveReleasePlan(releasePlan);
 
   return { snapshot, releasePlan };
+}
+
+export function normalizeFollowupDedupeTitle(title) {
+  return typeof title === "string" ? title.trim().toLowerCase().replace(/\s+/g, " ") : "";
+}
+
+export function filterDuplicateFollowupCurationRecords(records, existingPosts, warn = console.warn) {
+  const knownTitles = new Set(
+    existingPosts.map((post) => normalizeFollowupDedupeTitle(post.title)).filter(Boolean)
+  );
+
+  return records.map((record) => {
+    if (record.job.kind !== "generate_followup" || !record.result?.sourceImport) {
+      return record;
+    }
+
+    const sourceImport = filterDuplicateFollowupSourceImport(record.result.sourceImport, knownTitles, warn);
+
+    if (sourceImport === record.result.sourceImport) {
+      return record;
+    }
+
+    return {
+      ...record,
+      result: {
+        ...record.result,
+        sourceImport
+      }
+    };
+  });
+}
+
+function filterDuplicateFollowupSourceImport(sourceImport, knownTitles, warn) {
+  const skippedPostIds = new Set();
+  const posts = [];
+
+  for (const post of sourceImport.posts) {
+    const normalizedTitle = normalizeFollowupDedupeTitle(post.title);
+
+    if (normalizedTitle && knownTitles.has(normalizedTitle)) {
+      skippedPostIds.add(post.id);
+      warn(
+        `[aitimeline] skipped duplicate follow-up post "${post.title}" (${post.id}); normalized title already exists in the snapshot.`
+      );
+      continue;
+    }
+
+    posts.push(post);
+
+    if (normalizedTitle) {
+      knownTitles.add(normalizedTitle);
+    }
+  }
+
+  if (!skippedPostIds.size) {
+    return sourceImport;
+  }
+
+  const validation = sourceImport.validation.filter(
+    (result) => !result.postId || !skippedPostIds.has(result.postId)
+  );
+  const harnessRun = sourceImport.harnessRun
+    ? {
+        ...sourceImport.harnessRun,
+        outputPostIds: sourceImport.harnessRun.outputPostIds.filter((postId) => !skippedPostIds.has(postId)),
+        validation: sourceImport.harnessRun.validation.filter(
+          (result) => !result.postId || !skippedPostIds.has(result.postId)
+        )
+      }
+    : undefined;
+
+  return {
+    ...sourceImport,
+    posts,
+    validation,
+    harnessRun
+  };
 }
 
 function createSourceCandidateRecord(body) {
