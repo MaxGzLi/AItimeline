@@ -1,7 +1,24 @@
-import type { ConceptMergeSuggestion, KnowledgeBoundaryView, LinkedKnowledgeGraph } from "@aitimeline/core";
-import { Fragment, useState } from "react";
-import { LinkedGraphCanvas } from "../components/LinkedGraphCanvas";
+import type {
+  ConceptAliasRecord,
+  ConceptMergeSuggestion,
+  KnowledgeBoundaryView,
+  KnowledgeCard,
+  LinkedKnowledgeGraph
+} from "@aitimeline/core";
+import { Download, Pause, Play, RotateCcw, X } from "lucide-react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { GraphReplayCanvas } from "../components/GraphReplayCanvas";
+import { LinkedGraphCanvas, type LinkedGraphLayout } from "../components/LinkedGraphCanvas";
+import { formatDueDate } from "../lib/format";
+import { getCurrentGraphTheme, renderGraphSnapshotDataUrl } from "../lib/graphSnapshot";
+import {
+  buildGraphGrowthTimeline,
+  nodeAppearanceAlpha,
+  progressToTime,
+  timeToProgress
+} from "../lib/graphTimeline";
 import { t } from "../lib/i18n";
+import { downloadDataUrl, renderElementToPng } from "../lib/shareImage";
 
 const zones: Array<{
   key: keyof Pick<KnowledgeBoundaryView, "inside" | "learning" | "frontier">;
@@ -18,7 +35,9 @@ type GraphTab = "graph" | "boundary";
 
 export function GraphView({
   boundary,
+  cards,
   cardCountByConcept,
+  conceptAliases,
   conceptMergeSuggestions,
   linkedGraph,
   onOpenCardId,
@@ -26,7 +45,9 @@ export function GraphView({
   onResolveConceptSuggestion
 }: {
   boundary: KnowledgeBoundaryView;
+  cards: KnowledgeCard[];
   cardCountByConcept: Record<string, number>;
+  conceptAliases: ConceptAliasRecord[];
   conceptMergeSuggestions: ConceptMergeSuggestion[];
   linkedGraph: LinkedKnowledgeGraph;
   onOpenCardId: (cardId: string) => void;
@@ -34,7 +55,153 @@ export function GraphView({
   onResolveConceptSuggestion: (suggestion: ConceptMergeSuggestion, decision: "merge" | "separate") => Promise<void>;
 }) {
   const [tab, setTab] = useState<GraphTab>("graph");
+  const [layout, setLayout] = useState<LinkedGraphLayout | null>(null);
+  const [replayActive, setReplayActive] = useState(false);
+  const [playing, setPlaying] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [exportNotice, setExportNotice] = useState("");
+  const timeline = useMemo(
+    () => buildGraphGrowthTimeline({ cards, conceptAliases, graph: linkedGraph }),
+    [cards, conceptAliases, linkedGraph]
+  );
+  const [currentMs, setCurrentMs] = useState(timeline.startMs);
+  const currentMsRef = useRef(timeline.startMs);
+  const graphSignature = `${linkedGraph.nodes.map((node) => node.id).join("|")}::${linkedGraph.edges.length}`;
   const suggestion = conceptMergeSuggestions[0];
+  const sliderValue = Math.round(timeToProgress(timeline, currentMs) * 1000);
+  const replayFinished = replayActive && !playing && currentMs >= timeline.endMs - 1;
+
+  useEffect(() => {
+    currentMsRef.current = currentMs;
+  }, [currentMs]);
+
+  const timelineStartRef = useRef(timeline.startMs);
+  timelineStartRef.current = timeline.startMs;
+
+  // Reset only when the graph content changes: timeline.startMs derives from
+  // Date.now(), so every background sync produces a new value. Depending on it
+  // would clear layout here while LinkedGraphCanvas only re-reports layout on a
+  // graphSignature change, leaving the replay button disabled forever.
+  useEffect(() => {
+    setCurrentMs(timelineStartRef.current);
+    currentMsRef.current = timelineStartRef.current;
+    setReplayActive(false);
+    setPlaying(false);
+    setLayout(null);
+    setExportNotice("");
+  }, [graphSignature]);
+
+  useEffect(() => {
+    if (!replayActive || !playing) {
+      return;
+    }
+
+    const startTime = currentMsRef.current;
+    const startFrame = performance.now();
+    const remaining = Math.max(timeline.endMs - startTime, 1);
+    const fullSpan = Math.max(timeline.endMs - timeline.startMs, 1);
+    const duration = Math.max(600, 9000 * (remaining / fullSpan));
+    let frame = 0;
+
+    const tick = () => {
+      const elapsed = performance.now() - startFrame;
+      const nextTime = startTime + remaining * Math.min(1, elapsed / duration);
+
+      currentMsRef.current = nextTime;
+      setCurrentMs(nextTime);
+
+      if (nextTime >= timeline.endMs) {
+        setPlaying(false);
+        return;
+      }
+
+      frame = requestAnimationFrame(tick);
+    };
+
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [playing, replayActive, timeline.endMs, timeline.startMs]);
+
+  function startReplay() {
+    setTab("graph");
+    setReplayActive(true);
+    currentMsRef.current = timeline.startMs;
+    setCurrentMs(timeline.startMs);
+    setPlaying(true);
+    setExportNotice("");
+  }
+
+  function togglePlaying() {
+    if (!replayActive) {
+      startReplay();
+      return;
+    }
+
+    setPlaying((value) => !value);
+  }
+
+  function handleSliderChange(value: string) {
+    setPlaying(false);
+    setReplayActive(true);
+    const nextTime = progressToTime(timeline, Number(value) / 1000);
+    currentMsRef.current = nextTime;
+    setCurrentMs(nextTime);
+  }
+
+  async function handleExportComparison() {
+    if (!layout) {
+      setExportNotice(t("graph.replay.waitingForLayout"));
+      return;
+    }
+
+    setExporting(true);
+    setExportNotice("");
+
+    try {
+      const theme = getCurrentGraphTheme();
+      const startImageUrl = renderGraphSnapshotDataUrl({
+        alphaForNode: (nodeId) => nodeAppearanceAlpha(timeline.nodeFirstSeen[nodeId], timeline.startMs),
+        graph: linkedGraph,
+        height: 560,
+        label: t("graph.replay.startFrame"),
+        layout,
+        theme,
+        width: 650
+      });
+      const endImageUrl = renderGraphSnapshotDataUrl({
+        alphaForNode: (nodeId) => nodeAppearanceAlpha(timeline.nodeFirstSeen[nodeId], timeline.endMs),
+        graph: linkedGraph,
+        height: 560,
+        label: t("graph.replay.endFrame"),
+        layout,
+        theme,
+        width: 650
+      });
+      const pngUrl = await renderElementToPng(
+        {
+          claim: t("share.claim"),
+          compareLabel: t("graph.replay.compareLabel"),
+          endImageUrl,
+          endLabel: formatDueDate(new Date(timeline.endMs).toISOString()),
+          kind: "graph-comparison",
+          startImageUrl,
+          startLabel: formatDueDate(new Date(timeline.startMs).toISOString()),
+          summary: t("graph.replay.summary", {
+            concepts: timeline.newConceptCount,
+            connections: timeline.newConnectionCount
+          })
+        },
+        { height: 760, pixelRatio: 2, width: 1400 }
+      );
+
+      downloadDataUrl(pngUrl, "aitimeline-graph-growth.png");
+      setExportNotice(t("graph.replay.exportDone"));
+    } catch {
+      setExportNotice(t("graph.replay.exportFailed"));
+    } finally {
+      setExporting(false);
+    }
+  }
 
   return (
     <>
@@ -84,7 +251,74 @@ export function GraphView({
         linkedGraph.nodes.length === 0 ? (
           <p className="x-empty">{t("graph.empty")}</p>
         ) : (
-          <LinkedGraphCanvas graph={linkedGraph} onOpenCardId={onOpenCardId} onOpenConcept={onOpenConcept} />
+          <>
+            <section className="x-graph-actions" aria-label={t("graph.replay.controls")}>
+              <button className="x-cand-run" disabled={!layout} onClick={startReplay} type="button">
+                <Play size={16} /> {t("graph.replay.open")}
+              </button>
+              {replayActive ? (
+                <>
+                  <button className="x-cand-run" onClick={togglePlaying} type="button">
+                    {playing ? <Pause size={16} /> : <Play size={16} />}
+                    {playing ? t("graph.replay.pause") : t("graph.replay.play")}
+                  </button>
+                  <button className="x-cand-run" onClick={startReplay} type="button">
+                    <RotateCcw size={16} /> {t("graph.replay.restart")}
+                  </button>
+                  <button className="x-cand-run" disabled={exporting} onClick={() => void handleExportComparison()} type="button">
+                    <Download size={16} /> {exporting ? t("graph.replay.exporting") : t("graph.replay.export")}
+                  </button>
+                  <button
+                    className="x-cand-run"
+                    onClick={() => {
+                      setPlaying(false);
+                      setReplayActive(false);
+                    }}
+                    type="button"
+                  >
+                    <X size={16} /> {t("graph.replay.exit")}
+                  </button>
+                </>
+              ) : null}
+            </section>
+
+            {replayActive && layout ? (
+              <>
+                <GraphReplayCanvas currentMs={currentMs} graph={linkedGraph} layout={layout} timeline={timeline} />
+                <section className="x-replay-controls">
+                  <div className="x-replay-scale">
+                    <span>{formatDueDate(new Date(timeline.startMs).toISOString())}</span>
+                    <strong>{formatDueDate(new Date(currentMs).toISOString())}</strong>
+                    <span>{formatDueDate(new Date(timeline.endMs).toISOString())}</span>
+                  </div>
+                  <input
+                    aria-label={t("graph.replay.scrub")}
+                    max={1000}
+                    min={0}
+                    onChange={(event) => handleSliderChange(event.currentTarget.value)}
+                    type="range"
+                    value={sliderValue}
+                  />
+                  {replayFinished ? (
+                    <p className="x-replay-summary">
+                      {t("graph.replay.summary", {
+                        concepts: timeline.newConceptCount,
+                        connections: timeline.newConnectionCount
+                      })}
+                    </p>
+                  ) : null}
+                  {exportNotice ? <p className="x-replay-note">{exportNotice}</p> : null}
+                </section>
+              </>
+            ) : (
+              <LinkedGraphCanvas
+                graph={linkedGraph}
+                onLayoutSettled={setLayout}
+                onOpenCardId={onOpenCardId}
+                onOpenConcept={onOpenConcept}
+              />
+            )}
+          </>
         )
       ) : (
         zones.map((zone) => {

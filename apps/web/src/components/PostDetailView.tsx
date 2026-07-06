@@ -5,6 +5,7 @@ import type {
   KnowledgeCard,
   KnowledgeChunk,
   LearningFeedback,
+  LinkedKnowledgeGraph,
   RankedKnowledgeCard,
   SourceAsset
 } from "@aitimeline/core";
@@ -24,9 +25,11 @@ import {
   Repeat2,
   Route,
   Send,
+  Share2,
   Sparkles
 } from "lucide-react";
 import type { FormEvent } from "react";
+import { useState } from "react";
 import {
   buildTimestampUrl,
   formatConnectionKind,
@@ -50,6 +53,7 @@ import { renderMathInText } from "../lib/math";
 import type { AiMessage, EvidenceLedger } from "../lib/types";
 import { renderWithWikilinks } from "../lib/wikilinks";
 import { PostReplyThread } from "./PostReplyThread";
+import { ShareCardModal } from "./ShareCardModal";
 import type { WikilinkAutocompleteCandidate } from "./WikilinkAutocomplete";
 
 export function PostDetailView({
@@ -61,6 +65,7 @@ export function PostDetailView({
   connections,
   evidenceLedger,
   feedback,
+  graph,
   messages,
   onAsk,
   onLike,
@@ -82,6 +87,7 @@ export function PostDetailView({
   connections: CardConnection[];
   evidenceLedger?: EvidenceLedger | null;
   feedback?: LearningFeedback;
+  graph?: LinkedKnowledgeGraph;
   messages: AiMessage[];
   onAsk: (event: FormEvent<HTMLFormElement>) => void;
   onLike: (card: RankedKnowledgeCard) => void;
@@ -95,6 +101,7 @@ export function PostDetailView({
   signal?: InteractionSignal;
   wikilinkCandidates: WikilinkAutocompleteCandidate[];
 }) {
+  const [shareOpen, setShareOpen] = useState(false);
   const handlers = { onOpenConcept, onOpenCardId };
   const citation = card.citations?.[0];
   const source = card.sources[0];
@@ -229,6 +236,9 @@ export function PostDetailView({
               type="button"
             >
               <Bookmark size={19} />
+            </button>
+            <button className="x-act" onClick={() => setShareOpen(true)} title={t("share.open")} type="button">
+              <Share2 size={19} />
             </button>
           </div>
         </div>
@@ -459,6 +469,7 @@ export function PostDetailView({
           </div>
         </section>
       ) : null}
+      {shareOpen ? <ShareCardModal card={card} graph={graph} onClose={() => setShareOpen(false)} /> : null}
     </article>
   );
 }

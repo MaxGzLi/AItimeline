@@ -1897,6 +1897,7 @@ export function App() {
             connections={connectionsByCard[selectedCard.id] ?? []}
             evidenceLedger={selectedEvidenceLedger}
             feedback={selectedFeedback}
+            graph={linkedGraph}
             messages={selectedThread}
             onAsk={handleAskAi}
             onLike={handleLike}
@@ -1981,6 +1982,7 @@ export function App() {
                     cards={allCards}
                     connections={connectionsByCard[card.id] ?? []}
                     dismissedPostIds={activeDismissedPostIds}
+                    graph={linkedGraph}
                     isFocused={index === focusedIndex}
                     key={card.id}
                     onDwell={handleDwell}
@@ -2023,7 +2025,9 @@ export function App() {
         {activeView === "graph" ? (
           <GraphView
             boundary={boundary}
+            cards={allCards}
             cardCountByConcept={cardCountByConcept}
+            conceptAliases={conceptAliases}
             conceptMergeSuggestions={conceptMergeSuggestions.filter((suggestion) => suggestion.status === "pending")}
             linkedGraph={linkedGraph}
             onOpenCardId={handleOpenCardId}
