@@ -151,6 +151,7 @@ function buildDeterministicAnswer(input: AskGroundedInput, excerpts: GroundedExc
 export const askSystemPrompt = `You are the AITimeline study assistant.
 
 Answer the learner's question using only the numbered source excerpts provided. Do not use outside knowledge. Cite the excerpts you used by their number. If the excerpts do not contain the answer, say you cannot find it in the source instead of guessing.
+Write mathematical formulas in LaTeX: inline \`$...$\`, display \`$$...$$\`; do not flatten them into Unicode subscripts/superscripts.
 
 Language policy:
 - Write all user-facing text in Simplified Chinese.

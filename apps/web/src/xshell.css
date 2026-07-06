@@ -465,6 +465,7 @@ body:has(.x-frame) {
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  white-space: pre-line;
 }
 .x-zone {
   display: inline-flex;
@@ -1136,7 +1137,7 @@ body:has(.x-frame) {
 }
 .x-detail-quote .x-name { color: var(--x-ink); font-weight: 700; }
 .x-detail-quote .x-meta { color: var(--x-muted); }
-.x-detail-quote p {
+.x-detail-quote-text {
   margin: 0;
   color: var(--x-ink);
   font-size: 14px;
@@ -1180,7 +1181,7 @@ body:has(.x-frame) {
 .x-detail-chat { display: flex; flex-direction: column; gap: 12px; margin-bottom: 10px; }
 .x-detail-msg { display: flex; gap: 10px; }
 .x-detail-msg-main { flex: 1; min-width: 0; }
-.x-detail-msg-main p {
+.x-detail-msg-text {
   margin: 2px 0 0;
   font-size: 14px;
   white-space: pre-line;
@@ -1208,7 +1209,7 @@ body:has(.x-frame) {
   border-top: 1px solid var(--x-line);
 }
 .x-detail-block:first-child { border-top: none; padding-top: 0; }
-.x-detail-block span {
+.x-detail-block > span {
   font-size: 12px;
   font-weight: 700;
   text-transform: uppercase;
@@ -1216,7 +1217,12 @@ body:has(.x-frame) {
   color: var(--x-blue);
 }
 .x-detail-block h4 { margin: 0; font-size: 15px; font-weight: 700; }
-.x-detail-block p { margin: 0; color: var(--x-ink); }
+.x-detail-block-body,
+.x-detail-sec-text {
+  margin: 0;
+  color: var(--x-ink);
+  white-space: pre-line;
+}
 
 .x-detail-chunks, .x-detail-edges, .x-detail-prompts { display: grid; gap: 8px; }
 .x-detail-chunk,
@@ -1228,13 +1234,17 @@ body:has(.x-frame) {
   border: 1px solid var(--x-line);
   border-radius: 8px;
 }
-.x-detail-chunk span {
+.x-detail-chunk > span {
   font-size: 12px;
   font-weight: 700;
   color: var(--x-muted);
   font-variant-numeric: tabular-nums;
 }
-.x-detail-chunk p { margin: 0; font-size: 14px; }
+.x-detail-chunk-body {
+  margin: 0;
+  font-size: 14px;
+  white-space: pre-line;
+}
 .x-detail-edge strong { font-size: 14px; }
 .x-detail-edge span { font-size: 12px; font-weight: 700; text-transform: uppercase; color: var(--x-blue); }
 .x-detail-edge p { margin: 0; font-size: 13px; color: var(--x-muted); }
@@ -1460,6 +1470,34 @@ body:has(.x-frame) {
 .x-scrolltop:hover { background: var(--x-blue-hover); }
 
 /* ---------- 双链 wikilinks ---------- */
+.x-richtext {
+  white-space: pre-line;
+}
+
+.x-math {
+  color: inherit;
+  white-space: normal;
+}
+.x-math .katex {
+  color: inherit;
+  font-size: 1em;
+}
+.x-math-block {
+  display: block;
+  max-width: 100%;
+  margin: 6px 0;
+  overflow-x: auto;
+  color: inherit;
+  white-space: normal;
+}
+.x-math-block .katex-display {
+  margin: 0;
+}
+.x-math-block .katex {
+  color: inherit;
+  font-size: 1em;
+}
+
 .x-wikilink {
   color: var(--x-blue);
   cursor: pointer;

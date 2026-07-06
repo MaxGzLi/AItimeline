@@ -45,6 +45,7 @@ import {
   slugConcept
 } from "../lib/format";
 import { getCardMedia, resolveMediaUrl } from "../lib/api";
+import { renderMathInText } from "../lib/math";
 import type { AiMessage, EvidenceLedger } from "../lib/types";
 import { renderWithWikilinks } from "../lib/wikilinks";
 import { PostReplyThread } from "./PostReplyThread";
@@ -120,8 +121,12 @@ export function PostDetailView({
             <span className="x-meta">@{isUserNote ? "you" : slugConcept(primaryConcept)}</span>
           </div>
 
-          {isUserNote ? null : <h2 className="x-detail-title">{card.title}</h2>}
-          <p className="x-detail-body">{renderWithWikilinks(card.summary, cards, handlers)}</p>
+          {isUserNote ? null : (
+            <div className="x-detail-title" role="heading" aria-level={2}>
+              {renderMathInText(card.title)}
+            </div>
+          )}
+          <div className="x-detail-body">{renderWithWikilinks(card.summary, cards, handlers)}</div>
 
           {cardMedia.length ? (
             <div className="x-detail-media">
@@ -169,7 +174,9 @@ export function PostDetailView({
                 {formatTimestamp(citation.endTimeSeconds ?? citation.startTimeSeconds)}
               </a>
             ) : null}
-            <p>{sourceQuote ?? "这张示例卡片还没有导入转录文本。"}</p>
+            <div className="x-detail-quote-text">
+              {renderMathInText(sourceQuote ?? "这张示例卡片还没有导入转录文本。")}
+            </div>
           </div>
 
           <div className="x-detail-meta">
@@ -252,7 +259,7 @@ export function PostDetailView({
                       <BadgeCheck aria-label="有出处" className="x-verified" size={15} />
                     ) : null}
                   </div>
-                  <p>{renderWithWikilinks(message.content, cards, handlers)}</p>
+                  <div className="x-detail-msg-text">{renderWithWikilinks(message.content, cards, handlers)}</div>
                 </div>
               </div>
             ))
@@ -279,7 +286,7 @@ export function PostDetailView({
           <Sparkles size={18} />
           <h3>智能体要点</h3>
         </div>
-        <p>{renderWithWikilinks(card.keyTakeaway, cards, handlers)}</p>
+        <div className="x-detail-sec-text">{renderWithWikilinks(card.keyTakeaway, cards, handlers)}</div>
       </section>
 
       {knowledgeBlocks.length ? (
@@ -293,7 +300,7 @@ export function PostDetailView({
               <div className="x-detail-block" key={block.id}>
                 <span>{formatThreadKind(block.kind)}</span>
                 <h4>{block.title}</h4>
-                <p>{renderWithWikilinks(block.body, cards, handlers)}</p>
+                <div className="x-detail-block-body">{renderWithWikilinks(block.body, cards, handlers)}</div>
               </div>
             ))}
           </div>
@@ -310,11 +317,13 @@ export function PostDetailView({
             chunks.map((chunk) => (
               <div className="x-detail-chunk" key={chunk.id}>
                 <span>{formatTimestamp(chunk.startTimeSeconds ?? 0)}</span>
-                <p>{chunk.content}</p>
+                <div className="x-detail-chunk-body">{renderMathInText(chunk.content)}</div>
               </div>
             ))
           ) : (
-            <p className="x-muted-copy">{asset?.content ?? "这张示例卡片还没有导入转录文本。"}</p>
+            <div className="x-muted-copy x-richtext">
+              {renderMathInText(asset?.content ?? "这张示例卡片还没有导入转录文本。")}
+            </div>
           )}
         </div>
       </section>

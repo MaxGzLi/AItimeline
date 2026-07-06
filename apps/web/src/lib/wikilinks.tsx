@@ -1,6 +1,7 @@
 import type { KnowledgeCard } from "@aitimeline/core";
 import { parseWikilinks, resolveWikilink } from "@aitimeline/core";
 import type { ReactNode } from "react";
+import { renderMathSegment, splitMathText } from "./math";
 
 export interface WikilinkHandlers {
   onOpenConcept: (concept: string) => void;
@@ -19,6 +20,38 @@ export function renderWithWikilinks(
   cards: KnowledgeCard[],
   handlers: WikilinkHandlers
 ): ReactNode {
+  const mathSegments = splitMathText(text);
+
+  if (mathSegments.length > 1 || mathSegments[0]?.kind === "math") {
+    const nodes: ReactNode[] = [];
+
+    mathSegments.forEach((segment, index) => {
+      if (segment.kind === "math") {
+        nodes.push(renderMathSegment(segment, `math-${index}`));
+        return;
+      }
+
+      const renderedText = renderPlainTextWithWikilinks(segment.text, cards, handlers, `wl-${index}`);
+
+      if (Array.isArray(renderedText)) {
+        nodes.push(...renderedText);
+      } else {
+        nodes.push(renderedText);
+      }
+    });
+
+    return nodes;
+  }
+
+  return renderPlainTextWithWikilinks(text, cards, handlers);
+}
+
+function renderPlainTextWithWikilinks(
+  text: string,
+  cards: KnowledgeCard[],
+  handlers: WikilinkHandlers,
+  keyPrefix = "wl"
+): ReactNode {
   const links = parseWikilinks(text);
 
   if (links.length === 0) {
@@ -34,7 +67,7 @@ export function renderWithWikilinks(
     }
 
     const resolved = resolveWikilink(link.target, { cards });
-    const key = `wl-${index}`;
+    const key = `${keyPrefix}-${index}`;
 
     if (resolved.kind === "ghost") {
       nodes.push(
