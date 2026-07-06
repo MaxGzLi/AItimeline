@@ -184,6 +184,10 @@ export function App() {
   // 而非 state,避免惊动 interactionSignals 的同步管线和本地反馈。
   const impressionReportedIds = useRef<Set<string>>(new Set());
   const impressionQueue = useRef<Map<string, KnowledgeCard>>(new Map());
+  // 本会话内已 ✕ 退场 / 已复习确认的卡:本地立即隐藏(demo 兜底卡也生效),并防止
+  // 在途的 buffer 刷新把它们当「新卡」复活。ref 供刷新闭包读最新值,state 驱动渲染过滤。
+  const locallyRemovedIdsRef = useRef<Set<string>>(new Set());
+  const [locallyRemovedIds, setLocallyRemovedIds] = useState<ReadonlySet<string>>(() => new Set());
 
   useEffect(() => {
     interactionSignalsRef.current = interactionSignals;
@@ -239,10 +243,11 @@ export function App() {
 
   const rankedImportedCards = useMemo(() => ensureRankedCards(importedCards), [importedCards]);
   const demoRankedCards = useMemo(() => rankKnowledgeCards(demoCards, demoProfile), []);
-  const rankedCards = useMemo(
-    () => (rankedImportedCards.length > 0 ? rankedImportedCards : demoRankedCards),
-    [demoRankedCards, rankedImportedCards]
-  );
+  const rankedCards = useMemo(() => {
+    const cards = rankedImportedCards.length > 0 ? rankedImportedCards : demoRankedCards;
+    // 已 ✕ / 已复习的卡本地立即退场,与服务端时间线的过滤结果保持一致。
+    return locallyRemovedIds.size === 0 ? cards : cards.filter((card) => !locallyRemovedIds.has(card.id));
+  }, [demoRankedCards, locallyRemovedIds, rankedImportedCards]);
   // "For you" keeps the personalized ranking; "Latest" re-sorts the same cards
   // newest-first by createdAt; "Saved" narrows to bookmarked cards.
   const displayedCards = useMemo(() => {
@@ -301,6 +306,23 @@ export function App() {
 
     return byId;
   }, [allCards]);
+  // 复习页要能取到还躺在 pendingCards 缓冲区里的到期卡本体,否则题面退化成裸 postId、
+  // 评分也推进不了服务端状态;在 cardsById 之上补上缓冲卡。
+  const reviewCardsById = useMemo(() => {
+    if (pendingCards.length === 0) {
+      return cardsById;
+    }
+
+    const byId = { ...cardsById };
+
+    for (const card of ensureRankedCards(pendingCards)) {
+      if (!byId[card.id]) {
+        byId[card.id] = card;
+      }
+    }
+
+    return byId;
+  }, [cardsById, pendingCards]);
   const cardCountByConcept = useMemo(() => {
     const byConcept: Record<string, number> = {};
 
@@ -489,7 +511,7 @@ export function App() {
     () =>
       reviewDueItems.map((item) => ({
         cardId: item.postId,
-        concept: cardsById[item.postId]?.concepts[0] ?? item.postId,
+        concept: reviewCardsById[item.postId]?.concepts[0] ?? item.postId,
         dueAt: item.dueAt,
         intervalDays: item.intervalDays,
         strength: 0
@@ -757,9 +779,11 @@ export function App() {
 
     for (const card of pending) {
       // 乐观标记:每卡每次会话至多一条,失败也不重报(纯曝光是尽力而为的统计信号)。
+      // keepalive 让关标签页前的最后一批 flush 也能送达。
       impressionReportedIds.current.add(card.id);
       void apiRequest<unknown>("/api/signals", {
         method: "POST",
+        keepalive: true,
         body: {
           generatedAt: new Date().toISOString(),
           signal: createInteractionSignal(card),
@@ -835,7 +859,11 @@ export function App() {
             return fresh ? [fresh] : [];
           })
         );
-        setPendingCards(timeline.posts.filter((post) => !displayedIds.has(post.id)));
+        setPendingCards(
+          timeline.posts.filter(
+            (post) => !displayedIds.has(post.id) && !locallyRemovedIdsRef.current.has(post.id)
+          )
+        );
       } else {
         setImportedCards(timeline.posts);
         setPendingCards([]);
@@ -1218,6 +1246,12 @@ export function App() {
     void syncMemoryForCard(card, "save");
   }
 
+  // 本地立即退场:渲染层(rankedCards)马上隐藏,在途刷新也不会再把它当「新卡」缓冲。
+  function markLocallyRemoved(postId: string) {
+    locallyRemovedIdsRef.current.add(postId);
+    setLocallyRemovedIds(new Set(locallyRemovedIdsRef.current));
+  }
+
   function handleSkip(card: RankedKnowledgeCard) {
     // 保留原有的同主题降权信号(skippedQuickly)。
     recordInteraction(card, { skippedQuickly: true, dwellTimeMs: 800, openedThread: false });
@@ -1225,9 +1259,7 @@ export function App() {
     void apiRequest(`/api/posts/${encodeURIComponent(card.id)}/dismiss`, { method: "POST" }).catch(() => {
       // 幂等接口,失败不影响本地移除。
     });
-    // 立即从列表和缓冲区移除该卡。
-    setImportedCards((cards) => cards.filter((existing) => existing.id !== card.id));
-    setPendingCards((cards) => cards.filter((existing) => existing.id !== card.id));
+    markLocallyRemoved(card.id);
   }
 
   // 「已复习」:服务端推进复习间隔(1→3→7→14→30 天)并落盘,该卡到下次到期前不再进流。
@@ -1245,9 +1277,8 @@ export function App() {
   }
 
   function handleReviewComplete(card: RankedKnowledgeCard) {
-    // 立即从流里移除,再静默推进服务端间隔。
-    setImportedCards((cards) => cards.filter((existing) => existing.id !== card.id));
-    setPendingCards((cards) => cards.filter((existing) => existing.id !== card.id));
+    // 立即从流里移除(到下次到期前不再出现),再静默推进服务端间隔。
+    markLocallyRemoved(card.id);
     void completeReview(card);
   }
 
@@ -1610,8 +1641,8 @@ export function App() {
 
         {activeView === "review" ? (
           <ReviewView
-            cardsById={cardsById}
-            onReviewed={(card) => void completeReview(card)}
+            cardsById={reviewCardsById}
+            onReviewed={handleReviewComplete}
             queue={reviewQueue}
           />
         ) : null}

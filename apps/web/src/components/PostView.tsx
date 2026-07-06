@@ -51,6 +51,10 @@ export function PostView({
   const visibleSince = useRef<number | null>(null);
   const reportedDwellMs = useRef(0);
   const impressionFired = useRef(false);
+  // 曝光计时期间 card 对象会被后台刷新换成新身份;曝光 effect 只跟 card.id 走
+  // (避免计时器被每次刷新清零),上报时从 ref 取最新卡。
+  const impressionCard = useRef(card);
+  impressionCard.current = card;
   const [threadOpen, setThreadOpen] = useState(false);
   const [bodyOverflows, setBodyOverflows] = useState(false);
   const primaryConcept = card.concepts[0] ?? "知识";
@@ -142,7 +146,11 @@ export function PostView({
       }
     };
     const observer = new IntersectionObserver(
-      ([entry]) => {
+      (entries) => {
+        // 主线程繁忙时「进入+离开」两条 entry 可能合并在同一批送达,只按最新一条
+        // 判断,否则快速滚过的卡会漏掉离开事件、被误报曝光。
+        const entry = entries[entries.length - 1];
+
         if (impressionFired.current) {
           return;
         }
@@ -152,7 +160,7 @@ export function PostView({
             timer = window.setTimeout(() => {
               timer = null;
               impressionFired.current = true;
-              onImpression(card);
+              onImpression(impressionCard.current);
             }, 1000);
           }
           return;
@@ -169,7 +177,9 @@ export function PostView({
       clearTimer();
       observer.disconnect();
     };
-  }, [card, onImpression]);
+    // card.id 而非 card:后台刷新只换对象身份,不该打断进行中的 1s 曝光计时。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [card.id, onImpression]);
 
   useEffect(() => {
     const node = bodyRef.current;
