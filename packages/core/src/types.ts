@@ -472,6 +472,13 @@ export interface ReviewItem {
   strength: number;
 }
 
+export interface ReviewState {
+  postId: string;
+  intervalDays: number;
+  dueAt: string;
+  lastReviewedAt?: string;
+}
+
 export interface SourceImport {
   id: string;
   source: Source;

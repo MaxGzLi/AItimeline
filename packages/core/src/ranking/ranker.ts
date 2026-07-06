@@ -20,6 +20,8 @@ export interface PersonalizedTimelineRankingInput {
   memory?: UserMemory;
   topicStates?: TopicState[];
   recentSignals?: InteractionSignal[];
+  seenReadCounts?: Record<string, number>;
+  dueReviewPostIds?: string[];
   now?: string | Date;
 }
 
@@ -82,11 +84,13 @@ export function rankPersonalizedTimeline(input: PersonalizedTimelineRankingInput
   const savedSet = createConceptSet(memory?.knowledge.savedConcepts ?? []);
   const weakSet = createConceptSet(memory?.knowledge.weakConcepts ?? []);
   const recentCardSet = new Set(memory?.interaction.recentCardIds ?? []);
+  const dueReviewPostIds = new Set(input.dueReviewPostIds ?? []);
 
   return input.cards
     .map((card) => {
       const reasons: string[] = [];
       let score = 10;
+      const isDueReview = dueReviewPostIds.has(card.id);
       const topicId = getTopicId(card);
       const topicState = topicStateById.get(topicId) ?? findTopicStateByConcept(topicStateById, card.concepts);
       const sameTopicSignals = recentSignals.filter(
@@ -170,6 +174,19 @@ export function rankPersonalizedTimeline(input: PersonalizedTimelineRankingInput
       score += Math.max(0, 6 - card.estimatedReadMinutes);
       score += scoreFreshness(card, now);
 
+      if (isDueReview) {
+        score += 30;
+        reasons.unshift("Due for spaced review");
+      } else {
+        const seenReadCount = Math.max(0, input.seenReadCounts?.[card.id] ?? 0);
+        const seenReadPenalty = Math.min(seenReadCount * 12, 36);
+
+        if (seenReadPenalty > 0) {
+          score -= seenReadPenalty;
+          reasons.unshift("Already read; lowering it so fresh cards can surface");
+        }
+      }
+
       if (reasons.length === 0) {
         reasons.push("Fresh source ready for exploration");
       }
@@ -178,7 +195,9 @@ export function rankPersonalizedTimeline(input: PersonalizedTimelineRankingInput
         ...card,
         score: Math.round(score * 10) / 10,
         scoreReasons: dedupe(reasons).slice(0, 5),
-        recommendationIntent: inferRecommendationIntent(card, topicState, weakHits.length, savedHits.length, signalScore, now)
+        recommendationIntent: isDueReview
+          ? "review"
+          : inferRecommendationIntent(card, topicState, weakHits.length, savedHits.length, signalScore, now)
       };
     })
     .sort((left, right) => {

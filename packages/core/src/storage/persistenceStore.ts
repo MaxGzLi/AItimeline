@@ -8,6 +8,7 @@ import type {
   InteractionSignal,
   KnowledgePost,
   LearningFeedback,
+  ReviewState,
   SourceImport,
   SourceRegistry,
   TopicState,
@@ -100,6 +101,8 @@ export interface AITimelinePersistenceSnapshot {
   memoryEvents: UserMemoryEditEventRecord[];
   interactionSignals: InteractionSignalRecord[];
   topicStates: TopicStateRecord[];
+  dismissedPostIds: string[];
+  reviewStates: ReviewState[];
   sourceCandidates: SourceCandidateRecord[];
   agentTurns: AgentTurnRecord[];
 }
@@ -119,6 +122,8 @@ export interface AITimelinePersistenceStore {
     savedAt?: string | Date
   ): AITimelinePersistenceSnapshot;
   saveTopicStateRecords(records: TopicStateRecord[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
+  saveDismissedPostIds(postIds: string[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
+  saveReviewStates(records: ReviewState[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
   saveAgentTurnRecords(records: AgentTurnRecord[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
   saveUserMemory(
     userId: string,
@@ -226,6 +231,26 @@ export function createAITimelinePersistenceStore(
 
       return cloneSnapshot(snapshot);
     },
+    saveDismissedPostIds(postIds, savedAt = new Date()) {
+      snapshot = {
+        ...snapshot,
+        updatedAt: normalizeDate(savedAt).toISOString(),
+        dismissedPostIds: Array.from(new Set(postIds))
+      };
+      persist(storage, snapshot);
+
+      return cloneSnapshot(snapshot);
+    },
+    saveReviewStates(records, savedAt = new Date()) {
+      snapshot = {
+        ...snapshot,
+        updatedAt: normalizeDate(savedAt).toISOString(),
+        reviewStates: upsertReviewStates(snapshot.reviewStates, records)
+      };
+      persist(storage, snapshot);
+
+      return cloneSnapshot(snapshot);
+    },
     saveAgentTurnRecords(records, savedAt = new Date()) {
       snapshot = {
         ...snapshot,
@@ -293,6 +318,8 @@ function createSnapshot(input: Partial<AITimelinePersistenceSnapshot> = {}): AIT
     memoryEvents: input.memoryEvents ?? [],
     interactionSignals: input.interactionSignals ?? [],
     topicStates: input.topicStates ?? [],
+    dismissedPostIds: input.dismissedPostIds ?? [],
+    reviewStates: input.reviewStates ?? [],
     sourceCandidates: input.sourceCandidates ?? [],
     agentTurns: input.agentTurns ?? []
   };
@@ -350,6 +377,16 @@ function upsertTopicStateRecords(items: TopicStateRecord[], nextItems: TopicStat
   }
 
   return Array.from(byTopicId.values());
+}
+
+function upsertReviewStates(items: ReviewState[], nextItems: ReviewState[]): ReviewState[] {
+  const byPostId = new Map(items.map((record) => [record.postId, record]));
+
+  for (const item of nextItems) {
+    byPostId.set(item.postId, item);
+  }
+
+  return Array.from(byPostId.values());
 }
 
 function withReleasePlanId(plan: SourcePostReleasePlan): SourcePostReleasePlan & { id: string } {

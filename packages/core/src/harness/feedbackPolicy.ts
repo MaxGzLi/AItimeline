@@ -5,6 +5,7 @@ import type {
   NextActionPolicy,
   TopicState
 } from "../types.js";
+import { isPureExposureSignal } from "../ranking/lifecycle.js";
 
 export function evaluateInteraction(signal: InteractionSignal, topicState: TopicState): LearningFeedback {
   const signalStrength = scoreInteraction(signal);
@@ -23,6 +24,10 @@ export function evaluateInteraction(signal: InteractionSignal, topicState: Topic
 }
 
 export function scoreInteraction(signal: InteractionSignal): number {
+  if (isPureExposureSignal(signal)) {
+    return 0;
+  }
+
   let score = 0;
 
   if (signal.impression) score += 1;
@@ -104,4 +109,3 @@ function buildReason(state: InferredLearningState, nextAction: NextActionPolicy)
 
   return reasons[state];
 }
-

@@ -5,9 +5,12 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   applyUserMemoryEdits,
   askGrounded,
+  advanceReviewState,
+  countSeenReadSignalsByPostId,
   createAITimelinePersistenceStore,
   createBackgroundCurationPlan,
   createEmptyUserMemory,
+  createInitialReviewState,
   createOpenAICompatibleModelClientFromEnv,
   createOpenAICompatibleSourceImportWorker,
   createPersistentBackgroundCurationJobStore,
@@ -17,6 +20,10 @@ import {
   evaluateInteraction,
   fetchArticle,
   fetchYouTubeTranscript,
+  filterTimelineLifecycle,
+  getDueReviewStates,
+  getRestingReviewStates,
+  isPureExposureSignal,
   mergeSourceRegistries,
   rankPersonalizedTimeline,
   runConversationTurn,
@@ -102,6 +109,77 @@ export function createApiServer(options = {}) {
             url.searchParams.get("userId") ?? "local-user"
           )
         );
+        return;
+      }
+
+      if (request.method === "POST" && /^\/api\/posts\/[^/]+\/dismiss$/.test(url.pathname)) {
+        const postId = decodeURIComponent(
+          url.pathname.replace(/^\/api\/posts\//, "").replace(/\/dismiss$/, "")
+        );
+        const now = new Date().toISOString();
+        const snapshot = persistenceStore.getSnapshot();
+        const dismissedPostIds = Array.from(new Set([...snapshot.dismissedPostIds, postId]));
+
+        persistenceStore.saveDismissedPostIds(dismissedPostIds, now);
+        sendJson(response, 200, { dismissed: true });
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/review/due") {
+        const snapshot = persistenceStore.getSnapshot();
+        const dismissedPostIds = new Set(snapshot.dismissedPostIds);
+        const due = getDueReviewStates(snapshot.reviewStates, url.searchParams.get("now") ?? new Date())
+          .filter((state) => !dismissedPostIds.has(state.postId))
+          .map(({ postId, intervalDays, dueAt }) => ({ postId, intervalDays, dueAt }));
+
+        sendJson(response, 200, { due });
+        return;
+      }
+
+      if (request.method === "POST" && /^\/api\/review\/[^/]+\/complete$/.test(url.pathname)) {
+        const postId = decodeURIComponent(
+          url.pathname.replace(/^\/api\/review\//, "").replace(/\/complete$/, "")
+        );
+        const body = await readJsonBody(request);
+        const snapshot = persistenceStore.getSnapshot();
+        const reviewState = snapshot.reviewStates.find((state) => state.postId === postId);
+
+        if (!reviewState) {
+          sendJson(response, 404, { error: "Review state not found." });
+          return;
+        }
+
+        const post = snapshot.posts.find((candidate) => candidate.id === postId);
+
+        if (!post) {
+          sendJson(response, 404, { error: "Post not found for review state." });
+          return;
+        }
+
+        const reviewedAt = body.reviewedAt ?? body.now ?? new Date().toISOString();
+        const nextReviewState = advanceReviewState(reviewState, reviewedAt);
+        const reviewedSignal = createReviewedInteractionSignal(post, reviewedAt);
+        const observedTopicState = deriveTopicState(reviewedSignal);
+        const currentTopicState = snapshot.topicStates.find((record) => record.topicId === observedTopicState.topicId);
+        const feedback = evaluateInteraction(reviewedSignal, observedTopicState);
+        const topicState = updateTopicStateFromFeedback(
+          currentTopicState,
+          observedTopicState,
+          reviewedSignal,
+          feedback,
+          reviewedAt
+        );
+        const signalRecord = {
+          id: buildInteractionSignalRecordId(reviewedSignal),
+          signal: reviewedSignal,
+          feedback,
+          createdAt: reviewedSignal.createdAt
+        };
+
+        persistenceStore.saveReviewStates([nextReviewState], reviewedAt);
+        persistenceStore.saveInteractionSignalRecords([signalRecord], reviewedAt);
+        persistenceStore.saveTopicStateRecords([topicState], reviewedAt);
+        sendJson(response, 200, { reviewState: nextReviewState });
         return;
       }
 
@@ -212,9 +290,31 @@ export function createApiServer(options = {}) {
         requireInteractionSignal(body.signal);
         const generatedAt = body.generatedAt ?? new Date().toISOString();
         const currentSnapshot = persistenceStore.getSnapshot();
-        const persistedCandidates = findMatchingSourceCandidateRecords(currentSnapshot, body.signal);
         const observedTopicState = body.topicState ?? deriveTopicState(body.signal);
         const currentTopicState = currentSnapshot.topicStates.find((record) => record.topicId === observedTopicState.topicId);
+
+        if (isPureExposureSignal(body.signal)) {
+          const feedback = createNeutralExposureFeedback(body.signal);
+          const signalRecord = {
+            id: buildInteractionSignalRecordId(body.signal),
+            signal: body.signal,
+            feedback,
+            createdAt: body.signal.createdAt ?? generatedAt
+          };
+          const snapshot = persistenceStore.saveInteractionSignalRecords([signalRecord], generatedAt);
+          const plan = createEmptyCurationPlan(generatedAt);
+
+          sendJson(response, 200, {
+            feedback,
+            topicState: currentTopicState ?? null,
+            plan,
+            records: [],
+            snapshotSummary: summarizeSnapshot(snapshot)
+          });
+          return;
+        }
+
+        const persistedCandidates = findMatchingSourceCandidateRecords(currentSnapshot, body.signal);
         const feedback = evaluateInteraction(body.signal, observedTopicState);
         const topicState = updateTopicStateFromFeedback(
           currentTopicState,
@@ -243,6 +343,11 @@ export function createApiServer(options = {}) {
         persistenceStore.saveInteractionSignalRecords([signalRecord], generatedAt);
         persistenceStore.saveTopicStateRecords([topicState], generatedAt);
         let snapshot = persistenceStore.saveCurationJobRecords(records, generatedAt);
+        const initialReviewState = maybeCreateInitialReviewState(snapshot, body.signal, generatedAt);
+
+        if (initialReviewState) {
+          snapshot = persistenceStore.saveReviewStates([initialReviewState], generatedAt);
+        }
 
         if (plan.acceptedSourceCandidateIds.length) {
           const acceptedIds = new Set(plan.acceptedSourceCandidateIds);
@@ -873,6 +978,83 @@ function collectKnownSourceTitles(snapshot) {
   ];
 }
 
+function dedupePostsById(posts) {
+  const byId = new Map();
+
+  for (const post of posts) {
+    byId.set(post.id, post);
+  }
+
+  return Array.from(byId.values());
+}
+
+function maybeCreateInitialReviewState(snapshot, signal, generatedAt) {
+  if (!signal.liked && !signal.saved) {
+    return undefined;
+  }
+
+  if (snapshot.reviewStates.some((state) => state.postId === signal.postId)) {
+    return undefined;
+  }
+
+  if (!snapshot.posts.some((post) => post.id === signal.postId)) {
+    return undefined;
+  }
+
+  return createInitialReviewState(signal.postId, signal.createdAt ?? generatedAt);
+}
+
+function createReviewedInteractionSignal(post, reviewedAt) {
+  return {
+    postId: post.id,
+    topicId: getPostTopicId(post),
+    conceptIds: post.concepts,
+    impression: true,
+    dwellTimeMs: 0,
+    openedThread: false,
+    liked: false,
+    saved: false,
+    askedQuestion: false,
+    reviewed: true,
+    skippedQuickly: false,
+    createdAt: normalizeIsoDate(reviewedAt)
+  };
+}
+
+function getPostTopicId(post) {
+  return post.concepts[0] ?? post.id;
+}
+
+function createNeutralExposureFeedback(signal) {
+  return {
+    postId: signal.postId,
+    topicId: signal.topicId,
+    conceptIds: signal.conceptIds,
+    signalStrength: 0,
+    inferredState: "not_relevant",
+    nextAction: "ask_clarifying_question",
+    reason: "Pure impression only; topic state is unchanged."
+  };
+}
+
+function createEmptyCurationPlan(generatedAt) {
+  const normalizedGeneratedAt = normalizeIsoDate(generatedAt);
+
+  return {
+    generatedAt: normalizedGeneratedAt,
+    jobs: [],
+    suppressions: [],
+    acceptedSourceCandidateIds: [],
+    cooledTopicIds: [],
+    expansionPlan: {
+      generatedAt: normalizedGeneratedAt,
+      jobs: [],
+      suppressions: [],
+      cooledTopicIds: []
+    }
+  };
+}
+
 function toUserSignals(interactionSignalRecords) {
   return interactionSignalRecords.flatMap((record) => {
     const signals = [];
@@ -1211,13 +1393,37 @@ function getTimelineResponse(snapshot, nowValue, userId = "local-user") {
   const posts = releaseItems.length
     ? snapshot.posts.filter((post) => releasedPostIds.has(post.id) || !plannedPostIds.has(post.id))
     : snapshot.posts;
+  const dismissedPostIds = new Set(snapshot.dismissedPostIds);
+  const dueReviewStates = getDueReviewStates(snapshot.reviewStates, now).filter(
+    (state) => !dismissedPostIds.has(state.postId)
+  );
+  const dueReviewStateByPostId = new Map(dueReviewStates.map((state) => [state.postId, state]));
+  const dueReviewPostIds = dueReviewStates.map((state) => state.postId);
+  const dueReviewPostIdSet = new Set(dueReviewPostIds);
+  const reviewPosts = snapshot.posts.filter((post) => dueReviewPostIdSet.has(post.id));
+  const candidatePosts = dedupePostsById([...posts, ...reviewPosts]);
+  const interactionSignals = snapshot.interactionSignals.map((record) => record.signal);
+  const lifecyclePosts = filterTimelineLifecycle({
+    posts: candidatePosts,
+    interactionSignals,
+    dismissedPostIds: snapshot.dismissedPostIds,
+    dueReviewPostIds,
+    restingReviewPostIds: getRestingReviewStates(snapshot.reviewStates, now).map((state) => state.postId),
+    now
+  });
   const memoryRecord = snapshot.userMemories.find((record) => record.userId === userId);
   const rankedPosts = rankPersonalizedTimeline({
-    cards: posts,
+    cards: lifecyclePosts,
     memory: memoryRecord?.memory,
     topicStates: snapshot.topicStates,
-    recentSignals: snapshot.interactionSignals.map((record) => record.signal),
+    recentSignals: interactionSignals,
+    seenReadCounts: countSeenReadSignalsByPostId(interactionSignals),
+    dueReviewPostIds,
     now
+  }).map((post) => {
+    const dueReviewState = dueReviewStateByPostId.get(post.id);
+
+    return dueReviewState ? { ...post, reviewDueAt: dueReviewState.dueAt } : post;
   });
 
   return {
@@ -1306,6 +1512,8 @@ function summarizeSnapshot(snapshot) {
     memories: snapshot.userMemories.length,
     interactionSignals: snapshot.interactionSignals.length,
     topicStates: snapshot.topicStates.length,
+    dismissedPostIds: snapshot.dismissedPostIds.length,
+    reviewStates: snapshot.reviewStates.length,
     sourceCandidates: snapshot.sourceCandidates.length,
     agentTurns: snapshot.agentTurns.length
   };
@@ -1552,6 +1760,10 @@ function normalizeStringArray(value) {
     : [];
 }
 
+function normalizeIsoDate(value) {
+  return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+}
+
 function normalizeScore(value, fallback) {
   return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : fallback;
 }
@@ -1712,7 +1924,7 @@ export function listen(server, port = defaultPort, host = "127.0.0.1") {
   });
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const port = Number.parseInt(process.env.PORT ?? `${defaultPort}`, 10);
   // Default to loopback. Set AITIMELINE_HOST=0.0.0.0 to expose the API on the
   // local network so a phone (Expo Go) can reach it — trusted LANs only.

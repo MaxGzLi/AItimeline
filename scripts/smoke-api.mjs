@@ -7,6 +7,8 @@ import { createApiServer, listen } from "../apps/api/src/server.mjs";
 
 const tempDir = await mkdtemp(join(tmpdir(), "aitimeline-api-"));
 const mediaRootDir = join(tempDir, "media");
+const dataPath = join(tempDir, "aitimeline.json");
+const curationDataPath = join(tempDir, "curation-jobs.json");
 await mkdir(join(mediaRootDir, "smoke-source"), { recursive: true });
 await writeFile(join(mediaRootDir, "smoke-source", "1.png"), new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]));
 
@@ -25,8 +27,8 @@ const fakeSearchProvider = {
   }
 };
 const server = createApiServer({
-  dataPath: join(tempDir, "aitimeline.json"),
-  curationDataPath: join(tempDir, "curation-jobs.json"),
+  dataPath,
+  curationDataPath,
   mediaRootDir,
   enableFixtures: true,
   searchProvider: fakeSearchProvider
@@ -73,6 +75,125 @@ try {
   assert.ok(Array.isArray(timeline.posts[0].scoreReasons), "timeline API should explain ranking scores");
 
   const firstPost = timeline.posts[0];
+  const dismissedPost = timeline.posts.find((post) => post.id !== firstPost.id);
+
+  assert.ok(dismissedPost, "article smoke should have a second post for dismiss lifecycle coverage");
+
+  const dismissResult = await requestJson(`/api/posts/${encodeURIComponent(dismissedPost.id)}/dismiss`, {
+    method: "POST"
+  });
+  const repeatedDismissResult = await requestJson(`/api/posts/${encodeURIComponent(dismissedPost.id)}/dismiss`, {
+    method: "POST"
+  });
+
+  assert.equal(dismissResult.dismissed, true, "dismiss endpoint should mark a post dismissed");
+  assert.equal(repeatedDismissResult.dismissed, true, "dismiss endpoint should be idempotent");
+
+  const dismissedTimeline = await requestJson("/api/timeline?now=2026-06-10T00:00:00.000Z");
+
+  assert.equal(
+    dismissedTimeline.posts.some((post) => post.id === dismissedPost.id),
+    false,
+    "dismissed posts should leave the timeline"
+  );
+
+  const reloadedServer = createApiServer({
+    dataPath,
+    curationDataPath,
+    mediaRootDir,
+    enableFixtures: true,
+    searchProvider: fakeSearchProvider
+  });
+  const reloadedAddress = await listen(reloadedServer, 0);
+
+  try {
+    const reloadedResponse = await fetch(
+      `http://${reloadedAddress.address}:${reloadedAddress.port}/api/timeline?now=2026-06-10T00:00:00.000Z`
+    );
+    const reloadedTimeline = await reloadedResponse.json();
+
+    assert.equal(reloadedResponse.ok, true, "reloaded API server should read the persisted snapshot");
+    assert.equal(
+      reloadedTimeline.posts.some((post) => post.id === dismissedPost.id),
+      false,
+      "dismissed posts should stay dismissed after recreating the store"
+    );
+  } finally {
+    await new Promise((resolveClose, rejectClose) => {
+      reloadedServer.close((error) => (error ? rejectClose(error) : resolveClose()));
+    });
+  }
+
+  const firstTopic = firstPost.concepts[0] ?? "agentic-learning";
+  const reviewSeedSignal = {
+    postId: firstPost.id,
+    topicId: firstTopic,
+    conceptIds: firstPost.concepts,
+    impression: true,
+    dwellTimeMs: 0,
+    openedThread: false,
+    liked: false,
+    saved: true,
+    askedQuestion: false,
+    reviewed: false,
+    skippedQuickly: false,
+    createdAt: "2026-06-10T00:00:00.000Z"
+  };
+  const reviewSeedResult = await requestJson("/api/signals", {
+    method: "POST",
+    body: {
+      generatedAt: "2026-06-10T00:00:00.000Z",
+      signal: reviewSeedSignal
+    }
+  });
+
+  assert.equal(reviewSeedResult.snapshotSummary.reviewStates, 1, "first save should create a review state");
+
+  const reviewSnapshot = await requestJson("/api/snapshot");
+  const firstReviewState = reviewSnapshot.reviewStates.find((state) => state.postId === firstPost.id);
+
+  assert.ok(firstReviewState, "review state should persist in the snapshot");
+  assert.equal(firstReviewState.intervalDays, 1, "initial review interval should be one day");
+  assert.equal(firstReviewState.dueAt, "2026-06-11T00:00:00.000Z", "initial review dueAt should be signal time + one day");
+
+  const topicStateBeforePureExposure = reviewSnapshot.topicStates.find((state) => state.topicId === firstTopic);
+  const pureExposureResult = await requestJson("/api/signals", {
+    method: "POST",
+    body: {
+      generatedAt: "2026-06-10T00:05:00.000Z",
+      signal: {
+        ...reviewSeedSignal,
+        saved: false,
+        createdAt: "2026-06-10T00:05:00.000Z"
+      }
+    }
+  });
+  const pureExposureSnapshot = await requestJson("/api/snapshot");
+  const topicStateAfterPureExposure = pureExposureSnapshot.topicStates.find((state) => state.topicId === firstTopic);
+
+  assert.equal(pureExposureResult.records.length, 0, "pure exposure should not enqueue curation records");
+  assert.deepEqual(
+    topicStateAfterPureExposure,
+    topicStateBeforePureExposure,
+    "pure exposure should not change topic state"
+  );
+
+  const dueReview = await requestJson(`/api/review/due?now=${encodeURIComponent(firstReviewState.dueAt)}`);
+
+  assert.deepEqual(
+    dueReview.due.map((state) => state.postId),
+    [firstPost.id],
+    "due review endpoint should return due review states sorted by dueAt"
+  );
+
+  const dueTimeline = await requestJson(`/api/timeline?now=${encodeURIComponent(firstReviewState.dueAt)}`);
+  const dueTimelinePost = dueTimeline.posts.find((post) => post.id === firstPost.id);
+
+  assert.ok(dueTimelinePost, "due review post should appear in the timeline");
+  assert.equal(dueTimelinePost.reviewDueAt, firstReviewState.dueAt, "due review timeline post should expose reviewDueAt");
+  assert.equal(dueTimelinePost.recommendationIntent, "review", "due review timeline post should use review intent");
+
+
   const evidenceResult = await requestJson(`/api/evidence/${encodeURIComponent(firstPost.id)}`);
 
   assert.equal(evidenceResult.ledger.postId, firstPost.id, "evidence API should return the requested post ledger");
@@ -90,7 +211,6 @@ try {
   assert.ok(askResult.citations.length > 0, "ask API should resolve grounded citations from the source registry");
   assert.equal(askResult.grounded, true, "ask API answer should be grounded in source chunks");
 
-  const firstTopic = firstPost.concepts[0] ?? "agentic-learning";
   const memoryResult = await requestJson("/api/memory", {
     method: "POST",
     body: {
@@ -270,8 +390,10 @@ try {
   assert.ok(snapshot.posts.length >= importResult.posts.length, "snapshot should persist posts");
   assert.ok(snapshot.curationJobs.length >= signalResult.records.length, "snapshot should persist curation records");
   assert.equal(snapshot.userMemories.length, 1, "snapshot should persist user memory");
-  assert.equal(snapshot.interactionSignals.length, 2, "snapshot should persist both interaction signals");
+  assert.ok(snapshot.interactionSignals.length >= 4, "snapshot should persist lifecycle and interaction signals");
   assert.equal(snapshot.topicStates.length, 1, "snapshot should persist topic states");
+  assert.ok(snapshot.dismissedPostIds.includes(dismissedPost.id), "snapshot should persist dismissed post ids");
+  assert.equal(snapshot.reviewStates.length, 1, "snapshot should persist review states");
   assert.equal(snapshot.sourceCandidates.length, 1, "snapshot should persist source candidates");
   assert.equal(snapshot.sourceCandidates[0].status, "imported", "imported source candidate should be marked imported");
 
@@ -465,6 +587,36 @@ try {
       });
     }
   }
+
+  // 完成复习放在最后:休眠期排除会让这张卡退出时间线,中段的排序/整理断言需要它在场。
+  const completedReview = await requestJson(`/api/review/${encodeURIComponent(firstPost.id)}/complete`, {
+    method: "POST",
+    body: {
+      reviewedAt: firstReviewState.dueAt
+    }
+  });
+
+  assert.equal(completedReview.reviewState.intervalDays, 3, "completing review should advance the interval");
+  assert.equal(
+    completedReview.reviewState.lastReviewedAt,
+    firstReviewState.dueAt,
+    "completing review should record lastReviewedAt"
+  );
+
+  const dueAfterComplete = await requestJson(`/api/review/due?now=${encodeURIComponent(firstReviewState.dueAt)}`);
+  const timelineAfterComplete = await requestJson(`/api/timeline?now=${encodeURIComponent(firstReviewState.dueAt)}`);
+  const completedTimelinePost = timelineAfterComplete.posts.find((post) => post.id === firstPost.id);
+
+  assert.equal(
+    dueAfterComplete.due.some((state) => state.postId === firstPost.id),
+    false,
+    "completed reviews should leave the due review endpoint until their next dueAt"
+  );
+  assert.equal(
+    completedTimelinePost,
+    undefined,
+    "completed reviews should rest out of the timeline entirely until the next dueAt"
+  );
 
   console.log("API smoke passed");
 } finally {
