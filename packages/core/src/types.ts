@@ -80,6 +80,13 @@ export interface Source {
   author?: string;
   publishedAt?: string;
   durationSeconds?: number;
+  origin?: SourceOrigin;
+}
+
+export interface SourceOrigin {
+  turnId: string;
+  question: string;
+  createdAt: string;
 }
 
 export interface SourceTextAsset {

@@ -6,6 +6,7 @@ import {
   applyUserMemoryEdits,
   askGrounded,
   advanceReviewState,
+  buildDiscoveryConfirmationQuestions,
   countSeenReadSignalsByPostId,
   createAITimelinePersistenceStore,
   createBackgroundCurationPlan,
@@ -100,6 +101,34 @@ export function createApiServer(options = {}) {
 
       if (request.method === "GET" && url.pathname === "/api/snapshot") {
         sendJson(response, 200, persistenceStore.getSnapshot());
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/notifications") {
+        sendJson(response, 200, getNotificationsResponse(persistenceStore.getSnapshot()));
+        return;
+      }
+
+      if (request.method === "POST" && /^\/api\/notifications\/[^/]+\/read$/.test(url.pathname)) {
+        const notificationId = decodeURIComponent(
+          url.pathname.replace(/^\/api\/notifications\//, "").replace(/\/read$/, "")
+        );
+        const snapshot = persistenceStore.getSnapshot();
+        const notification = snapshot.notifications.find((record) => record.id === notificationId);
+
+        if (!notification) {
+          sendJson(response, 404, { error: "Notification not found." });
+          return;
+        }
+
+        const readAt = new Date().toISOString();
+        const nextNotification = { ...notification, readAt };
+        const nextSnapshot = persistenceStore.saveNotifications([nextNotification], readAt);
+
+        sendJson(response, 200, {
+          record: nextNotification,
+          snapshotSummary: summarizeSnapshot(nextSnapshot)
+        });
         return;
       }
 
@@ -433,6 +462,7 @@ export function createApiServer(options = {}) {
       if (request.method === "POST" && url.pathname === "/api/curation/run") {
         const body = await readJsonBody(request);
         const contentLanguage = resolveContentLanguage(persistenceStore, process.env);
+        const runNow = body.now ?? new Date().toISOString();
         const batch = await runDueBackgroundCurationJobs(
           curationStore,
           {
@@ -441,13 +471,23 @@ export function createApiServer(options = {}) {
             ingestSourceCandidate: (candidate) => ingestSourceCandidate(candidate),
             discoverSources: (job) => discoverSourcesForJob(job, searchProvider, persistenceStore, contentLanguage),
             loadSeedPost: (job) => persistenceStore.getSnapshot().posts.find((post) => post.id === job.postId),
+            researchQuestion: (job) =>
+              handleResearchQuestionJob(
+                job,
+                persistenceStore,
+                sourceImportWorker,
+                searchProvider,
+                askModelClient,
+                contentLanguage,
+                runNow
+              ),
             cooldownTopic: (job) => ({
               kind: job.kind,
               message: "Topic cooldown recorded by API worker."
             })
           },
           {
-            now: body.now ?? new Date().toISOString(),
+            now: runNow,
             limit: body.limit,
             kinds: body.kinds
           }
@@ -517,6 +557,21 @@ export function createApiServer(options = {}) {
           persistenceStore,
           askModelClient,
           searchProvider,
+          resolveContentLanguage(persistenceStore, process.env)
+        );
+
+        sendJson(response, 200, result);
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/agent/confirm") {
+        const body = await readJsonBody(request);
+        const userId = typeof body.userId === "string" && body.userId.trim() ? body.userId : "local-user";
+        const result = handleAgentConfirm(
+          body,
+          userId,
+          persistenceStore,
+          curationStore,
           resolveContentLanguage(persistenceStore, process.env)
         );
 
@@ -664,10 +719,15 @@ function createConfiguredAskModelClient(env) {
 
 async function handleAgentAsk(body, userId, persistenceStore, client, searchProvider, contentLanguage) {
   const snapshot = persistenceStore.getSnapshot();
-  const now = new Date().toISOString();
+  const now = typeof body.now === "string" ? body.now : new Date().toISOString();
   const memory = snapshot.userMemories.find((record) => record.userId === userId)?.memory;
   const registry = mergeSourceRegistries(...snapshot.sourceRegistries.map((record) => record.registry));
-  const turn = await runConversationTurn(
+  const threadId =
+    typeof body.threadId === "string" && body.threadId.trim()
+      ? body.threadId.trim()
+      : `agent-thread-${hashText(`${userId}|${body.question}|${now}`)}`;
+  const turnRecordId = `agent-turn-${hashText(`${userId}|${threadId}|${body.question}|${now}`)}`;
+  let turn = await runConversationTurn(
     {
       question: body.question,
       postId: typeof body.postId === "string" ? body.postId : undefined,
@@ -675,20 +735,23 @@ async function handleAgentAsk(body, userId, persistenceStore, client, searchProv
       registry,
       memory,
       userSignals: toUserSignals(snapshot.interactionSignals),
+      previousTurns: getPreviousTurns(snapshot, userId, threadId),
       now
     },
     { client, contentLanguage }
   );
 
-  const discoveredCandidates = await executeDiscoveryAction(
-    turn,
-    snapshot,
-    memory,
-    searchProvider,
-    persistenceStore,
-    now,
-    contentLanguage
-  );
+  if (turn.answer) {
+    turn = {
+      ...turn,
+      answer: annotateAnswerWithSourceOrigins(turn.answer, registry, turnRecordId, contentLanguage)
+    };
+  }
+
+  const hasConfirmAction = turn.actions.some((action) => action.kind === "confirm_discovery");
+  const discoveredCandidates = hasConfirmAction
+    ? []
+    : await executeDiscoveryAction(turn, snapshot, memory, searchProvider, persistenceStore, now, contentLanguage);
 
   if (turn.signal) {
     persistenceStore.saveInteractionSignalRecords(
@@ -720,12 +783,14 @@ async function handleAgentAsk(body, userId, persistenceStore, client, searchProv
   persistenceStore.saveUserMemory(userId, memoryEditResult.memory, memoryEditResult.events, now);
 
   const turnRecord = {
-    id: `agent-turn-${hashText(`${userId}|${turn.question}|${now}`)}`,
+    id: turnRecordId,
     userId,
     question: turn.question,
     intent: turn.intent,
     tier: turn.tier,
     zone: turn.zone,
+    status: hasConfirmAction ? "pending_confirmation" : "answered",
+    threadId,
     answerCardId: turn.answerCardId,
     createdAt: now
   };
@@ -737,6 +802,480 @@ async function handleAgentAsk(body, userId, persistenceStore, client, searchProv
     turnRecord,
     snapshotSummary: summarizeSnapshot(finalSnapshot)
   };
+}
+
+function handleAgentConfirm(body, userId, persistenceStore, curationStore, contentLanguage) {
+  requireString(body.turnId, "turnId");
+  const choices = normalizeChoiceMap(body.choices);
+
+  if (Object.keys(choices).length === 0) {
+    throw new HttpError(400, "choices must include at least one confirmation answer.");
+  }
+
+  const now = typeof body.now === "string" ? body.now : new Date().toISOString();
+  const snapshot = persistenceStore.getSnapshot();
+  const turnRecord = snapshot.agentTurns.find((record) => record.id === body.turnId && record.userId === userId);
+
+  if (!turnRecord) {
+    throw new HttpError(404, "Agent turn not found.");
+  }
+
+  if (turnRecord.status !== "pending_confirmation" && turnRecord.status !== "researching") {
+    throw new HttpError(409, "Agent turn is not waiting for discovery confirmation.");
+  }
+
+  const job = createResearchQuestionJob(turnRecord, choices, contentLanguage, now);
+  const records = curationStore.enqueuePlan(createSingleJobPlan(job, now), now);
+  persistenceStore.saveCurationJobRecords(records, now);
+
+  const nextTurnRecord = {
+    ...turnRecord,
+    status: "researching"
+  };
+  const nextSnapshot = persistenceStore.saveAgentTurnRecords([nextTurnRecord], now);
+
+  return {
+    accepted: true,
+    records,
+    turnRecord: nextTurnRecord,
+    snapshotSummary: summarizeSnapshot(nextSnapshot)
+  };
+}
+
+async function handleResearchQuestionJob(
+  job,
+  persistenceStore,
+  sourceImportWorker,
+  searchProvider,
+  askModelClient,
+  defaultContentLanguage,
+  now
+) {
+  const payload = job.researchQuestion;
+
+  if (!payload) {
+    return {
+      kind: job.kind,
+      message: "Skipped: research_question job is missing its payload."
+    };
+  }
+
+  const contentLanguage = payload.contentLanguage ?? defaultContentLanguage;
+
+  if (!searchProvider) {
+    const notification = createResearchNotification({
+      kind: "research_progress",
+      turnId: payload.turnId,
+      question: payload.question,
+      body: researchCopy(contentLanguage, "unconfigured"),
+      postIds: [],
+      createdAt: now
+    });
+
+    persistenceStore.saveNotifications([notification], now);
+    updateAgentTurn(persistenceStore, payload.turnId, { status: "closed" }, now);
+
+    return {
+      kind: job.kind,
+      message: "Search provider is not configured; notification was created."
+    };
+  }
+
+  const snapshot = persistenceStore.getSnapshot();
+  const queries = buildResearchQueries(payload.question, payload.choices, contentLanguage);
+  const concepts = deriveResearchConcepts(payload.question);
+  const discovery = await runSourceDiscovery({
+    provider: searchProvider,
+    concepts,
+    queries,
+    existingUrls: collectKnownSourceUrls(snapshot),
+    existingTitles: collectKnownSourceTitles(snapshot),
+    maxQueries: 3,
+    maxCandidates: 8,
+    contentLanguage,
+    now
+  });
+  const rankedCandidates = rankResearchCandidates(discovery.candidates, payload.question);
+  const importLimit = getResearchImportLimit(payload.choices, contentLanguage);
+  const candidatesToImport = rankedCandidates.slice(0, importLimit);
+  const remainingCandidates = rankedCandidates.slice(importLimit);
+
+  if (remainingCandidates.length) {
+    persistDiscoveredCandidates(persistenceStore, remainingCandidates, now);
+  }
+
+  if (!rankedCandidates.length) {
+    const body = discovery.errors.length
+      ? researchCopy(contentLanguage, "searchFailed", { detail: discovery.errors.join("; ") })
+      : researchCopy(contentLanguage, "empty");
+    const notification = createResearchNotification({
+      kind: "research_progress",
+      turnId: payload.turnId,
+      question: payload.question,
+      body,
+      postIds: [],
+      createdAt: now
+    });
+
+    persistenceStore.saveNotifications([notification], now);
+    updateAgentTurn(persistenceStore, payload.turnId, { status: "closed" }, now);
+
+    return {
+      kind: job.kind,
+      discoveredSourceCandidates: remainingCandidates,
+      message: "Research question search produced no importable candidates."
+    };
+  }
+
+  const origin = {
+    turnId: payload.turnId,
+    question: payload.question,
+    createdAt: now
+  };
+  const importedResults = [];
+  const importFailures = [];
+
+  for (const candidate of candidatesToImport) {
+    const candidateWithOrigin = withCandidateOrigin(candidate, origin);
+
+    try {
+      const ingested = await ingestSourceCandidate(candidateWithOrigin);
+      const sourceImport = await sourceImportWorker.run({
+        source: candidateWithOrigin.source,
+        assets: ingested.assets,
+        chunks: ingested.chunks,
+        sourceRegistry: ingested.sourceRegistry,
+        createdAt: now,
+        contentLanguage,
+        recommendedBecause: researchRecommendedBecause(candidateWithOrigin, contentLanguage)
+      });
+
+      persistenceStore.saveSourceImportResult(sourceImport, now);
+
+      if (sourceImport.importRecord.status === "failed" || sourceImport.posts.length === 0) {
+        importFailures.push(sourceImport.errorMessage ?? "Source import worker failed.");
+        continue;
+      }
+
+      persistenceStore.saveReleasePlan(createSourcePostReleasePlan({ posts: sourceImport.posts }), now);
+      importedResults.push(sourceImport);
+    } catch (error) {
+      importFailures.push(error instanceof Error ? error.message : "Unknown research source import error.");
+    }
+  }
+
+  const importedPosts = importedResults.flatMap((result) => result.posts);
+
+  if (!importedPosts.length) {
+    const notification = createResearchNotification({
+      kind: "research_progress",
+      turnId: payload.turnId,
+      question: payload.question,
+      body: researchCopy(contentLanguage, "importFailed", {
+        detail: importFailures.slice(0, 3).join("; ") || "No imported cards passed validation."
+      }),
+      postIds: [],
+      createdAt: now
+    });
+
+    persistenceStore.saveNotifications([notification], now);
+    updateAgentTurn(persistenceStore, payload.turnId, { status: "closed" }, now);
+
+    return {
+      kind: job.kind,
+      discoveredSourceCandidates: remainingCandidates,
+      message: "Research question imports all failed or were blocked by validation."
+    };
+  }
+
+  const answerPost = selectResearchAnswerPost(importedPosts, payload.question);
+  const answerRegistry = mergeSourceRegistries(...importedResults.map((result) => result.sourceRegistry));
+  const answer = annotateAnswerWithSourceOrigins(
+    await askGrounded({ post: answerPost, registry: answerRegistry, question: payload.question }, { client: askModelClient, contentLanguage }),
+    answerRegistry,
+    payload.turnId,
+    contentLanguage
+  );
+  const notification = createResearchNotification({
+    kind: "agent_answer",
+    turnId: payload.turnId,
+    question: payload.question,
+    body: answer.answer,
+    postIds: importedPosts.map((post) => post.id),
+    citations: answer.citations.map((citation) => ({
+      sourceId: citation.sourceId,
+      sourceTitle: citation.sourceTitle,
+      chunkId: citation.chunkId,
+      quote: citation.quote
+    })),
+    createdAt: now
+  });
+
+  persistenceStore.saveNotifications([notification], now);
+  updateAgentTurn(persistenceStore, payload.turnId, { status: "answered", answerCardId: answerPost.id }, now);
+
+  return {
+    kind: job.kind,
+    discoveredSourceCandidates: remainingCandidates,
+    message: `Research question answered with ${importedResults.length} imported sources.`
+  };
+}
+
+function createResearchQuestionJob(turnRecord, choices, contentLanguage, now) {
+  return {
+    id: `research-question-${turnRecord.id}`,
+    kind: "research_question",
+    postId: turnRecord.answerCardId,
+    topicId: `question-${hashText(turnRecord.id)}`,
+    conceptIds: [],
+    priority: 1,
+    reason: "User confirmed a dark-zone question for background research.",
+    createdAt: now,
+    runAfter: now,
+    researchQuestion: {
+      turnId: turnRecord.id,
+      threadId: turnRecord.threadId,
+      userId: turnRecord.userId,
+      question: turnRecord.question,
+      choices,
+      contentLanguage
+    }
+  };
+}
+
+function createSingleJobPlan(job, generatedAt) {
+  return {
+    generatedAt,
+    jobs: [job],
+    suppressions: [],
+    acceptedSourceCandidateIds: [],
+    cooledTopicIds: [],
+    expansionPlan: {
+      generatedAt,
+      jobs: [],
+      suppressions: [],
+      cooledTopicIds: []
+    }
+  };
+}
+
+function normalizeChoiceMap(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key, choice]) => typeof key === "string" && key.trim() && typeof choice === "string" && choice.trim())
+      .map(([key, choice]) => [key.trim(), choice.trim()])
+  );
+}
+
+function buildResearchQueries(question, choices, contentLanguage) {
+  const selectedOptions = getSelectedConfirmationOptions(choices, contentLanguage);
+  const modifiers = selectedOptions.map((option) => option.queryModifier).filter(Boolean);
+  const queries = [
+    [question, ...modifiers].join(" "),
+    [question, modifiers[0]].filter(Boolean).join(" "),
+    [question, modifiers[1]].filter(Boolean).join(" ")
+  ];
+
+  return Array.from(new Set(queries.map((query) => query.trim()).filter(Boolean))).slice(0, 3);
+}
+
+function getResearchImportLimit(choices, contentLanguage) {
+  const depthOption = getSelectedConfirmationOptions(choices, contentLanguage).find(
+    (option) => typeof option.importLimit === "number"
+  );
+
+  return Math.max(1, Math.min(4, depthOption?.importLimit ?? 2));
+}
+
+function getSelectedConfirmationOptions(choices, contentLanguage) {
+  const questions = buildDiscoveryConfirmationQuestions(contentLanguage);
+
+  return questions.flatMap((question) => {
+    const selectedId = choices[question.id];
+    const selected = question.options.find((option) => option.id === selectedId);
+
+    return selected ? [selected] : [];
+  });
+}
+
+function deriveResearchConcepts(question) {
+  return Array.from(tokenizeText(question)).slice(0, 4);
+}
+
+function rankResearchCandidates(candidates, question) {
+  const questionTokens = tokenizeText(question);
+
+  return candidates
+    .map((candidate) => {
+      const haystack = tokenizeText(
+        [candidate.source.title, candidate.reason, candidate.source.url, candidate.conceptIds.join(" ")].join(" ")
+      );
+      const overlap = questionTokens.size
+        ? Array.from(questionTokens).filter((token) => haystack.has(token)).length / questionTokens.size
+        : 0;
+      const sourceTypeWeight =
+        candidate.source.type === "paper" || candidate.source.type === "article" || candidate.source.type === "blog"
+          ? 0.08
+          : candidate.source.type === "news"
+            ? 0.04
+            : 0;
+      const score =
+        candidate.relevanceScore * 0.42 +
+        candidate.qualityScore * 0.28 +
+        candidate.noveltyScore * 0.12 +
+        overlap * 0.1 +
+        sourceTypeWeight;
+
+      return { candidate, score };
+    })
+    .sort((left, right) => right.score - left.score)
+    .map((item) => item.candidate);
+}
+
+function withCandidateOrigin(candidate, origin) {
+  return {
+    ...candidate,
+    source: {
+      ...candidate.source,
+      origin
+    }
+  };
+}
+
+function researchRecommendedBecause(candidate, contentLanguage) {
+  if (contentLanguage === "en") {
+    return `You asked the agent to research this question, so this source was imported: ${candidate.reason}`;
+  }
+
+  return `你委托智能体研究这个问题,所以自动导入这个来源:${candidate.reason}`;
+}
+
+function selectResearchAnswerPost(posts, question) {
+  const questionTokens = tokenizeText(question);
+
+  return (
+    posts
+      .map((post) => {
+        const haystack = tokenizeText([post.title, post.summary, post.keyTakeaway, post.concepts.join(" ")].join(" "));
+        const overlap = questionTokens.size
+          ? Array.from(questionTokens).filter((token) => haystack.has(token)).length / questionTokens.size
+          : 0;
+
+        return { post, score: overlap };
+      })
+      .sort((left, right) => right.score - left.score || right.post.createdAt.localeCompare(left.post.createdAt))[0]
+      ?.post ?? posts[0]
+  );
+}
+
+function createResearchNotification({ kind, turnId, question, body, postIds, citations, createdAt }) {
+  return {
+    id: `notification-${hashText(`${kind}|${turnId}|${createdAt}|${body}`)}`,
+    kind,
+    turnId,
+    question,
+    postIds,
+    body,
+    citations,
+    createdAt
+  };
+}
+
+function updateAgentTurn(persistenceStore, turnId, patch, now) {
+  const snapshot = persistenceStore.getSnapshot();
+  const turnRecord = snapshot.agentTurns.find((record) => record.id === turnId);
+
+  if (!turnRecord) {
+    return snapshot;
+  }
+
+  return persistenceStore.saveAgentTurnRecords([{ ...turnRecord, ...patch }], now);
+}
+
+function getPreviousTurns(snapshot, userId, threadId) {
+  return snapshot.agentTurns
+    .filter((record) => record.userId === userId && record.threadId === threadId)
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+    .slice(-5);
+}
+
+function annotateAnswerWithSourceOrigins(answer, registry, currentTurnId, contentLanguage) {
+  const originNotes = [];
+  const seen = new Set();
+
+  for (const citation of answer.citations) {
+    const origin =
+      citation.origin ??
+      registry.sources.find((source) => source.id === citation.sourceId)?.origin;
+
+    if (!origin || origin.turnId === currentTurnId || seen.has(origin.turnId)) {
+      continue;
+    }
+
+    seen.add(origin.turnId);
+    originNotes.push(formatOriginNote(origin, contentLanguage));
+  }
+
+  if (!originNotes.length) {
+    return answer;
+  }
+
+  return {
+    ...answer,
+    answer: `${answer.answer}\n\n${originNotes.join("\n")}`
+  };
+}
+
+function formatOriginNote(origin, contentLanguage) {
+  const date = new Date(origin.createdAt);
+
+  if (contentLanguage === "en") {
+    return `This evidence came from your ${date.toLocaleString("en-US", {
+      month: "short",
+      day: "numeric",
+      timeZone: "UTC"
+    })} question "${origin.question}".`;
+  }
+
+  return `这条证据来自你 ${date.getUTCMonth() + 1} 月 ${date.getUTCDate()} 日的提问『${origin.question}』。`;
+}
+
+function researchCopy(contentLanguage, key, vars = {}) {
+  const templates =
+    contentLanguage === "en"
+      ? {
+          unconfigured: "Search is not configured. Set AITIMELINE_SEARCH_API_KEY in .env and try again.",
+          empty: "I searched for sources but did not find any new importable candidates.",
+          searchFailed: "Source search failed before any importable candidate was found: {detail}",
+          importFailed: "Research finished, but every imported source failed or was blocked by validation: {detail}"
+        }
+      : {
+          unconfigured: "搜索服务未配置,请在 .env 设置 AITIMELINE_SEARCH_API_KEY 后再试。",
+          empty: "已经搜索来源,但没有找到可导入的新候选。",
+          searchFailed: "来源搜索失败,还没有找到可导入候选:{detail}",
+          importFailed: "研究已完成,但导入的来源都没有通过门禁或导入失败:{detail}"
+        };
+  const template = templates[key] ?? "";
+
+  return Object.entries(vars).reduce(
+    (value, [name, replacement]) => value.replaceAll(`{${name}}`, String(replacement)),
+    template
+  );
+}
+
+function tokenizeText(value) {
+  return new Set(
+    String(value)
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}]+/gu, " ")
+      .split(/\s+/)
+      .map((token) => token.trim())
+      .filter((token) => token.length >= 2)
+  );
 }
 
 // Execute the discovery proposal inline when a provider is configured;
@@ -915,6 +1454,8 @@ async function handleUserNote(body, userId, persistenceStore, client, searchProv
     intent: turn.intent,
     tier: turn.tier,
     zone: turn.zone,
+    status: "answered",
+    threadId: `agent-thread-note-${note.post.id}`,
     answerCardId: turn.answerCardId,
     createdAt: now
   };
@@ -1036,6 +1577,8 @@ async function handlePostReply(postId, body, userId, persistenceStore, client, s
     intent: turn.intent,
     tier: turn.tier,
     zone: turn.zone,
+    status: "answered",
+    threadId: `agent-thread-post-${postId}`,
     answerCardId: turn.answerCardId,
     createdAt: now
   };
@@ -1588,6 +2131,28 @@ function getDismissedPostsResponse(snapshot, nowValue) {
   };
 }
 
+function getNotificationsResponse(snapshot) {
+  const dismissedPostIds = new Set(snapshot.dismissedPosts.map((record) => record.postId));
+
+  return {
+    records: [...snapshot.notifications]
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+      .map((notification) => ({
+        ...notification,
+        supportPosts: notification.postIds.map((postId) => {
+          const post = snapshot.posts.find((candidate) => candidate.id === postId);
+
+          return {
+            id: postId,
+            title: post?.title ?? postId,
+            dismissed: dismissedPostIds.has(postId),
+            missing: !post
+          };
+        })
+      }))
+  };
+}
+
 function parseDismissedPostMode(value) {
   if (value === undefined) {
     return "soft";
@@ -1687,7 +2252,8 @@ function summarizeSnapshot(snapshot) {
     dismissedPosts: snapshot.dismissedPosts.length,
     reviewStates: snapshot.reviewStates.length,
     sourceCandidates: snapshot.sourceCandidates.length,
-    agentTurns: snapshot.agentTurns.length
+    agentTurns: snapshot.agentTurns.length,
+    notifications: snapshot.notifications.length
   };
 }
 

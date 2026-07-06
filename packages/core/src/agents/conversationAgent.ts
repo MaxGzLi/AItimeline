@@ -10,23 +10,45 @@ import {
 } from "../graph/knowledgeBoundary.js";
 import { planDiscoveryQueries } from "../discovery/sourceDiscovery.js";
 import type { InteractionSignal, KnowledgePost, SourceRegistry, UserMemory, UserSignal } from "../types.js";
+import type { AgentTurnRecord } from "../storage/persistenceStore.js";
 
 export type AgentTurnIntent = "grounded_qa" | "boundary_probe" | "discovery_proposal";
 
 export type AgentTurnTier = "free" | "standard";
 
 export type AgentTurnActionKind =
+  | "confirm_discovery"
   | "discover_sources"
   | "start_series"
   | "continue_deeper"
   | "reframe_simpler"
   | "schedule_review";
 
+export interface AgentTurnConfirmationOption {
+  id: string;
+  label: string;
+  queryModifier?: string;
+  importLimit?: number;
+}
+
+export interface AgentTurnConfirmationQuestion {
+  id: string;
+  label: string;
+  options: AgentTurnConfirmationOption[];
+}
+
 export interface AgentTurnAction {
   kind: AgentTurnActionKind;
   label: string;
   concepts: string[];
   queries?: string[];
+  questions?: AgentTurnConfirmationQuestion[];
+}
+
+export interface AgentNearestPost {
+  postId: string;
+  title: string;
+  overlapScore: number;
 }
 
 export interface AgentTurnResult {
@@ -37,6 +59,7 @@ export interface AgentTurnResult {
   matchedConcepts: string[];
   answer: GroundedAnswer | null;
   answerCardId?: string;
+  nearestPosts: AgentNearestPost[];
   actions: AgentTurnAction[];
   signal?: InteractionSignal;
   notes: string[];
@@ -50,6 +73,7 @@ export interface ConversationTurnInput {
   registry: SourceRegistry;
   memory?: UserMemory;
   userSignals?: UserSignal[];
+  previousTurns?: AgentTurnRecord[];
   now?: string | Date;
 }
 
@@ -80,6 +104,7 @@ export async function runConversationTurn(
   const matchedConcepts = extractConceptsFromQuestion(question, input.posts, input.memory);
   const targetPost = resolveTargetPost(input.posts, input.postId, matchedConcepts);
   const zone = resolveTurnZone(boundary, matchedConcepts);
+  const nearestPosts = zone === "dark" ? findNearestPosts(question, input.posts) : [];
   const notes: string[] = [];
   const contentLanguage = options.contentLanguage ?? "zh";
 
@@ -88,8 +113,12 @@ export async function runConversationTurn(
   let tier: AgentTurnTier = "free";
 
   if (targetPost) {
+    const groundedQuestion =
+      options.client && input.previousTurns?.length
+        ? buildQuestionWithPreviousTurns(question, input.previousTurns, contentLanguage)
+        : question;
     answer = await askGrounded(
-      { post: targetPost, registry: input.registry, question },
+      { post: targetPost, registry: input.registry, question: groundedQuestion },
       { client: options.client, contentLanguage }
     );
     intent = "grounded_qa";
@@ -121,6 +150,7 @@ export async function runConversationTurn(
     matchedConcepts,
     answer,
     answerCardId: targetPost?.id,
+    nearestPosts,
     actions,
     signal,
     notes,
@@ -274,12 +304,120 @@ function buildActions(
 
   return [
     {
+      kind: "confirm_discovery",
+      label: contentLanguage === "en" ? "Confirm research scope" : "确认研究范围",
+      concepts: matchedConcepts,
+      queries: [question.slice(0, 120)],
+      questions: buildDiscoveryConfirmationQuestions(contentLanguage)
+    },
+    {
       kind: "discover_sources",
       label: contentLanguage === "en" ? "Find sources for this question" : "为这个问题找来源",
       concepts: matchedConcepts,
       queries: [question.slice(0, 120)]
     }
   ];
+}
+
+export function buildDiscoveryConfirmationQuestions(contentLanguage: ContentLanguage): AgentTurnConfirmationQuestion[] {
+  if (contentLanguage === "en") {
+    return [
+      {
+        id: "focus",
+        label: "What do you want?",
+        options: [
+          { id: "definition", label: "Definition and principles", queryModifier: "definition principles" },
+          { id: "latest", label: "Latest developments", queryModifier: "latest research developments" },
+          { id: "comparison", label: "Compare with my library", queryModifier: "comparison with known concepts" }
+        ]
+      },
+      {
+        id: "depth",
+        label: "How deep?",
+        options: [
+          { id: "quick", label: "Quick answer (2 sources)", queryModifier: "concise overview", importLimit: 2 },
+          { id: "deep", label: "Deep read (4 sources)", queryModifier: "deep dive analysis", importLimit: 4 }
+        ]
+      }
+    ];
+  }
+
+  return [
+    {
+      id: "focus",
+      label: "你想要哪种?",
+      options: [
+        { id: "definition", label: "定义与原理", queryModifier: "定义 原理" },
+        { id: "latest", label: "最新进展", queryModifier: "最新进展 研究" },
+        { id: "comparison", label: "与我已知的对比", queryModifier: "与已知概念对比" }
+      ]
+    },
+    {
+      id: "depth",
+      label: "查多深?",
+      options: [
+        { id: "quick", label: "快速回答(导 2 篇)", queryModifier: "快速综述", importLimit: 2 },
+        { id: "deep", label: "深入研读(导 4 篇)", queryModifier: "深入分析", importLimit: 4 }
+      ]
+    }
+  ];
+}
+
+function findNearestPosts(question: string, posts: KnowledgePost[]): AgentNearestPost[] {
+  const questionTokens = tokenize(question);
+
+  if (!questionTokens.size) {
+    return [];
+  }
+
+  return posts
+    .map((post) => {
+      const haystack = [
+        post.title,
+        post.summary,
+        post.keyTakeaway,
+        post.concepts.join(" "),
+        post.sources.map((source) => source.title).join(" ")
+      ].join(" ");
+      const postTokens = tokenize(haystack);
+      const overlap = Array.from(questionTokens).filter((token) => postTokens.has(token)).length;
+      const score = overlap / Math.max(1, questionTokens.size);
+
+      return { postId: post.id, title: post.title, overlapScore: Math.round(score * 100) / 100 };
+    })
+    .filter((item) => item.overlapScore > 0)
+    .sort((left, right) => right.overlapScore - left.overlapScore || left.title.localeCompare(right.title))
+    .slice(0, 2);
+}
+
+function buildQuestionWithPreviousTurns(
+  question: string,
+  previousTurns: AgentTurnRecord[],
+  contentLanguage: ContentLanguage
+): string {
+  const turns = previousTurns.slice(-5);
+
+  if (!turns.length) {
+    return question;
+  }
+
+  const history = turns
+    .map((turn, index) => `${index + 1}. ${turn.question} (${turn.status ?? "answered"})`)
+    .join("\n");
+  const label = contentLanguage === "en" ? "Recent turns in this thread" : "同一线程最近轮次";
+
+  return `${label}:\n${history}\n\nCurrent question: ${question}`;
+}
+
+function tokenize(value: string): Set<string> {
+  return new Set(
+    value
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}]+/gu, " ")
+      .split(/\s+/)
+      .map((token) => token.trim())
+      .filter((token) => token.length >= 2)
+  );
 }
 
 function buildQuestionSignal(post: KnowledgePost, createdAt: string): InteractionSignal {

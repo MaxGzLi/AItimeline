@@ -13,6 +13,7 @@ import type {
 export type BackgroundCurationJobKind =
   | "generate_followup"
   | "discover_sources"
+  | "research_question"
   | "import_source"
   | "schedule_review"
   | "ask_clarifying_question"
@@ -42,6 +43,16 @@ export interface BackgroundCurationJob {
   createdAt: string;
   runAfter?: string;
   sourceCandidate?: BackgroundSourceCandidate;
+  researchQuestion?: BackgroundResearchQuestion;
+}
+
+export interface BackgroundResearchQuestion {
+  turnId: string;
+  threadId: string;
+  userId: string;
+  question: string;
+  choices: Record<string, string>;
+  contentLanguage?: ContentLanguage;
 }
 
 export interface BackgroundCurationSuppression {

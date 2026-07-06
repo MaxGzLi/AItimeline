@@ -1647,6 +1647,10 @@ button.x-chip {
   border-color: var(--x-blue);
   cursor: pointer;
 }
+.x-chip.action.active {
+  color: #fff;
+  background: var(--x-blue);
+}
 .x-chip.action:hover { background: var(--x-blue-soft, var(--x-hover)); }
 .x-chip.action.danger {
   color: var(--x-red);
@@ -1664,3 +1668,71 @@ button.x-chip {
   color: var(--x-muted);
 }
 .x-discover-note .x-hint { margin-left: 6px; }
+
+/* Question-loop controls and notification detail. */
+.x-nearest {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0;
+}
+.x-confirm {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+  margin-top: 6px;
+}
+.x-confirm-row {
+  display: grid;
+  gap: 6px;
+}
+.x-confirm-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.x-notifications {
+  display: grid;
+  gap: 0;
+}
+.x-notification-list {
+  border-bottom: 1px solid var(--x-line);
+}
+.x-notification-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 5px 8px;
+  width: 100%;
+  padding: 14px 18px;
+  border: 0;
+  border-bottom: 1px solid var(--x-line);
+  background: none;
+  color: var(--x-ink);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+.x-notification-item:hover,
+.x-notification-item.active {
+  background: var(--x-hover);
+}
+.x-notification-item .x-qtext {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  color: var(--x-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.x-navdot.inline {
+  position: static;
+  align-self: center;
+}
+.x-notification-detail {
+  border-bottom: 0;
+}
+.x-support-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
