@@ -78,6 +78,14 @@ export interface UserSettings {
   contentLanguage?: ContentLanguage;
 }
 
+export type DismissedPostMode = "soft" | "hard";
+
+export interface DismissedPostRecord {
+  postId: string;
+  dismissedAt: string;
+  mode: DismissedPostMode;
+}
+
 export interface SourceCandidateRecord {
   id: string;
   candidate: BackgroundSourceCandidate;
@@ -106,7 +114,7 @@ export interface AITimelinePersistenceSnapshot {
   memoryEvents: UserMemoryEditEventRecord[];
   interactionSignals: InteractionSignalRecord[];
   topicStates: TopicStateRecord[];
-  dismissedPostIds: string[];
+  dismissedPosts: DismissedPostRecord[];
   reviewStates: ReviewState[];
   sourceCandidates: SourceCandidateRecord[];
   agentTurns: AgentTurnRecord[];
@@ -128,7 +136,7 @@ export interface AITimelinePersistenceStore {
     savedAt?: string | Date
   ): AITimelinePersistenceSnapshot;
   saveTopicStateRecords(records: TopicStateRecord[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
-  saveDismissedPostIds(postIds: string[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
+  saveDismissedPosts(records: DismissedPostRecord[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
   saveReviewStates(records: ReviewState[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
   saveAgentTurnRecords(records: AgentTurnRecord[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
   saveUserSettings(settings: UserSettings, savedAt?: string | Date): AITimelinePersistenceSnapshot;
@@ -142,7 +150,7 @@ export interface AITimelinePersistenceStore {
 
 export function createAITimelinePersistenceStore(
   storage: PersistenceStorageAdapter,
-  initialSnapshot?: Partial<AITimelinePersistenceSnapshot>
+  initialSnapshot?: AITimelinePersistenceSnapshotInput
 ): AITimelinePersistenceStore {
   let snapshot = createSnapshot({
     ...readSnapshot(storage),
@@ -238,11 +246,11 @@ export function createAITimelinePersistenceStore(
 
       return cloneSnapshot(snapshot);
     },
-    saveDismissedPostIds(postIds, savedAt = new Date()) {
+    saveDismissedPosts(records, savedAt = new Date()) {
       snapshot = {
         ...snapshot,
         updatedAt: normalizeDate(savedAt).toISOString(),
-        dismissedPostIds: Array.from(new Set(postIds))
+        dismissedPosts: upsertDismissedPosts([], records)
       };
       persist(storage, snapshot);
 
@@ -304,7 +312,11 @@ export function createAITimelinePersistenceStore(
   };
 }
 
-function readSnapshot(storage: PersistenceStorageAdapter): Partial<AITimelinePersistenceSnapshot> {
+export type AITimelinePersistenceSnapshotInput = Partial<AITimelinePersistenceSnapshot> & {
+  dismissedPostIds?: string[];
+};
+
+function readSnapshot(storage: PersistenceStorageAdapter): AITimelinePersistenceSnapshotInput {
   const serialized = storage.read();
 
   if (!serialized) {
@@ -317,13 +329,15 @@ function readSnapshot(storage: PersistenceStorageAdapter): Partial<AITimelinePer
     throw new Error("AITimeline persistence snapshot is invalid.");
   }
 
-  return parsed as Partial<AITimelinePersistenceSnapshot>;
+  return parsed as AITimelinePersistenceSnapshotInput;
 }
 
-function createSnapshot(input: Partial<AITimelinePersistenceSnapshot> = {}): AITimelinePersistenceSnapshot {
+function createSnapshot(input: AITimelinePersistenceSnapshotInput = {}): AITimelinePersistenceSnapshot {
+  const updatedAt = input.updatedAt ?? new Date().toISOString();
+
   return {
     version: 1,
-    updatedAt: input.updatedAt ?? new Date().toISOString(),
+    updatedAt,
     sourceImports: input.sourceImports ?? [],
     sourceRegistries: input.sourceRegistries ?? [],
     posts: input.posts ?? [],
@@ -335,12 +349,43 @@ function createSnapshot(input: Partial<AITimelinePersistenceSnapshot> = {}): AIT
     memoryEvents: input.memoryEvents ?? [],
     interactionSignals: input.interactionSignals ?? [],
     topicStates: input.topicStates ?? [],
-    dismissedPostIds: input.dismissedPostIds ?? [],
+    dismissedPosts: normalizeDismissedPosts(input, updatedAt),
     reviewStates: input.reviewStates ?? [],
     sourceCandidates: input.sourceCandidates ?? [],
     agentTurns: input.agentTurns ?? [],
     userSettings: normalizeUserSettings(input.userSettings)
   };
+}
+
+function normalizeDismissedPosts(
+  input: AITimelinePersistenceSnapshotInput,
+  fallbackDismissedAt: string
+): DismissedPostRecord[] {
+  const migratedPosts =
+    input.dismissedPostIds
+      ?.filter((postId): postId is string => typeof postId === "string" && postId.length > 0)
+      .map((postId) => ({
+        postId,
+        dismissedAt: fallbackDismissedAt,
+        mode: "hard" as const
+      })) ?? [];
+  const records =
+    input.dismissedPosts
+      ?.filter(
+        (record): record is DismissedPostRecord =>
+          isRecord(record) &&
+          typeof record.postId === "string" &&
+          record.postId.length > 0 &&
+          typeof record.dismissedAt === "string" &&
+          (record.mode === "soft" || record.mode === "hard")
+      )
+      .map((record) => ({
+        postId: record.postId,
+        dismissedAt: record.dismissedAt,
+        mode: record.mode
+      })) ?? [];
+
+  return upsertDismissedPosts(migratedPosts, records);
 }
 
 function normalizeUserSettings(value: unknown): UserSettings {
@@ -408,6 +453,16 @@ function upsertTopicStateRecords(items: TopicStateRecord[], nextItems: TopicStat
 }
 
 function upsertReviewStates(items: ReviewState[], nextItems: ReviewState[]): ReviewState[] {
+  const byPostId = new Map(items.map((record) => [record.postId, record]));
+
+  for (const item of nextItems) {
+    byPostId.set(item.postId, item);
+  }
+
+  return Array.from(byPostId.values());
+}
+
+function upsertDismissedPosts(items: DismissedPostRecord[], nextItems: DismissedPostRecord[]): DismissedPostRecord[] {
   const byPostId = new Map(items.map((record) => [record.postId, record]));
 
   for (const item of nextItems) {

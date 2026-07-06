@@ -150,6 +150,20 @@ try {
 
   assert.equal(dismissResult.dismissed, true, "dismiss endpoint should mark a post dismissed");
   assert.equal(repeatedDismissResult.dismissed, true, "dismiss endpoint should be idempotent");
+  assert.equal(dismissResult.record.mode, "soft", "dismiss endpoint should default to soft mode");
+  assert.equal(repeatedDismissResult.record.mode, "soft", "repeated default dismiss should remain soft");
+
+  const dismissedList = await requestJson("/api/dismissed");
+  const dismissedListRecord = dismissedList.records.find((record) => record.postId === dismissedPost.id);
+
+  assert.ok(dismissedListRecord, "dismissed list endpoint should return the dismissed post");
+  assert.equal(dismissedListRecord.title, dismissedPost.title, "dismissed list endpoint should include the post title");
+  assert.equal(dismissedListRecord.mode, "soft", "dismissed list endpoint should expose soft mode");
+  assert.equal(
+    dismissedListRecord.dismissedAt,
+    repeatedDismissResult.record.dismissedAt,
+    "repeated dismiss should refresh the dismissedAt timestamp without duplicating the record"
+  );
 
   const dismissedTimeline = await requestJson("/api/timeline?now=2026-06-10T00:00:00.000Z");
 
@@ -157,6 +171,16 @@ try {
     dismissedTimeline.posts.some((post) => post.id === dismissedPost.id),
     false,
     "dismissed posts should leave the timeline"
+  );
+
+  const softReturnAt = new Date(repeatedDismissResult.record.dismissedAt);
+  softReturnAt.setUTCDate(softReturnAt.getUTCDate() + 31);
+  const expiredSoftTimeline = await requestJson(`/api/timeline?now=${encodeURIComponent(softReturnAt.toISOString())}`);
+
+  assert.equal(
+    expiredSoftTimeline.posts.some((post) => post.id === dismissedPost.id),
+    true,
+    "soft dismissed posts should return to the timeline after 30 days"
   );
 
   const reloadedServer = createApiServer({
@@ -182,6 +206,77 @@ try {
     );
   } finally {
     await closeServer(reloadedServer);
+  }
+
+  const legacyDataPath = join(tempDir, "legacy-dismissed.json");
+  const legacyCurationPath = join(tempDir, "legacy-curation-jobs.json");
+  await writeFile(
+    legacyDataPath,
+    JSON.stringify({
+      version: 1,
+      updatedAt: "2026-06-10T00:00:00.000Z",
+      posts: [dismissedPost],
+      dismissedPostIds: [dismissedPost.id],
+      reviewStates: [
+        {
+          postId: dismissedPost.id,
+          intervalDays: 1,
+          dueAt: "2026-06-11T00:00:00.000Z"
+        }
+      ]
+    })
+  );
+  const legacyServer = createApiServer({
+    dataPath: legacyDataPath,
+    curationDataPath: legacyCurationPath,
+    mediaRootDir,
+    enableFixtures: true,
+    searchProvider: fakeSearchProvider
+  });
+
+  try {
+    const legacySnapshotResponse = await dispatchToServer(legacyServer, `${baseUrl}/api/snapshot`);
+    const legacySnapshot = await legacySnapshotResponse.json();
+    const legacyTimelineResponse = await dispatchToServer(
+      legacyServer,
+      `${baseUrl}/api/timeline?now=2026-06-11T00:00:00.000Z`
+    );
+    const legacyTimeline = await legacyTimelineResponse.json();
+    const legacyDueResponse = await dispatchToServer(
+      legacyServer,
+      `${baseUrl}/api/review/due?now=2026-06-11T00:00:00.000Z`
+    );
+    const legacyDue = await legacyDueResponse.json();
+
+    assert.equal(legacySnapshotResponse.ok, true, "legacy dismissed snapshot should load");
+    assert.deepEqual(
+      legacySnapshot.dismissedPosts,
+      [
+        {
+          postId: dismissedPost.id,
+          dismissedAt: "2026-06-10T00:00:00.000Z",
+          mode: "hard"
+        }
+      ],
+      "legacy dismissedPostIds should migrate to hard dismissedPosts using snapshot updatedAt"
+    );
+    assert.equal(
+      Object.hasOwn(legacySnapshot, "dismissedPostIds"),
+      false,
+      "loaded snapshots should expose only the new dismissedPosts field"
+    );
+    assert.equal(
+      legacyTimeline.posts.some((post) => post.id === dismissedPost.id),
+      false,
+      "legacy hard dismissal should keep the post out of the timeline"
+    );
+    assert.equal(
+      legacyDue.due.some((state) => state.postId === dismissedPost.id),
+      false,
+      "legacy hard dismissal should keep the post out of due review"
+    );
+  } finally {
+    await closeServer(legacyServer);
   }
 
   const firstTopic = firstPost.concepts[0] ?? "agentic-learning";
@@ -216,7 +311,68 @@ try {
   assert.equal(firstReviewState.intervalDays, 1, "initial review interval should be one day");
   assert.equal(firstReviewState.dueAt, "2026-06-11T00:00:00.000Z", "initial review dueAt should be signal time + one day");
 
-  const topicStateBeforePureExposure = reviewSnapshot.topicStates.find((state) => state.topicId === firstTopic);
+  const softReviewDismiss = await requestJson(`/api/posts/${encodeURIComponent(firstPost.id)}/dismiss`, {
+    method: "POST"
+  });
+  const softReviewTimeline = await requestJson("/api/timeline?now=2026-06-10T00:00:00.000Z");
+  const softDueReview = await requestJson(`/api/review/due?now=${encodeURIComponent(firstReviewState.dueAt)}`);
+
+  assert.equal(softReviewDismiss.record.mode, "soft", "review-card dismiss should default to soft");
+  assert.equal(
+    softReviewTimeline.posts.some((post) => post.id === firstPost.id),
+    false,
+    "soft dismissed review cards should leave the regular timeline"
+  );
+  assert.equal(
+    softDueReview.due.some((state) => state.postId === firstPost.id),
+    true,
+    "soft dismissed review cards should stay in the due review endpoint"
+  );
+
+  const undismissResult = await requestJson(`/api/posts/${encodeURIComponent(firstPost.id)}/dismiss`, {
+    method: "DELETE"
+  });
+  const restoredTimeline = await requestJson("/api/timeline?now=2026-06-10T00:00:00.000Z");
+
+  assert.equal(undismissResult.restored, true, "undismiss endpoint should report a restored post");
+  assert.equal(
+    restoredTimeline.posts.some((post) => post.id === firstPost.id),
+    true,
+    "undismiss should restore the post to the timeline"
+  );
+
+  const hardReviewSeedSignal = {
+    ...reviewSeedSignal,
+    postId: dismissedPost.id,
+    conceptIds: dismissedPost.concepts,
+    createdAt: "2026-06-10T00:01:00.000Z"
+  };
+  const hardReviewSeedResult = await requestJson("/api/signals", {
+    method: "POST",
+    body: {
+      generatedAt: "2026-06-10T00:01:00.000Z",
+      signal: hardReviewSeedSignal
+    }
+  });
+  const hardDismissResult = await requestJson(`/api/posts/${encodeURIComponent(dismissedPost.id)}/dismiss`, {
+    method: "POST",
+    body: { mode: "hard" }
+  });
+  const hardDueReview = await requestJson(`/api/review/due?now=${encodeURIComponent(firstReviewState.dueAt)}`);
+  const hardDismissedList = await requestJson("/api/dismissed");
+  const hardDismissedListRecord = hardDismissedList.records.find((record) => record.postId === dismissedPost.id);
+
+  assert.equal(hardReviewSeedResult.snapshotSummary.reviewStates, 2, "second saved post should create a review state");
+  assert.equal(hardDismissResult.record.mode, "hard", "dismiss endpoint should hard-dismiss when requested");
+  assert.equal(
+    hardDueReview.due.some((state) => state.postId === dismissedPost.id),
+    false,
+    "hard dismissed cards should be excluded from due review"
+  );
+  assert.equal(hardDismissedListRecord?.mode, "hard", "dismissed list should reflect hard dismissal upgrades");
+
+  const topicSnapshotBeforePureExposure = await requestJson("/api/snapshot");
+  const topicStateBeforePureExposure = topicSnapshotBeforePureExposure.topicStates.find((state) => state.topicId === firstTopic);
   const pureExposureResult = await requestJson("/api/signals", {
     method: "POST",
     body: {
@@ -452,8 +608,13 @@ try {
   assert.equal(snapshot.userMemories.length, 1, "snapshot should persist user memory");
   assert.ok(snapshot.interactionSignals.length >= 4, "snapshot should persist lifecycle and interaction signals");
   assert.equal(snapshot.topicStates.length, 1, "snapshot should persist topic states");
-  assert.ok(snapshot.dismissedPostIds.includes(dismissedPost.id), "snapshot should persist dismissed post ids");
-  assert.equal(snapshot.reviewStates.length, 1, "snapshot should persist review states");
+  assert.equal(Object.hasOwn(snapshot, "dismissedPostIds"), false, "snapshot should not write legacy dismissedPostIds");
+  assert.equal(
+    snapshot.dismissedPosts.find((record) => record.postId === dismissedPost.id)?.mode,
+    "hard",
+    "snapshot should persist dismissed post records and hard upgrades"
+  );
+  assert.equal(snapshot.reviewStates.length, 2, "snapshot should persist review states");
   assert.equal(snapshot.sourceCandidates.length, 1, "snapshot should persist source candidates");
   assert.equal(snapshot.sourceCandidates[0].status, "imported", "imported source candidate should be marked imported");
 

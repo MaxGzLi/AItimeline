@@ -78,6 +78,7 @@ import type {
   AiThreads,
   ApiCurationJobsResponse,
   ApiCurationRunResponse,
+  ApiDismissedPostsResponse,
   ApiEvidenceResponse,
   ApiImportResponse,
   ApiReviewDueResponse,
@@ -86,6 +87,7 @@ import type {
   ApiStatus,
   ApiTimelineResponse,
   AskApiResult,
+  DismissedPostSummary,
   EvidenceLedger,
   InteractionSignals,
   LearningFeedbackByPost,
@@ -137,6 +139,8 @@ export function App() {
   const [sourceAssets, setSourceAssets] = useState<SourceAsset[]>([]);
   const [sourceChunks, setSourceChunks] = useState<KnowledgeChunk[]>([]);
   const [sourceCandidates, setSourceCandidates] = useState<SourceCandidateRecord[]>([]);
+  const [dismissedPosts, setDismissedPosts] = useState<DismissedPostSummary[]>([]);
+  const [dismissToast, setDismissToast] = useState<{ postId: string; title: string } | null>(null);
   const [aiThreads, setAiThreads] = useState<AiThreads>({});
   const [agentQuestion, setAgentQuestion] = useState("");
   const [agentResponse, setAgentResponse] = useState<AgentAskApiResponse | null>(null);
@@ -198,6 +202,7 @@ export function App() {
   // Locally hidden cards remain hidden while async buffered refreshes finish.
   const locallyRemovedIdsRef = useRef<Set<string>>(new Set());
   const [locallyRemovedIds, setLocallyRemovedIds] = useState<ReadonlySet<string>>(() => new Set());
+  const dismissToastTimer = useRef<number | null>(null);
 
   const setLanguage = useCallback((nextLanguage: Language) => {
     setI18nLanguage(nextLanguage);
@@ -267,6 +272,14 @@ export function App() {
   useEffect(() => {
     interactionSignalsRef.current = interactionSignals;
   }, [interactionSignals]);
+
+  useEffect(() => {
+    return () => {
+      if (dismissToastTimer.current !== null) {
+        window.clearTimeout(dismissToastTimer.current);
+      }
+    };
+  }, []);
 
   const importedSignals = useMemo(
     () =>
@@ -900,13 +913,14 @@ export function App() {
     const now = new Date().toISOString();
 
     try {
-      const [timeline, snapshot, queuedJobs, reviewDue] = await Promise.all([
+      const [timeline, snapshot, queuedJobs, reviewDue, dismissed] = await Promise.all([
         apiRequest<ApiTimelineResponse>(
           `/api/timeline?userId=local-user&now=${encodeURIComponent(now)}`
         ),
         apiRequest<ApiSnapshot>("/api/snapshot"),
         apiRequest<ApiCurationJobsResponse>("/api/curation/jobs?status=queued"),
-        apiRequest<ApiReviewDueResponse>(`/api/review/due?now=${encodeURIComponent(now)}`)
+        apiRequest<ApiReviewDueResponse>(`/api/review/due?now=${encodeURIComponent(now)}`),
+        apiRequest<ApiDismissedPostsResponse>(`/api/dismissed?now=${encodeURIComponent(now)}`)
       ]);
 
       // A newer refresh started while this one was in flight; drop the stale result.
@@ -944,6 +958,7 @@ export function App() {
       setSourceAssets(upsertById([], registryAssets));
       setSourceChunks(upsertById([], registryChunks));
       setSourceCandidates(snapshot.sourceCandidates);
+      setDismissedPosts(dismissed.records);
       setReviewDueItems(reviewDue.due);
       setQueuedJobCount(queuedJobs.jobs.length);
       productionPeakRef.current =
@@ -1323,14 +1338,78 @@ export function App() {
     setLocallyRemovedIds(new Set(locallyRemovedIdsRef.current));
   }
 
+  function unmarkLocallyRemoved(postId: string) {
+    locallyRemovedIdsRef.current.delete(postId);
+    setLocallyRemovedIds(new Set(locallyRemovedIdsRef.current));
+  }
+
+  function showDismissToast(card: RankedKnowledgeCard) {
+    if (dismissToastTimer.current !== null) {
+      window.clearTimeout(dismissToastTimer.current);
+    }
+
+    setDismissToast({ postId: card.id, title: card.title });
+    dismissToastTimer.current = window.setTimeout(() => {
+      setDismissToast((current) => (current?.postId === card.id ? null : current));
+      dismissToastTimer.current = null;
+    }, 8000);
+  }
+
+  async function refreshDismissedPosts() {
+    const now = new Date().toISOString();
+    const dismissed = await apiRequest<ApiDismissedPostsResponse>(`/api/dismissed?now=${encodeURIComponent(now)}`);
+
+    setDismissedPosts(dismissed.records);
+  }
+
+  async function restoreDismissedPost(postId: string) {
+    if (dismissToastTimer.current !== null) {
+      window.clearTimeout(dismissToastTimer.current);
+      dismissToastTimer.current = null;
+    }
+
+    setDismissToast((current) => (current?.postId === postId ? null : current));
+    unmarkLocallyRemoved(postId);
+
+    try {
+      await apiRequest(`/api/posts/${encodeURIComponent(postId)}/dismiss`, { method: "DELETE" });
+      setDismissedPosts((records) => records.filter((record) => record.postId !== postId));
+      await refreshFromApi({ silent: true });
+    } catch {
+      await refreshDismissedPosts().catch(() => {
+        // Keep the local restore if the API is unavailable.
+      });
+    }
+  }
+
+  async function hardDismissPost(postId: string) {
+    try {
+      await apiRequest(`/api/posts/${encodeURIComponent(postId)}/dismiss`, {
+        method: "POST",
+        body: { mode: "hard" }
+      });
+      await refreshDismissedPosts();
+      markLocallyRemoved(postId);
+    } catch {
+      await refreshDismissedPosts().catch(() => {
+        // Leave the current list unchanged on repeated API failure.
+      });
+    }
+  }
+
   function handleSkip(card: RankedKnowledgeCard) {
     // Keep the same-topic downrank signal.
     recordInteraction(card, { skippedQuickly: true, dwellTimeMs: 800, openedThread: false });
     // Persist dismissal; refreshed timelines filter dismissed posts.
-    void apiRequest(`/api/posts/${encodeURIComponent(card.id)}/dismiss`, { method: "POST" }).catch(() => {
-      // Best-effort persistence does not block local removal.
-    });
     markLocallyRemoved(card.id);
+    showDismissToast(card);
+    void apiRequest<{ record?: DismissedPostSummary }>(`/api/posts/${encodeURIComponent(card.id)}/dismiss`, {
+      method: "POST"
+    })
+      .then(() => refreshDismissedPosts())
+      .catch(() => {
+        // Best-effort persistence does not block local removal.
+      });
   }
 
   // Completing a review advances the server interval and hides the card until due.
@@ -1760,8 +1839,15 @@ export function App() {
           <SettingsView
             apiMessage={apiMessage}
             apiStatus={apiStatus}
+            dismissedPosts={dismissedPosts}
             language={language}
+            onHardDismiss={(postId) => {
+              void hardDismissPost(postId);
+            }}
             onLanguageChange={setLanguage}
+            onRestoreDismissed={(postId) => {
+              void restoreDismissedPost(postId);
+            }}
             onShowShortcuts={() => setShortcutsOpen(true)}
             onToggleTheme={() => setTheme((value) => (value === "dark" ? "light" : "dark"))}
             theme={theme}
@@ -1870,6 +1956,15 @@ export function App() {
         >
           <ArrowUp size={20} />
         </button>
+      ) : null}
+
+      {dismissToast ? (
+        <div className="x-dismiss-toast" role="status">
+          <span>{t("dismiss.toast")}</span>
+          <button onClick={() => void restoreDismissedPost(dismissToast.postId)} type="button">
+            {t("dismiss.undo")}
+          </button>
+        </div>
       ) : null}
     </div>
   );

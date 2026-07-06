@@ -1,9 +1,10 @@
 import type { InteractionSignal, KnowledgeCard } from "../types.js";
+import type { DismissedPostRecord } from "../storage/persistenceStore.js";
 
 export interface TimelineLifecycleFilterInput {
   posts: KnowledgeCard[];
   interactionSignals?: InteractionSignal[];
-  dismissedPostIds?: string[];
+  dismissedPosts?: DismissedPostRecord[];
   now?: string | Date;
   dueReviewPostIds?: string[];
   /** 已复习、未到下次 dueAt 的休眠卡:到期前不进推荐流。 */
@@ -19,10 +20,11 @@ export interface TimelineLifecycleStats {
 
 const readDwellTimeMs = 12000;
 const staleReadDays = 30;
+export const softDismissalDurationDays = 30;
 
 export function filterTimelineLifecycle(input: TimelineLifecycleFilterInput): KnowledgeCard[] {
   const now = normalizeDate(input.now ?? new Date());
-  const dismissedPostIds = new Set(input.dismissedPostIds ?? []);
+  const dismissedPostIds = getTimelineDismissedPostIds(input.dismissedPosts ?? [], now);
   const dueReviewPostIds = new Set(input.dueReviewPostIds ?? []);
   const restingReviewPostIds = new Set(input.restingReviewPostIds ?? []);
   const statsByPostId = summarizeLifecycleSignals(input.interactionSignals ?? []);
@@ -57,6 +59,38 @@ export function filterTimelineLifecycle(input: TimelineLifecycleFilterInput): Kn
 
     return true;
   });
+}
+
+export function getTimelineDismissedPostIds(records: DismissedPostRecord[], now: string | Date): Set<string> {
+  const normalizedNow = normalizeDate(now);
+
+  return new Set(
+    records.filter((record) => isTimelineDismissalActive(record, normalizedNow)).map((record) => record.postId)
+  );
+}
+
+export function getHardDismissedPostIds(records: DismissedPostRecord[]): Set<string> {
+  return new Set(records.filter((record) => record.mode === "hard").map((record) => record.postId));
+}
+
+export function isTimelineDismissalActive(record: DismissedPostRecord, now: string | Date): boolean {
+  if (record.mode === "hard") {
+    return true;
+  }
+
+  return !isSoftDismissalExpired(record, now);
+}
+
+export function isSoftDismissalExpired(record: DismissedPostRecord, now: string | Date): boolean {
+  if (record.mode !== "soft") {
+    return false;
+  }
+
+  return normalizeDate(now).getTime() >= getSoftDismissalReturnAt(record).getTime();
+}
+
+export function getSoftDismissalReturnAt(record: DismissedPostRecord): Date {
+  return new Date(normalizeDate(record.dismissedAt).getTime() + softDismissalDurationDays * 24 * 60 * 60 * 1000);
 }
 
 export function summarizeLifecycleSignals(signals: InteractionSignal[]): Map<string, TimelineLifecycleStats> {

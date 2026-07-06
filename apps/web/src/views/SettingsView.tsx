@@ -1,20 +1,26 @@
-import { Keyboard, Languages, Moon, Server, Sun } from "lucide-react";
+import { Ban, Keyboard, Languages, Moon, RotateCcw, Server, Sun } from "lucide-react";
 import { t, type Language } from "../lib/i18n";
-import type { ApiStatus } from "../lib/types";
+import type { ApiStatus, DismissedPostSummary } from "../lib/types";
 
 export function SettingsView({
   apiMessage,
   apiStatus,
   language,
+  dismissedPosts,
   onLanguageChange,
+  onHardDismiss,
+  onRestoreDismissed,
   onShowShortcuts,
   onToggleTheme,
   theme
 }: {
   apiMessage: string;
   apiStatus: ApiStatus;
+  dismissedPosts: DismissedPostSummary[];
   language: Language;
+  onHardDismiss: (postId: string) => void;
   onLanguageChange: (value: Language) => void;
+  onRestoreDismissed: (postId: string) => void;
   onShowShortcuts: () => void;
   onToggleTheme: () => void;
   theme: "light" | "dark";
@@ -84,6 +90,79 @@ export function SettingsView({
           <p className="x-ssub">{t("settings.keyboardHint")}</p>
         </span>
       </button>
+
+      <section className="x-settings-section" aria-labelledby="settings-dismissed-title">
+        <div className="x-settings-section-head">
+          <h2 id="settings-dismissed-title">{t("settings.dismissed")}</h2>
+          <p>{t("settings.dismissedHint")}</p>
+        </div>
+
+        {dismissedPosts.length > 0 ? (
+          dismissedPosts.map((record) => (
+            <div className="x-setrow x-setrow-static x-dismissed-row" key={record.postId}>
+              <span className="x-smain">
+                <p className="x-sname">{record.title}</p>
+                <p className="x-ssub">
+                  {formatDismissedMeta(record)}
+                </p>
+              </span>
+              <span className="x-sval x-dismissed-actions">
+                <button
+                  aria-label={t("settings.dismissed.restoreTitle", { title: record.title })}
+                  className="x-chip action"
+                  onClick={() => onRestoreDismissed(record.postId)}
+                  type="button"
+                >
+                  <RotateCcw size={14} />
+                  {t("settings.dismissed.restore")}
+                </button>
+                {record.mode === "soft" ? (
+                  <button
+                    aria-label={t("settings.dismissed.hardTitle", { title: record.title })}
+                    className="x-chip action danger"
+                    onClick={() => onHardDismiss(record.postId)}
+                    type="button"
+                  >
+                    <Ban size={14} />
+                    {t("settings.dismissed.hardAction")}
+                  </button>
+                ) : null}
+              </span>
+            </div>
+          ))
+        ) : (
+          <div className="x-setrow x-setrow-static">
+            <span className="x-smain">
+              <p className="x-sname">{t("settings.dismissed.empty")}</p>
+              <p className="x-ssub">{t("settings.dismissed.emptyHint")}</p>
+            </span>
+          </div>
+        )}
+      </section>
     </>
   );
+}
+
+function formatDismissedMeta(record: DismissedPostSummary): string {
+  const mode =
+    record.mode === "soft" ? t("settings.dismissed.mode.soft") : t("settings.dismissed.mode.hard");
+  const date = formatDismissedDate(record.dismissedAt);
+  const status =
+    record.mode === "hard"
+      ? t("settings.dismissed.permanent")
+      : record.isActive && (record.daysUntilReturn ?? 0) > 0
+        ? t("settings.dismissed.autoReturn", { days: record.daysUntilReturn ?? 0 })
+        : t("settings.dismissed.autoReturned");
+
+  return t("settings.dismissed.meta", { mode, date, status });
+}
+
+function formatDismissedDate(value: string): string {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(date);
 }

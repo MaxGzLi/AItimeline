@@ -529,7 +529,7 @@ function isRenderableInlineDollar(latex: string, nextCharacter: string | undefin
     return false;
   }
 
-  if (/[一-鿿]/.test(latex)) {
+  if (/[\u4e00-\u9fff]/.test(latex)) {
     return false;
   }
 
@@ -537,7 +537,7 @@ function isRenderableInlineDollar(latex: string, nextCharacter: string | undefin
 }
 
 function isPlainNumberOrCurrency(value: string): boolean {
-  return /^[\s$€£¥￥+-]*\d[\d\s,._]*(?:\.\d+)?\s*(?:%|USD|EUR|GBP|JPY|CNY|RMB|美元|欧元|英镑|日元|人民币)?\s*$/i.test(
+  return /^[\s$€£¥￥+-]*\d[\d\s,._]*(?:\.\d+)?\s*(?:%|USD|EUR|GBP|JPY|CNY|RMB|\u7f8e\u5143|\u6b27\u5143|\u82f1\u9551|\u65e5\u5143|\u4eba\u6c11\u5e01)?\s*$/i.test(
     value
   );
 }
