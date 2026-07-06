@@ -646,6 +646,18 @@ assert.equal(
   "release plan should stagger queued posts"
 );
 
+const defaultReleasePlan = createSourcePostReleasePlan({
+  posts: result.cards,
+  generatedAt: "2026-06-10T00:00:00.000Z"
+});
+
+assert.equal(
+  defaultReleasePlan.immediatePostIds.length,
+  result.cards.length,
+  "default policy should release a full 4-card paper batch immediately"
+);
+assert.equal(defaultReleasePlan.queuedPostIds.length, 0, "default policy should not queue paper section cards");
+
 const memoryEditResult = applyUserMemoryEdits(
   createEmptyUserMemory(),
   [
