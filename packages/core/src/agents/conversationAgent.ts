@@ -1,4 +1,5 @@
 import { askGrounded, type GroundedAnswer } from "../harness/askGrounded.js";
+import type { ContentLanguage } from "../harness/contentLanguage.js";
 import type { ModelClient } from "../harness/modelRunner.js";
 import {
   buildKnowledgeBoundary,
@@ -54,6 +55,7 @@ export interface ConversationTurnInput {
 
 export interface ConversationTurnOptions {
   client?: ModelClient;
+  contentLanguage?: ContentLanguage;
   maxDiscoveryQueries?: number;
 }
 
@@ -79,24 +81,36 @@ export async function runConversationTurn(
   const targetPost = resolveTargetPost(input.posts, input.postId, matchedConcepts);
   const zone = resolveTurnZone(boundary, matchedConcepts);
   const notes: string[] = [];
+  const contentLanguage = options.contentLanguage ?? "zh";
 
   let answer: GroundedAnswer | null = null;
   let intent: AgentTurnIntent;
   let tier: AgentTurnTier = "free";
 
   if (targetPost) {
-    answer = await askGrounded({ post: targetPost, registry: input.registry, question }, { client: options.client });
+    answer = await askGrounded(
+      { post: targetPost, registry: input.registry, question },
+      { client: options.client, contentLanguage }
+    );
     intent = "grounded_qa";
     tier = answer.runnerKind === "model" ? "standard" : "free";
   } else if (matchedConcepts.length) {
     intent = "boundary_probe";
-    notes.push("目前还没有导入的来源覆盖这个问题,所以先告诉你它落在你知识边界的什么位置,而不是直接回答。");
+    notes.push(
+      contentLanguage === "en"
+        ? "No imported source covers this question yet, so I will place it on your knowledge boundary instead of answering directly."
+        : "目前还没有导入的来源覆盖这个问题,所以先告诉你它落在你知识边界的什么位置,而不是直接回答。"
+    );
   } else {
     intent = "discovery_proposal";
-    notes.push("这个问题在你的知识库之外。我不会凭模型记忆作答,而是建议先去找相关来源。");
+    notes.push(
+      contentLanguage === "en"
+        ? "This question is outside your library. I will not answer from model memory; I recommend finding relevant sources first."
+        : "这个问题在你的知识库之外。我不会凭模型记忆作答,而是建议先去找相关来源。"
+    );
   }
 
-  const actions = buildActions(zone, matchedConcepts, question, input.memory, options.maxDiscoveryQueries);
+  const actions = buildActions(zone, matchedConcepts, question, input.memory, options.maxDiscoveryQueries, contentLanguage);
   const signal = targetPost ? buildQuestionSignal(targetPost, createdAt) : undefined;
 
   return {
@@ -209,13 +223,14 @@ function buildActions(
   matchedConcepts: string[],
   question: string,
   memory: UserMemory | undefined,
-  maxDiscoveryQueries?: number
+  maxDiscoveryQueries: number | undefined,
+  contentLanguage: ContentLanguage
 ): AgentTurnAction[] {
   if (zone === "inside") {
     return [
       {
         kind: "schedule_review",
-        label: "测测这个概念",
+        label: contentLanguage === "en" ? "Quiz this concept" : "测测这个概念",
         concepts: matchedConcepts
       }
     ];
@@ -223,17 +238,29 @@ function buildActions(
 
   if (zone === "learning") {
     return [
-      { kind: "continue_deeper", label: "深入了解一下", concepts: matchedConcepts },
-      { kind: "reframe_simpler", label: "换个更简单的说法", concepts: matchedConcepts }
+      {
+        kind: "continue_deeper",
+        label: contentLanguage === "en" ? "Go deeper" : "深入了解一下",
+        concepts: matchedConcepts
+      },
+      {
+        kind: "reframe_simpler",
+        label: contentLanguage === "en" ? "Explain more simply" : "换个更简单的说法",
+        concepts: matchedConcepts
+      }
     ];
   }
 
   if (zone === "frontier") {
     return [
-      { kind: "start_series", label: "开一个学习系列", concepts: matchedConcepts },
+      {
+        kind: "start_series",
+        label: contentLanguage === "en" ? "Start a learning series" : "开一个学习系列",
+        concepts: matchedConcepts
+      },
       {
         kind: "discover_sources",
-        label: "找找相关来源",
+        label: contentLanguage === "en" ? "Find related sources" : "找找相关来源",
         concepts: matchedConcepts,
         queries: planDiscoveryQueries({
           concepts: matchedConcepts,
@@ -248,7 +275,7 @@ function buildActions(
   return [
     {
       kind: "discover_sources",
-      label: "为这个问题找来源",
+      label: contentLanguage === "en" ? "Find sources for this question" : "为这个问题找来源",
       concepts: matchedConcepts,
       queries: [question.slice(0, 120)]
     }

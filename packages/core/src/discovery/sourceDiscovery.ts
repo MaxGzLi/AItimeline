@@ -1,4 +1,5 @@
 import type { BackgroundSourceCandidate } from "../agents/backgroundCuration.js";
+import type { ContentLanguage } from "../harness/contentLanguage.js";
 import type { NextActionPolicy, SourceType } from "../types.js";
 import type { DiscoveredSource, SearchProvider } from "./searchProvider.js";
 
@@ -42,6 +43,7 @@ export interface ScreenDiscoveredSourcesInput {
   concepts: string[];
   topicId?: string;
   query?: string;
+  contentLanguage?: ContentLanguage;
   existingUrls?: string[];
   existingTitles?: string[];
   now?: string | Date;
@@ -86,7 +88,7 @@ export function screenDiscoveredSources(input: ScreenDiscoveredSourcesInput): Ba
       relevanceScore: scoreRelevance(item, input.concepts),
       noveltyScore: scoreNovelty(title, existingTitles),
       qualityScore: scoreQuality(item, parsedUrl),
-      reason: buildReason(input.concepts, input.query),
+      reason: buildReason(input.concepts, input.query, input.contentLanguage ?? "zh"),
       discoveredAt: now
     });
   }
@@ -106,6 +108,7 @@ export interface RunSourceDiscoveryInput {
   maxQueries?: number;
   limitPerQuery?: number;
   maxCandidates?: number;
+  contentLanguage?: ContentLanguage;
   now?: string | Date;
 }
 
@@ -146,6 +149,7 @@ export async function runSourceDiscovery(input: RunSourceDiscoveryInput): Promis
     concepts: input.concepts,
     topicId: input.topicId,
     query: queries[0],
+    contentLanguage: input.contentLanguage,
     existingUrls: input.existingUrls,
     existingTitles: input.existingTitles,
     now: input.now
@@ -192,7 +196,14 @@ function scoreQuality(item: DiscoveredSource, url: URL): number {
   return roundScore(Math.min(0.9, score));
 }
 
-function buildReason(concepts: string[], query?: string): string {
+function buildReason(concepts: string[], query?: string, contentLanguage: ContentLanguage = "zh"): string {
+  if (contentLanguage === "en") {
+    const conceptText = concepts.length ? concepts.slice(0, 3).join(", ") : "your recent interests";
+    const queryText = query ? ` via search "${query}"` : "";
+
+    return `Found for ${conceptText}${queryText}.`;
+  }
+
   const conceptText = concepts.length ? concepts.slice(0, 3).join("、") : "你近期的兴趣";
   const queryText = query ? `,通过搜索「${query}」` : "";
 

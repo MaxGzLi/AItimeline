@@ -25,6 +25,7 @@ import {
   getRestingReviewStates,
   isPureExposureSignal,
   mergeSourceRegistries,
+  parseContentLanguage,
   rankPersonalizedTimeline,
   runConversationTurn,
   runDueBackgroundCurationJobs,
@@ -96,6 +97,30 @@ export function createApiServer(options = {}) {
 
       if (request.method === "GET" && url.pathname === "/api/snapshot") {
         sendJson(response, 200, persistenceStore.getSnapshot());
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/settings") {
+        sendJson(response, 200, getSettingsResponse(persistenceStore, process.env));
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/settings") {
+        const body = await readJsonBody(request);
+        const contentLanguage = parseContentLanguage(
+          body && typeof body === "object" ? body.contentLanguage ?? body.userSettings?.contentLanguage : undefined
+        );
+
+        if (!contentLanguage) {
+          throw new HttpError(400, "settings.contentLanguage must be \"zh\" or \"en\".");
+        }
+
+        const snapshot = persistenceStore.saveUserSettings({
+          ...persistenceStore.getSnapshot().userSettings,
+          contentLanguage
+        });
+
+        sendJson(response, 200, getSettingsResponse(persistenceStore, process.env, snapshot));
         return;
       }
 
@@ -253,7 +278,7 @@ export function createApiServer(options = {}) {
 
       if (request.method === "POST" && url.pathname === "/api/import/article") {
         const body = await readJsonBody(request);
-        const importResult = await importArticle(body, importRunner, mediaRootDir);
+        const importResult = await importArticle(body, importRunner, mediaRootDir, resolveContentLanguage(persistenceStore, process.env));
         const { snapshot, releasePlan } = persistImportAndReleasePlan(persistenceStore, importResult);
 
         sendJson(response, 200, {
@@ -266,7 +291,7 @@ export function createApiServer(options = {}) {
 
       if (request.method === "POST" && url.pathname === "/api/import/youtube") {
         const body = await readJsonBody(request);
-        const importResult = await importYouTube(body, importRunner);
+        const importResult = await importYouTube(body, importRunner, resolveContentLanguage(persistenceStore, process.env));
         const { snapshot, releasePlan } = persistImportAndReleasePlan(persistenceStore, importResult);
 
         sendJson(response, 200, {
@@ -279,7 +304,7 @@ export function createApiServer(options = {}) {
 
       if (request.method === "POST" && url.pathname === "/api/ask") {
         const body = await readJsonBody(request);
-        const answer = await handleAsk(body, persistenceStore, askModelClient);
+        const answer = await handleAsk(body, persistenceStore, askModelClient, resolveContentLanguage(persistenceStore, process.env));
 
         sendJson(response, 200, answer);
         return;
@@ -316,6 +341,7 @@ export function createApiServer(options = {}) {
 
         const persistedCandidates = findMatchingSourceCandidateRecords(currentSnapshot, body.signal);
         const feedback = evaluateInteraction(body.signal, observedTopicState);
+        const contentLanguage = resolveContentLanguage(persistenceStore, process.env);
         const topicState = updateTopicStateFromFeedback(
           currentTopicState,
           observedTopicState,
@@ -331,6 +357,7 @@ export function createApiServer(options = {}) {
             ...(body.sourceCandidates ?? []),
             ...persistedCandidates.map((record) => record.candidate)
           ]),
+          contentLanguage,
           generatedAt
         });
         const records = curationStore.enqueuePlan(plan);
@@ -377,12 +404,14 @@ export function createApiServer(options = {}) {
 
       if (request.method === "POST" && url.pathname === "/api/curation/run") {
         const body = await readJsonBody(request);
+        const contentLanguage = resolveContentLanguage(persistenceStore, process.env);
         const batch = await runDueBackgroundCurationJobs(
           curationStore,
           {
+            contentLanguage,
             sourceImportWorker,
             ingestSourceCandidate: (candidate) => ingestSourceCandidate(candidate),
-            discoverSources: (job) => discoverSourcesForJob(job, searchProvider, persistenceStore),
+            discoverSources: (job) => discoverSourcesForJob(job, searchProvider, persistenceStore, contentLanguage),
             loadSeedPost: (job) => persistenceStore.getSnapshot().posts.find((post) => post.id === job.postId),
             cooldownTopic: (job) => ({
               kind: job.kind,
@@ -454,7 +483,14 @@ export function createApiServer(options = {}) {
         const body = await readJsonBody(request);
         requireString(body.question, "question");
         const userId = typeof body.userId === "string" && body.userId.trim() ? body.userId : "local-user";
-        const result = await handleAgentAsk(body, userId, persistenceStore, askModelClient, searchProvider);
+        const result = await handleAgentAsk(
+          body,
+          userId,
+          persistenceStore,
+          askModelClient,
+          searchProvider,
+          resolveContentLanguage(persistenceStore, process.env)
+        );
 
         sendJson(response, 200, result);
         return;
@@ -463,7 +499,13 @@ export function createApiServer(options = {}) {
       if (request.method === "POST" && url.pathname === "/api/discovery/run") {
         const body = await readJsonBody(request);
         const userId = typeof body.userId === "string" && body.userId.trim() ? body.userId : "local-user";
-        const result = await handleDiscoveryRun(body, userId, persistenceStore, searchProvider);
+        const result = await handleDiscoveryRun(
+          body,
+          userId,
+          persistenceStore,
+          searchProvider,
+          resolveContentLanguage(persistenceStore, process.env)
+        );
 
         sendJson(response, 200, result);
         return;
@@ -473,7 +515,14 @@ export function createApiServer(options = {}) {
         const body = await readJsonBody(request);
         requireString(body.text, "text");
         const userId = typeof body.userId === "string" && body.userId.trim() ? body.userId : "local-user";
-        const result = await handleUserNote(body, userId, persistenceStore, askModelClient, searchProvider);
+        const result = await handleUserNote(
+          body,
+          userId,
+          persistenceStore,
+          askModelClient,
+          searchProvider,
+          resolveContentLanguage(persistenceStore, process.env)
+        );
 
         sendJson(response, 200, result);
         return;
@@ -486,7 +535,15 @@ export function createApiServer(options = {}) {
         const body = await readJsonBody(request);
         requireString(body.text, "text");
         const userId = typeof body.userId === "string" && body.userId.trim() ? body.userId : "local-user";
-        const result = await handlePostReply(postId, body, userId, persistenceStore, askModelClient, searchProvider);
+        const result = await handlePostReply(
+          postId,
+          body,
+          userId,
+          persistenceStore,
+          askModelClient,
+          searchProvider,
+          resolveContentLanguage(persistenceStore, process.env)
+        );
 
         sendJson(response, 200, result);
         return;
@@ -524,12 +581,12 @@ export function createApiServer(options = {}) {
 
 function createConfiguredSourceImportWorker(env) {
   const modelName = env.AITIMELINE_MODEL_NAME ?? env.OPENAI_MODEL;
+  const contentLanguage = readConfiguredContentLanguage(env);
 
   if (!modelName) {
-    return createSourceImportWorker();
+    return createSourceImportWorker(contentLanguage ? { contentLanguage } : {});
   }
 
-  const contentLanguage = readConfiguredContentLanguage(env);
   const worker = createOpenAICompatibleSourceImportWorker(
     env,
     contentLanguage ? { modelRunner: { contentLanguage } } : {}
@@ -546,11 +603,29 @@ function readConfiguredContentLanguage(env) {
     return undefined;
   }
 
-  if (value !== "zh") {
+  const contentLanguage = parseContentLanguage(value);
+
+  if (!contentLanguage) {
     console.warn(`[aitimeline] unsupported AITIMELINE_CONTENT_LANGUAGE "${value}"; defaulting to "zh".`);
+    return "zh";
   }
 
-  return "zh";
+  return contentLanguage;
+}
+
+function resolveContentLanguage(persistenceStore, env) {
+  return persistenceStore.getSnapshot().userSettings.contentLanguage ?? readConfiguredContentLanguage(env) ?? "zh";
+}
+
+function getSettingsResponse(persistenceStore, env, snapshot = persistenceStore.getSnapshot()) {
+  const environmentContentLanguage = readConfiguredContentLanguage(env);
+  const contentLanguage = snapshot.userSettings.contentLanguage ?? environmentContentLanguage ?? "zh";
+
+  return {
+    contentLanguage,
+    userSettings: snapshot.userSettings,
+    environmentContentLanguage: environmentContentLanguage ?? null
+  };
 }
 
 function createConfiguredAskModelClient(env) {
@@ -559,7 +634,7 @@ function createConfiguredAskModelClient(env) {
   return modelName ? createOpenAICompatibleModelClientFromEnv(env) : undefined;
 }
 
-async function handleAgentAsk(body, userId, persistenceStore, client, searchProvider) {
+async function handleAgentAsk(body, userId, persistenceStore, client, searchProvider, contentLanguage) {
   const snapshot = persistenceStore.getSnapshot();
   const now = new Date().toISOString();
   const memory = snapshot.userMemories.find((record) => record.userId === userId)?.memory;
@@ -574,7 +649,7 @@ async function handleAgentAsk(body, userId, persistenceStore, client, searchProv
       userSignals: toUserSignals(snapshot.interactionSignals),
       now
     },
-    { client }
+    { client, contentLanguage }
   );
 
   const discoveredCandidates = await executeDiscoveryAction(
@@ -583,7 +658,8 @@ async function handleAgentAsk(body, userId, persistenceStore, client, searchProv
     memory,
     searchProvider,
     persistenceStore,
-    now
+    now,
+    contentLanguage
   );
 
   if (turn.signal) {
@@ -637,7 +713,7 @@ async function handleAgentAsk(body, userId, persistenceStore, client, searchProv
 
 // Execute the discovery proposal inline when a provider is configured;
 // otherwise the proposal is returned for the client to display.
-async function executeDiscoveryAction(turn, snapshot, memory, searchProvider, persistenceStore, now) {
+async function executeDiscoveryAction(turn, snapshot, memory, searchProvider, persistenceStore, now, contentLanguage) {
   const discoverAction = turn.actions.find((action) => action.kind === "discover_sources");
 
   if (!discoverAction || !searchProvider) {
@@ -651,6 +727,7 @@ async function executeDiscoveryAction(turn, snapshot, memory, searchProvider, pe
     goals: memory?.profile.goals,
     existingUrls: collectKnownSourceUrls(snapshot),
     existingTitles: collectKnownSourceTitles(snapshot),
+    contentLanguage,
     now
   });
 
@@ -664,7 +741,7 @@ async function executeDiscoveryAction(turn, snapshot, memory, searchProvider, pe
 // On-demand discovery for the reply chip: the user clicks "为这个问题找来源".
 // Without a configured search provider this reports configured=false instead
 // of erroring, so the UI can point at manual import.
-async function handleDiscoveryRun(body, userId, persistenceStore, searchProvider) {
+async function handleDiscoveryRun(body, userId, persistenceStore, searchProvider, contentLanguage) {
   const queries = toTrimmedStrings(body.queries).slice(0, 3);
   const concepts = toTrimmedStrings(body.concepts).slice(0, 5);
 
@@ -686,6 +763,7 @@ async function handleDiscoveryRun(body, userId, persistenceStore, searchProvider
     goals: memory?.profile.goals,
     existingUrls: collectKnownSourceUrls(snapshot),
     existingTitles: collectKnownSourceTitles(snapshot),
+    contentLanguage,
     now
   });
 
@@ -704,13 +782,13 @@ function toTrimmedStrings(value) {
 
 // A user note becomes a first-class post (self-grounded source) and the
 // observer replies against the existing library, metered as an agent turn.
-async function handleUserNote(body, userId, persistenceStore, client, searchProvider) {
+async function handleUserNote(body, userId, persistenceStore, client, searchProvider, contentLanguage) {
   const snapshot = persistenceStore.getSnapshot();
   const now = typeof body.createdAt === "string" ? body.createdAt : new Date().toISOString();
   const memory = snapshot.userMemories.find((record) => record.userId === userId)?.memory;
   const libraryPosts = snapshot.posts;
   const libraryConcepts = Array.from(new Set(libraryPosts.flatMap((post) => post.concepts)));
-  const note = transformUserNote(body.text, { createdAt: now, libraryConcepts });
+  const note = transformUserNote(body.text, { createdAt: now, libraryConcepts, contentLanguage });
 
   // Reply from the pre-note library only, so the observer grounds its answer
   // in imported sources instead of echoing the note back.
@@ -724,7 +802,7 @@ async function handleUserNote(body, userId, persistenceStore, client, searchProv
       userSignals: toUserSignals(snapshot.interactionSignals),
       now
     },
-    { client }
+    { client, contentLanguage }
   );
 
   // Persist the observer's reply on the note itself so the thread survives reloads.
@@ -737,7 +815,14 @@ async function handleUserNote(body, userId, persistenceStore, client, searchProv
           {
             id: `${note.post.id}-agent-reply-1`,
             kind: "agent_reply",
-            title: replySourceTitle ? `知识观察员 · 来源:${replySourceTitle}` : "知识观察员",
+            title:
+              contentLanguage === "en"
+                ? replySourceTitle
+                  ? `Knowledge Observer · Source: ${replySourceTitle}`
+                  : "Knowledge Observer"
+                : replySourceTitle
+                  ? `知识观察员 · 来源:${replySourceTitle}`
+                  : "知识观察员",
             body: replyBody
           }
         ]
@@ -762,7 +847,8 @@ async function handleUserNote(body, userId, persistenceStore, client, searchProv
     memory,
     searchProvider,
     persistenceStore,
-    now
+    now,
+    contentLanguage
   );
 
   if (turn.signal) {
@@ -818,7 +904,7 @@ async function handleUserNote(body, userId, persistenceStore, client, searchProv
 // A comment on a knowledge card becomes a public in-post thread: the user's
 // comment and the observer's grounded reply are both appended to the card's
 // thread and persisted, and the reply is metered as an agent turn.
-async function handlePostReply(postId, body, userId, persistenceStore, client, searchProvider) {
+async function handlePostReply(postId, body, userId, persistenceStore, client, searchProvider, contentLanguage) {
   const snapshot = persistenceStore.getSnapshot();
   const post = snapshot.posts.find((candidate) => candidate.id === postId);
 
@@ -843,7 +929,7 @@ async function handlePostReply(postId, body, userId, persistenceStore, client, s
       userSignals: toUserSignals(snapshot.interactionSignals),
       now
     },
-    { client }
+    { client, contentLanguage }
   );
 
   const replyBody = turn.answer ? turn.answer.answer : turn.notes.join(" ");
@@ -851,14 +937,21 @@ async function handlePostReply(postId, body, userId, persistenceStore, client, s
   const commentBlock = {
     id: `${post.id}-user-comment-${hashText(`${commentText}|${now}`)}`,
     kind: "user_comment",
-    title: "你",
+    title: contentLanguage === "en" ? "You" : "你",
     body: commentText
   };
   const replyBlock = replyBody
     ? {
         id: `${post.id}-agent-reply-${hashText(`${replyBody}|${now}`)}`,
         kind: "agent_reply",
-        title: replySourceTitle ? `知识观察员 · 来源:${replySourceTitle}` : "知识观察员",
+        title:
+          contentLanguage === "en"
+            ? replySourceTitle
+              ? `Knowledge Observer · Source: ${replySourceTitle}`
+              : "Knowledge Observer"
+            : replySourceTitle
+              ? `知识观察员 · 来源:${replySourceTitle}`
+              : "知识观察员",
         body: replyBody
       }
     : null;
@@ -875,7 +968,8 @@ async function handlePostReply(postId, body, userId, persistenceStore, client, s
     memory,
     searchProvider,
     persistenceStore,
-    now
+    now,
+    contentLanguage
   );
 
   if (turn.signal) {
@@ -928,7 +1022,7 @@ async function handlePostReply(postId, body, userId, persistenceStore, client, s
   };
 }
 
-async function discoverSourcesForJob(job, searchProvider, persistenceStore) {
+async function discoverSourcesForJob(job, searchProvider, persistenceStore, contentLanguage) {
   if (!searchProvider) {
     return [];
   }
@@ -940,7 +1034,8 @@ async function discoverSourcesForJob(job, searchProvider, persistenceStore) {
     topicId: job.topicId,
     nextAction: job.nextAction,
     existingUrls: collectKnownSourceUrls(snapshot),
-    existingTitles: collectKnownSourceTitles(snapshot)
+    existingTitles: collectKnownSourceTitles(snapshot),
+    contentLanguage
   });
 
   return discovery.candidates;
@@ -1105,7 +1200,7 @@ function createConfiguredSearchProvider(env) {
   return createTavilySearchProvider({ apiKey, baseUrl: env.AITIMELINE_SEARCH_BASE_URL });
 }
 
-async function handleAsk(body, persistenceStore, client) {
+async function handleAsk(body, persistenceStore, client, contentLanguage) {
   requireString(body.postId, "postId");
   requireString(body.question, "question");
 
@@ -1122,27 +1217,29 @@ async function handleAsk(body, persistenceStore, client) {
     .map((record) => record.registry);
   const registry = mergeSourceRegistries(...registries);
 
-  return askGrounded({ post, registry, question: body.question }, { client });
+  return askGrounded({ post, registry, question: body.question }, { client, contentLanguage });
 }
 
-async function importArticle(body, runner, mediaRootDir) {
+async function importArticle(body, runner, mediaRootDir, contentLanguage) {
   requireString(body.url, "url");
   const result = await transformArticleUrl(body.url, {
     createdAt: body.createdAt,
     recommendedBecause: body.recommendedBecause,
     runner,
-    mediaRootDir
+    mediaRootDir,
+    contentLanguage
   });
 
   return toSourceImportWorkerResult(result);
 }
 
-async function importYouTube(body, runner) {
+async function importYouTube(body, runner, contentLanguage) {
   requireString(body.url, "url");
   const result = await transformYouTubeUrl(body.url, {
     createdAt: body.createdAt,
     recommendedBecause: body.recommendedBecause,
-    runner
+    runner,
+    contentLanguage
   });
 
   return toSourceImportWorkerResult(result);

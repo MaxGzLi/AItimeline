@@ -1,4 +1,5 @@
 import { createExpansionPlan, shouldContinueSeries } from "../harness/expansionPolicy.js";
+import type { ContentLanguage } from "../harness/contentLanguage.js";
 import type {
   AgentExpansionJob,
   AgentExpansionPlan,
@@ -71,6 +72,7 @@ export interface CreateBackgroundCurationPlanInput {
   feedback: LearningFeedback[];
   topicStates?: TopicState[];
   sourceCandidates?: BackgroundSourceCandidate[];
+  contentLanguage?: ContentLanguage;
   generatedAt?: string | Date;
   config?: Partial<BackgroundCurationConfig>;
 }
@@ -121,7 +123,7 @@ export function createBackgroundCurationPlan(input: CreateBackgroundCurationPlan
 
     if (selectedCandidates.length === 0) {
       queueJob(
-        createSourceDiscoveryJob(expansionJob, generatedAt, config),
+        createSourceDiscoveryJob(expansionJob, generatedAt, config, input.contentLanguage ?? "zh"),
         jobs,
         jobsPerTopic,
         suppressions,
@@ -133,7 +135,7 @@ export function createBackgroundCurationPlan(input: CreateBackgroundCurationPlan
     for (const candidate of selectedCandidates) {
       usedCandidateIds.add(candidate.id);
       queueJob(
-        createSourceImportJob(expansionJob, candidate, generatedAt),
+        createSourceImportJob(expansionJob, candidate, generatedAt, input.contentLanguage ?? "zh"),
         jobs,
         jobsPerTopic,
         suppressions,
@@ -229,7 +231,8 @@ function mapExpansionJob(job: AgentExpansionJob): BackgroundCurationJob {
 function createSourceImportJob(
   expansionJob: AgentExpansionJob,
   candidate: BackgroundSourceCandidate,
-  generatedAt: Date
+  generatedAt: Date,
+  contentLanguage: ContentLanguage
 ): BackgroundCurationJob {
   const sourceScore = scoreSourceCandidate(candidate, expansionJob);
 
@@ -241,7 +244,10 @@ function createSourceImportJob(
     conceptIds: mergeUnique(expansionJob.conceptIds, candidate.conceptIds),
     nextAction: expansionJob.nextAction,
     priority: roundPriority(Math.min(1, expansionJob.priority * 0.65 + sourceScore * 0.35)),
-    reason: `你表现出了兴趣,所以为时间线打包这个相关来源:${candidate.reason}`,
+    reason:
+      contentLanguage === "en"
+        ? `You showed interest, so this related source is being packaged for your timeline: ${candidate.reason}`
+        : `你表现出了兴趣,所以为时间线打包这个相关来源:${candidate.reason}`,
     createdAt: generatedAt.toISOString(),
     runAfter: generatedAt.toISOString(),
     sourceCandidate: candidate
@@ -251,7 +257,8 @@ function createSourceImportJob(
 function createSourceDiscoveryJob(
   expansionJob: AgentExpansionJob,
   generatedAt: Date,
-  config: BackgroundCurationConfig
+  config: BackgroundCurationConfig,
+  contentLanguage: ContentLanguage
 ): BackgroundCurationJob {
   const runAfter = new Date(generatedAt);
   runAfter.setMinutes(runAfter.getMinutes() + config.sourceDiscoveryDelayMinutes);
@@ -264,7 +271,10 @@ function createSourceDiscoveryJob(
     conceptIds: expansionJob.conceptIds,
     nextAction: expansionJob.nextAction,
     priority: roundPriority(Math.max(0.1, expansionJob.priority - 0.08)),
-    reason: "你表现出了兴趣,但目前还没有匹配的候选来源,所以让智能体去找一找。",
+    reason:
+      contentLanguage === "en"
+        ? "You showed interest, but there is no matching candidate source yet, so the agent will look for one."
+        : "你表现出了兴趣,但目前还没有匹配的候选来源,所以让智能体去找一找。",
     createdAt: generatedAt.toISOString(),
     runAfter: runAfter.toISOString()
   };

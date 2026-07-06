@@ -3,10 +3,9 @@ import type { FormEvent } from "react";
 import { ImportRow } from "../components/ImportRow";
 import { SourceCandidatePanel } from "../components/SourceCandidatePanel";
 import { SourceImportPanel } from "../components/SourceImportPanel";
+import { t } from "../lib/i18n";
 import type { ApiStatus, SourceCandidateRecord } from "../lib/types";
 
-// The observer's machine room: everything operational (imports, candidate
-// queue, memory, usage) lives here instead of cluttering the timeline.
 export function AgentView({
   agentTurnCount,
   apiMessage,
@@ -66,10 +65,10 @@ export function AgentView({
 }) {
   return (
     <>
-      <section className="x-mr" aria-label="来源导入">
+      <section className="x-mr" aria-label={t("mr.sourceImport")}>
         <h2 className="x-mrhead">
           <span className="x-pulse" aria-hidden="true" />
-          来源导入
+          {t("mr.sourceImport")}
         </h2>
         <SourceImportPanel
           apiMessage={apiMessage}
@@ -84,10 +83,10 @@ export function AgentView({
         />
       </section>
 
-      <section className="x-mr" aria-label="观察员与候选源">
+      <section className="x-mr" aria-label={t("mr.observer")}>
         <h2 className="x-mrhead">
           <span className="x-pulse" aria-hidden="true" />
-          观察员
+          {t("mr.observer")}
         </h2>
         <SourceCandidatePanel
           autoScoutEnabled={autoScoutEnabled}
@@ -109,13 +108,13 @@ export function AgentView({
         />
       </section>
 
-      <section className="x-mr" aria-label="导入记录">
+      <section className="x-mr" aria-label={t("mr.imports")}>
         <h2 className="x-mrhead">
           <span className="x-pulse" aria-hidden="true" />
-          导入记录
+          {t("mr.imports")}
         </h2>
         {sourceImports.length === 0 ? (
-          <p className="x-mrnote">还没有导入过来源。</p>
+          <p className="x-mrnote">{t("mr.imports.empty")}</p>
         ) : (
           <div style={{ padding: "0 16px" }}>
             {sourceImports.map((sourceImport) => (
@@ -125,24 +124,24 @@ export function AgentView({
         )}
       </section>
 
-      <section className="x-mr" aria-label="记忆与用量">
+      <section className="x-mr" aria-label={t("mr.memory")}>
         <h2 className="x-mrhead">
           <span className="x-pulse" aria-hidden="true" />
-          记忆与用量
+          {t("mr.memory")}
         </h2>
         <p className="x-mrnote">{memoryMessage}</p>
         <div className="x-usage">
           <div>
             <p className="x-num">{agentTurnCount}</p>
-            <p className="x-lab">已用 Agent 回复</p>
+            <p className="x-lab">{t("mr.usage.agentReplies")}</p>
           </div>
           <div>
             <p className="x-num">{queuedJobCount}</p>
-            <p className="x-lab">排队任务</p>
+            <p className="x-lab">{t("mr.usage.jobs")}</p>
           </div>
           <div>
             <p className="x-num">{sourceCandidates.length}</p>
-            <p className="x-lab">候选来源</p>
+            <p className="x-lab">{t("mr.usage.candidates")}</p>
           </div>
         </div>
       </section>

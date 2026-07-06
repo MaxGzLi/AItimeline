@@ -11,6 +11,7 @@ import {
   type Ref
 } from "react";
 import { slugConcept } from "../lib/format";
+import { t } from "../lib/i18n";
 
 export type WikilinkAutocompleteCandidateKind = "concept" | "card";
 
@@ -209,7 +210,9 @@ export const WikilinkInput = forwardRef<HTMLInputElement, WikilinkInputProps>(fu
               type="button"
             >
               <span className="x-wikilink-option-main">{candidate.label}</span>
-              <span className="x-wikilink-option-kind">{candidate.kind === "concept" ? "概念" : "卡片"}</span>
+              <span className="x-wikilink-option-kind">
+                {candidate.kind === "concept" ? t("common.concept") : t("common.card")}
+              </span>
             </button>
           ))}
         </span>

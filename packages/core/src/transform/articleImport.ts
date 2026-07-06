@@ -1,5 +1,6 @@
 import { runSourceImport } from "../source/sourceImportWorker.js";
 import { createSourceRegistry, hashContent } from "../source/sourceRegistry.js";
+import type { ContentLanguage } from "../harness/contentLanguage.js";
 import type {
   AgentHarnessRun,
   HarnessValidationResult,
@@ -30,6 +31,7 @@ export interface ArticleFetchOptions {
 export interface ArticleTransformOptions extends ArticleFetchOptions {
   recommendedBecause?: string;
   runner?: KnowledgePostAgentRunner;
+  contentLanguage?: ContentLanguage;
 }
 
 export interface ArticleFetchResult {
@@ -142,10 +144,13 @@ export async function transformArticleUrl(
       chunks,
       sourceRegistry,
       paperDigest,
+      contentLanguage: options.contentLanguage,
       createdAt,
       recommendedBecause:
         options.recommendedBecause ??
-        "你导入了这篇文章,所以把它的段落转成了可以进时间线的知识卡片。"
+        (options.contentLanguage === "en"
+          ? "You imported this article, so its paragraphs were turned into timeline-ready knowledge cards."
+          : "你导入了这篇文章,所以把它的段落转成了可以进时间线的知识卡片。")
     },
     options.runner
   );

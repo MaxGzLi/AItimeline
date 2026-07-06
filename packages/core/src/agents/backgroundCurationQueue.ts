@@ -5,6 +5,7 @@ import type {
   BackgroundSourceCandidate
 } from "./backgroundCuration.js";
 import { createFollowupSourceImportPlan, type FollowupGenerationProtocol } from "../harness/followupHarness.js";
+import type { ContentLanguage } from "../harness/contentLanguage.js";
 import type { SourceImportWorker, SourceImportWorkerResult } from "../source/sourceImportWorker.js";
 import type { KnowledgeChunk, KnowledgePost, SourceAsset, SourceRegistry } from "../types.js";
 
@@ -57,6 +58,7 @@ export interface SourceCandidateIngestionResult {
 }
 
 export interface BackgroundCurationExecutionHandlers {
+  contentLanguage?: ContentLanguage;
   sourceImportWorker?: SourceImportWorker;
   ingestSourceCandidate?: (
     candidate: BackgroundSourceCandidate,
@@ -313,7 +315,8 @@ async function runGenerateFollowupJob(
   const plan = createFollowupSourceImportPlan({
     job,
     seedPost,
-    createdAt: now
+    createdAt: now,
+    contentLanguage: handlers.contentLanguage
   });
   const sourceImport = await handlers.sourceImportWorker.run(plan.input);
 
@@ -374,6 +377,7 @@ async function runImportSourceJob(
     chunks: ingested.chunks,
     sourceRegistry: ingested.sourceRegistry,
     createdAt: now,
+    contentLanguage: handlers.contentLanguage,
     recommendedBecause: ingested.recommendedBecause ?? job.reason
   });
 

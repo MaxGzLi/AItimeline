@@ -20,7 +20,11 @@ const {
   "../packages/core/dist/agents/backgroundCurationQueue.js"
 );
 const { createEvidenceLedger } = await import("../packages/core/dist/harness/evidenceLedger.js");
-const { calculateCjkRatio } = await import("../packages/core/dist/harness/contentLanguage.js");
+const { getAskSystemPrompt } = await import("../packages/core/dist/harness/askGrounded.js");
+const {
+  calculateCjkRatio,
+  validateKnowledgePostContentLanguage
+} = await import("../packages/core/dist/harness/contentLanguage.js");
 const { validateGrounding } = await import("../packages/core/dist/harness/groundingGate.js");
 const { validateKnowledgePost } = await import("../packages/core/dist/harness/schema.js");
 const { createAgentHarnessConfig, defaultAgentHarnessConfig, validateHarnessPosts } = await import(
@@ -31,6 +35,7 @@ const { evaluateInteraction, scoreInteraction } = await import("../packages/core
 const {
   createFollowupGenerationProtocol,
   createFollowupSourceImportPlan,
+  getFollowupHarnessSystemPrompt,
   isFollowupPost,
   isFollowupPostId,
   isFollowupSource,
@@ -38,6 +43,7 @@ const {
 } = await import(
   "../packages/core/dist/harness/followupHarness.js"
 );
+const { getAgentHarnessSystemPrompt } = await import("../packages/core/dist/harness/systemPrompt.js");
 const { applyUserMemoryEdits, createEmptyUserMemory } = await import(
   "../packages/core/dist/memory/userMemoryControls.js"
 );
@@ -106,6 +112,11 @@ const result = transformMockYouTubeUrl(
   "https://www.youtube.com/watch?v=aitimeline-demo",
   "2026-06-10T00:00:00.000Z"
 );
+const englishResult = transformMockYouTubeUrl(
+  "https://www.youtube.com/watch?v=aitimeline-en-demo",
+  "2026-06-10T00:00:00.000Z",
+  "en"
+);
 
 assert.equal(defaultAgentHarnessConfig.maxPostsPerRun, 4, "default harness should limit one run to four posts");
 assert.equal(createAgentHarnessConfig().maxPostsPerRun, 4, "model harness config should inherit the four-post default");
@@ -121,6 +132,53 @@ assert.ok(
 );
 assert.equal(calculateCjkRatio(""), 0, "empty text should have a 0 CJK ratio");
 assert.equal(calculateCjkRatio("12345"), 0, "text without CJK or Latin letters should have a 0 CJK ratio");
+assert.deepEqual(
+  validateKnowledgePostContentLanguage(englishResult.cards[0], "en"),
+  [],
+  "English mode language gate should accept English knowledge cards"
+);
+const chineseLanguageCard = {
+  ...englishResult.cards[0],
+  title: "中文标题",
+  hook: "这个问题需要中文说明。",
+  thesis: "智能体需要持久记忆。",
+  shortBody: "这是一段中文正文,用于验证英文模式的门禁。",
+  keyTakeaway: "核心结论是新内容必须按英文输出。",
+  summary: "中文摘要会被英文模式拒绝。",
+  recommendedBecause: "中文推荐理由。",
+  thread: englishResult.cards[0].thread.map((block) => ({
+    ...block,
+    body: "中文线程内容用于验证英文门禁。"
+  })),
+  reviewPrompts: englishResult.cards[0].reviewPrompts.map((prompt) => ({
+    ...prompt,
+    prompt: "中文复习题会被英文模式拒绝。"
+  }))
+};
+const englishGateIssues = validateKnowledgePostContentLanguage(chineseLanguageCard, "en");
+
+assert.ok(englishGateIssues.length > 0, "English mode language gate should reject Chinese knowledge cards");
+assert.ok(
+  englishGateIssues.every((issue) => issue.message.includes("English")),
+  "English mode language gate should explain repairs in English"
+);
+assert.ok(
+  getAgentHarnessSystemPrompt("en").includes("natural English"),
+  "model harness should select the English prompt block"
+);
+assert.ok(
+  getFollowupHarnessSystemPrompt("en").includes("natural English"),
+  "follow-up harness should select the English prompt block"
+);
+assert.ok(
+  getAskSystemPrompt("en").includes("natural English"),
+  "grounded ask harness should select the English prompt block"
+);
+assert.match(
+  englishResult.cards[0].recommendedBecause,
+  /You imported this YouTube video/i,
+  "English mode deterministic import fallback should explain recommendations in English"
+);
 assert.equal(result.harnessRun.status, "succeeded", "harness run should succeed");
 assert.equal(result.cards.length, 4, "mock import should produce four cards");
 assert.equal(result.sourceRegistry.snapshots.length, 1, "transcript asset should produce one source snapshot");
@@ -1319,6 +1377,12 @@ const followupSourcePlan = createFollowupSourceImportPlan({
   seedPost: followupSeedPost,
   createdAt: "2026-06-10T00:00:00.000Z"
 });
+const englishFollowupSourcePlan = createFollowupSourceImportPlan({
+  job: followupJob,
+  seedPost: followupSeedPost,
+  createdAt: "2026-06-10T00:00:00.000Z",
+  contentLanguage: "en"
+});
 const followupChunkContent = followupSourcePlan.input.chunks[0]?.content ?? "";
 const seedPostText = collectStrings(followupSeedPost)
   .map((value) => value.replace(/\s+/g, " ").trim())
@@ -1349,6 +1413,16 @@ assert.equal(
 assert.ok(followupChunkContent.includes(followupSeedPost.title), "follow-up chunk should include seed title text");
 assert.ok(followupChunkContent.includes(followupSeedPost.thesis), "follow-up chunk should include seed thesis text");
 assert.ok(followupChunkContent.includes(followupSeedPost.keyTakeaway), "follow-up chunk should include seed takeaway text");
+assert.match(
+  englishFollowupSourcePlan.input.recommendedBecause,
+  /follow-up/i,
+  "English mode deterministic follow-up fallback should use English recommendation text"
+);
+assert.equal(
+  calculateCjkRatio(englishFollowupSourcePlan.input.recommendedBecause),
+  0,
+  "English mode deterministic follow-up recommendation should not contain CJK text"
+);
 
 for (const segment of followupChunkContent.split(/\n\n+/).filter(Boolean)) {
   assert.ok(seedPostText.includes(segment), `follow-up chunk segment should come from seed post text: ${segment}`);
@@ -1634,12 +1708,31 @@ const darkTurn = await runConversationTurn({
   memory: boundaryMemory,
   now: "2026-06-10T00:31:00.000Z"
 });
+const englishDarkTurn = await runConversationTurn({
+  question: "What is quantum chromodynamics?",
+  posts: result.cards,
+  registry: result.sourceRegistry,
+  memory: boundaryMemory,
+  now: "2026-06-10T00:31:00.000Z"
+}, {
+  contentLanguage: "en"
+});
 
 assert.equal(darkTurn.zone, "dark", "questions outside the library should be dark");
 assert.equal(darkTurn.intent, "discovery_proposal", "dark questions should propose discovery instead of answering");
 assert.equal(darkTurn.answer, null, "the agent must not answer dark questions from model memory");
 assert.equal(darkTurn.actions[0]?.kind, "discover_sources", "dark turns should propose source discovery");
 assert.ok(darkTurn.actions[0]?.queries?.length, "dark turns should carry discovery queries");
+assert.match(
+  englishDarkTurn.notes.join(" "),
+  /outside your library/i,
+  "English mode deterministic dark-zone fallback should use English notes"
+);
+assert.match(
+  englishDarkTurn.actions[0]?.label ?? "",
+  /Find sources/i,
+  "English mode deterministic dark-zone fallback should use English action labels"
+);
 
 const scopedTurn = await runConversationTurn({
   question: "What is the key claim here?",

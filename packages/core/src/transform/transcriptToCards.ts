@@ -1,5 +1,6 @@
 import { runDeterministicAgentHarness } from "../harness/runner.js";
 import { createSourceRegistry } from "../source/sourceRegistry.js";
+import type { ContentLanguage } from "../harness/contentLanguage.js";
 import type {
   AgentHarnessRun,
   HarnessValidationResult,
@@ -29,6 +30,7 @@ export interface TranscriptTransformOptions {
   createdAt?: string;
   recommendedBecause?: string;
   asset?: SourceAsset;
+  contentLanguage?: ContentLanguage;
 }
 
 export function buildTranscriptChunks(source: Source, segments: TranscriptSegment[]): KnowledgeChunk[] {
@@ -62,6 +64,7 @@ export function transformTranscriptToCards(
     source,
     chunks,
     sourceRegistry,
+    contentLanguage: options.contentLanguage,
     createdAt,
     recommendedBecause: options.recommendedBecause
   });

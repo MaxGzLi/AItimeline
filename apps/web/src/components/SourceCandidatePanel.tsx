@@ -1,6 +1,7 @@
 import { Link, LoaderCircle, RefreshCw, Send, Sparkles } from "lucide-react";
 import type { FormEvent } from "react";
 import { formatCandidateStatus, formatShortTime } from "../lib/format";
+import { t } from "../lib/i18n";
 import type { SourceCandidateRecord } from "../lib/types";
 
 export function SourceCandidatePanel({
@@ -42,10 +43,10 @@ export function SourceCandidatePanel({
     <section className="x-cand-panel">
       <div className="x-cand-head">
         <div>
-          <p className="x-label">来源队列</p>
-          <h2>候选源</h2>
+          <p className="x-label">{t("candidate.label")}</p>
+          <h2>{t("candidate.queue")}</h2>
         </div>
-        <button className="x-iconbtn" title="候选来源">
+        <button className="x-iconbtn" title={t("candidate.sourceTitle")}>
           <Link size={18} />
         </button>
       </div>
@@ -54,24 +55,24 @@ export function SourceCandidatePanel({
         <label className="x-cand-field">
           <Link size={16} />
           <input
-            aria-label="候选来源 URL"
+            aria-label={t("candidate.url")}
             onChange={(event) => onUrlChange(event.target.value)}
-            placeholder="来源 URL"
+            placeholder={t("candidate.urlPlaceholder")}
             value={candidateUrl}
           />
         </label>
         <label className="x-cand-field">
           <Sparkles size={16} />
           <input
-            aria-label="候选话题"
+            aria-label={t("candidate.topic")}
             onChange={(event) => onConceptChange(event.target.value)}
-            placeholder="话题"
+            placeholder={t("candidate.topicPlaceholder")}
             value={candidateConcept}
           />
         </label>
         <button className="x-pill start" disabled={isSaving} type="submit">
           {isSaving ? <LoaderCircle className="x-spin" size={16} /> : <Send size={16} />}
-          <span>{isSaving ? "排队中" : "加入队列"}</span>
+          <span>{isSaving ? t("candidate.queueing") : t("candidate.save")}</span>
         </button>
       </form>
 
@@ -83,13 +84,13 @@ export function SourceCandidatePanel({
           onChange={(event) => onAutoScoutChange(event.target.checked)}
           type="checkbox"
         />
-        <span>自动观察员</span>
-        <strong>{hasQueuedScoutWork ? `${queuedJobCount} 个排队任务` : "空闲"}</strong>
+        <span>{t("candidate.autoScout")}</span>
+        <strong>{hasQueuedScoutWork ? t("candidate.queuedJobs", { count: queuedJobCount }) : t("candidate.idle")}</strong>
       </label>
 
       <button className="x-cand-run" disabled={isRunningCuration} onClick={onRunCuration} type="button">
         {isRunningCuration ? <LoaderCircle className="x-spin" size={16} /> : <RefreshCw size={16} />}
-        <span>{isRunningCuration ? "运行中" : "运行观察员"}</span>
+        <span>{isRunningCuration ? t("candidate.running") : t("candidate.run")}</span>
       </button>
       <div className="x-cand-note">
         {curationMessage}
@@ -103,14 +104,14 @@ export function SourceCandidatePanel({
               <div>
                 <span>{record.candidate.source.title}</span>
                 <small>
-                  {formatCandidateStatus(record.status)} · {record.candidate.conceptIds.slice(0, 2).join("、") || "通用"}
+                  {formatCandidateStatus(record.status)} · {record.candidate.conceptIds.slice(0, 2).join(", ") || t("common.concept")}
                 </small>
               </div>
               <strong>{Math.round(record.candidate.relevanceScore * 100)}</strong>
             </div>
           ))
         ) : (
-          <div className="x-cand-empty">还没有候选源</div>
+          <div className="x-cand-empty">{t("candidate.empty")}</div>
         )}
       </div>
     </section>

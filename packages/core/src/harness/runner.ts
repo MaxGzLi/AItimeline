@@ -2,6 +2,7 @@ import { createKnowledgePost, harnessVersion } from "./postHarness.js";
 import { validateGrounding } from "./groundingGate.js";
 import { validateKnowledgePost } from "./schema.js";
 import { createSourceRegistry } from "../source/sourceRegistry.js";
+import type { ContentLanguage } from "./contentLanguage.js";
 import type {
   AgentHarnessConfig,
   AgentHarnessRunInput,
@@ -66,7 +67,7 @@ export function runDeterministicAgentHarness(input: AgentHarnessRunInput): Agent
       createdAt
     });
   const recommendedBecause =
-    input.recommendedBecause ?? "这个来源已导入,并转成了可以进时间线的知识卡片。";
+    input.recommendedBecause ?? getDefaultRecommendedBecause(input.contentLanguage);
   const posts = input.paperDigest
     ? createDeterministicPaperDigestPosts(input, createdAt, recommendedBecause)
     : chunks.map((chunk, index) =>
@@ -75,7 +76,8 @@ export function runDeterministicAgentHarness(input: AgentHarnessRunInput): Agent
           chunk,
           index,
           createdAt,
-          recommendedBecause
+          recommendedBecause,
+          contentLanguage: input.contentLanguage
         })
       );
   const validation = validateHarnessPosts(posts, config, sourceRegistry);
@@ -330,7 +332,8 @@ function createDeterministicPaperDigestPosts(
       chunk: groupChunks[0],
       index: posts.length,
       createdAt,
-      recommendedBecause
+      recommendedBecause,
+      contentLanguage: input.contentLanguage
     });
     const figure = group.mediaPurpose ? findMatchingPaperFigure(paperDigest.figures, group.mediaPurpose) : undefined;
 
@@ -351,6 +354,12 @@ function createDeterministicPaperDigestPosts(
   }
 
   return posts;
+}
+
+function getDefaultRecommendedBecause(contentLanguage?: ContentLanguage): string {
+  return contentLanguage === "en"
+    ? "This source was imported and turned into timeline-ready knowledge cards."
+    : "这个来源已导入,并转成了可以进时间线的知识卡片。";
 }
 
 function findMatchingPaperFigure(

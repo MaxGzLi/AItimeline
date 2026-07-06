@@ -1,8 +1,7 @@
 import { LoaderCircle } from "lucide-react";
 import { forwardRef, type FormEvent } from "react";
+import { t } from "../lib/i18n";
 import { WikilinkInput, type WikilinkAutocompleteCandidate } from "./WikilinkAutocomplete";
-
-const sampleQuestions = ["RAG 和微调该怎么选？", "什么是知识边界？"];
 
 export const AskComposer = forwardRef<
   HTMLInputElement,
@@ -14,17 +13,19 @@ export const AskComposer = forwardRef<
     wikilinkCandidates: WikilinkAutocompleteCandidate[];
   }
 >(function AskComposer({ isAsking, onQuestionChange, onSubmit, question, wikilinkCandidates }, inputRef) {
+  const sampleQuestions = [t("ask.sample1"), t("ask.sample2")];
+
   return (
     <form className="x-composer" onSubmit={onSubmit}>
       <span className="x-avatar" aria-hidden="true">
-        你
+        {t("common.you")}
       </span>
       <div className="x-composer-main">
         <WikilinkInput
-          aria-label="问知识库"
+          aria-label={t("ask.prompt")}
           candidates={wikilinkCandidates}
           onValueChange={onQuestionChange}
-          placeholder="问你的知识库，或记一条想法…"
+          placeholder={t("ask.placeholder")}
           ref={inputRef}
           value={question}
         />
@@ -36,7 +37,7 @@ export const AskComposer = forwardRef<
           ))}
           <button className="x-pill" disabled={isAsking || !question.trim()} type="submit">
             {isAsking ? <LoaderCircle className="x-spin" size={16} /> : null}
-            {isAsking ? "思考中" : "发布"}
+            {isAsking ? t("ask.thinking") : t("ask.post")}
           </button>
         </div>
       </div>

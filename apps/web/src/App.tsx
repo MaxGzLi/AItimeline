@@ -56,6 +56,7 @@ import { ReviewView } from "./views/ReviewView";
 import { SettingsView } from "./views/SettingsView";
 import { apiBaseUrl, apiRequest, isYouTubeUrl, sampleSourceUrl } from "./lib/api";
 import { buildGroundedAnswer, formatAskAnswer, getTopicId, scrollMotion, slugConcept } from "./lib/format";
+import { normalizeLanguage, setI18nLanguage, t, type Language } from "./lib/i18n";
 import { buildCardNeighborhoodGraph } from "./lib/localGraph";
 import {
   createInteractionSignal,
@@ -80,6 +81,7 @@ import type {
   ApiEvidenceResponse,
   ApiImportResponse,
   ApiReviewDueResponse,
+  ApiSettings,
   ApiSnapshot,
   ApiStatus,
   ApiTimelineResponse,
@@ -95,34 +97,42 @@ import type {
 
 type ViewKey = "timeline" | "discover" | "graph" | "review" | "agent" | "settings";
 
-const navItems: Array<{ key: ViewKey; label: string; icon: typeof Home }> = [
-  { key: "timeline", label: "时间线", icon: Home },
-  { key: "discover", label: "发现", icon: Compass },
-  { key: "graph", label: "图谱", icon: GitBranch },
-  { key: "review", label: "复习", icon: Brain },
-  { key: "agent", label: "智能体", icon: Bot },
-  { key: "settings", label: "设置", icon: Settings }
+const languageStorageKey = "aitl-language";
+
+const navItems: Array<{ key: ViewKey; labelKey: string; icon: typeof Home }> = [
+  { key: "timeline", labelKey: "nav.timeline", icon: Home },
+  { key: "discover", labelKey: "nav.discover", icon: Compass },
+  { key: "graph", labelKey: "nav.graph", icon: GitBranch },
+  { key: "review", labelKey: "nav.review", icon: Brain },
+  { key: "agent", labelKey: "nav.agent", icon: Bot },
+  { key: "settings", labelKey: "nav.settings", icon: Settings }
 ];
 
-const viewTitles: Record<ViewKey, { title: string; sub?: string }> = {
-  timeline: { title: "时间线" },
-  discover: { title: "发现", sub: "观察员找到的候选来源" },
-  graph: { title: "图谱", sub: "你的知识边界" },
-  review: { title: "复习", sub: "到期的间隔复习" },
-  agent: { title: "智能体", sub: "观察员机器房" },
-  settings: { title: "设置" }
+const viewTitleKeys: Record<ViewKey, { title: string; sub?: string }> = {
+  timeline: { title: "nav.timeline" },
+  discover: { title: "nav.discover", sub: "nav.discoverSub" },
+  graph: { title: "nav.graph", sub: "nav.graphSub" },
+  review: { title: "nav.review", sub: "nav.reviewSub" },
+  agent: { title: "nav.agent", sub: "nav.agentSub" },
+  settings: { title: "nav.settings" }
 };
 
 export function App() {
+  const [language, setLanguageState] = useState<Language>(() => {
+    const stored =
+      typeof window !== "undefined" ? normalizeLanguage(window.localStorage.getItem(languageStorageKey)) : undefined;
+    const initialLanguage = stored ?? "zh";
+    setI18nLanguage(initialLanguage);
+    return initialLanguage;
+  });
   const [sourceUrl, setSourceUrl] = useState(sampleSourceUrl);
   const [candidateUrl, setCandidateUrl] = useState(`${apiBaseUrl}/fixtures/article-background`);
-  const [candidateConcept, setCandidateConcept] = useState(demoProfile.interests[0] ?? "智能体");
+  const [candidateConcept, setCandidateConcept] = useState(demoProfile.interests[0] ?? "AI Agent");
   const [sourceImports, setSourceImports] = useState<SourceImport[]>([]);
   const [importedCards, setImportedCards] = useState<KnowledgeCard[]>([]);
-  // 后台同步到、但还没放进列表的新卡:顶部「显示 N 张新卡」点击后才插入(对标 X)。
+  // Newly synced cards stay buffered until the user inserts them into the feed.
   const [pendingCards, setPendingCards] = useState<KnowledgeCard[]>([]);
-  // 服务端到期复习列表(/api/review/due):复习状态的唯一真源,时间线复习卡、复习 view、
-  // 右栏都读它,避免前端再算一套。
+  // Server due-review data is the single review source for the feed and rail.
   const [reviewDueItems, setReviewDueItems] = useState<ReviewDueItem[]>([]);
   const [sourceAssets, setSourceAssets] = useState<SourceAsset[]>([]);
   const [sourceChunks, setSourceChunks] = useState<KnowledgeChunk[]>([]);
@@ -137,14 +147,14 @@ export function App() {
   const [learningFeedback, setLearningFeedback] = useState<LearningFeedbackByPost>({});
   const [evidenceLedgers, setEvidenceLedgers] = useState<Record<string, EvidenceLedger | null>>({});
   const [apiStatus, setApiStatus] = useState<ApiStatus>("checking");
-  const [apiMessage, setApiMessage] = useState("正在连接本地 API");
-  const [curationMessage, setCurationMessage] = useState("还没运行过观察员");
+  const [apiMessage, setApiMessage] = useState(() => t("api.connecting"));
+  const [curationMessage, setCurationMessage] = useState(() => t("curation.default"));
   const [autoScoutEnabled, setAutoScoutEnabled] = useState(true);
   const [lastScoutAt, setLastScoutAt] = useState<string | null>(null);
   const [queuedJobCount, setQueuedJobCount] = useState(0);
   const [agentTurnCount, setAgentTurnCount] = useState(0);
-  const [memoryMessage, setMemoryMessage] = useState("还没有记忆改动");
-  const [candidateMessage, setCandidateMessage] = useState("还没有排队的候选源");
+  const [memoryMessage, setMemoryMessage] = useState(() => t("memory.default"));
+  const [candidateMessage, setCandidateMessage] = useState(() => t("candidate.message.default"));
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
   const [conceptView, setConceptView] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<ViewKey>("timeline");
@@ -171,23 +181,88 @@ export function App() {
   const pendingSignalSignatures = useRef<Record<string, string>>({});
   const curationRunInFlight = useRef(false);
   const refreshSequence = useRef(0);
-  // 缓冲同步要对比「当前列表」,但定时器闭包里的 state 会过期,用 ref 拿最新值。
+  const settingsReady = useRef(false);
+  const lastSyncedLanguage = useRef<Language | null>(null);
+  // Buffered refreshes compare against the current list through a ref.
   const importedCardsRef = useRef<KnowledgeCard[]>([]);
-  // 本批生产的任务峰值:队列非空时记最大深度,算「生产中 x/N」;清空即复位。
+  // Peak queue depth for the active production batch.
   const productionPeakRef = useRef(0);
   // Mirror of interactionSignals so stable callbacks (e.g. handleDwell) can read
   // the latest signals without stale closures and without impure state updaters.
   const interactionSignalsRef = useRef<InteractionSignals>({});
   const composerInputRef = useRef<HTMLInputElement | null>(null);
   const detailReturnScrollY = useRef(0);
-  // 纯曝光上报:已报过的卡 id(每次会话每卡最多一条)+ 等待 flush 的队列。故意用 ref
-  // 而非 state,避免惊动 interactionSignals 的同步管线和本地反馈。
+  // Best-effort impression reporting, capped to one event per card per session.
   const impressionReportedIds = useRef<Set<string>>(new Set());
   const impressionQueue = useRef<Map<string, KnowledgeCard>>(new Map());
-  // 本会话内已 ✕ 退场 / 已复习确认的卡:本地立即隐藏(demo 兜底卡也生效),并防止
-  // 在途的 buffer 刷新把它们当「新卡」复活。ref 供刷新闭包读最新值,state 驱动渲染过滤。
+  // Locally hidden cards remain hidden while async buffered refreshes finish.
   const locallyRemovedIdsRef = useRef<Set<string>>(new Set());
   const [locallyRemovedIds, setLocallyRemovedIds] = useState<ReadonlySet<string>>(() => new Set());
+
+  const setLanguage = useCallback((nextLanguage: Language) => {
+    setI18nLanguage(nextLanguage);
+    setLanguageState(nextLanguage);
+  }, []);
+
+  useEffect(() => {
+    setI18nLanguage(language);
+    try {
+      window.localStorage.setItem(languageStorageKey, language);
+    } catch {
+      // ignore unavailable storage
+    }
+  }, [language]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void apiRequest<ApiSettings>("/api/settings")
+      .then((settings) => {
+        if (cancelled) {
+          return;
+        }
+
+        const nextLanguage = normalizeLanguage(settings.contentLanguage) ?? "zh";
+        lastSyncedLanguage.current = nextLanguage;
+        setLanguage(nextLanguage);
+      })
+      .catch(() => {
+        // Keep the local preference when the API is unavailable.
+      })
+      .finally(() => {
+        if (!cancelled) {
+          settingsReady.current = true;
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [setLanguage]);
+
+  useEffect(() => {
+    if (!settingsReady.current || apiStatus !== "connected" || lastSyncedLanguage.current === language) {
+      return;
+    }
+
+    const nextLanguage = language;
+
+    void apiRequest<ApiSettings>("/api/settings", {
+      method: "POST",
+      body: { contentLanguage: nextLanguage }
+    })
+      .then((settings) => {
+        const syncedLanguage = normalizeLanguage(settings.contentLanguage) ?? nextLanguage;
+        lastSyncedLanguage.current = syncedLanguage;
+
+        if (syncedLanguage !== nextLanguage) {
+          setLanguage(syncedLanguage);
+        }
+      })
+      .catch(() => {
+        // The local preference remains active and will retry after reconnection.
+      });
+  }, [apiStatus, language, setLanguage]);
 
   useEffect(() => {
     interactionSignalsRef.current = interactionSignals;
@@ -245,7 +320,7 @@ export function App() {
   const demoRankedCards = useMemo(() => rankKnowledgeCards(demoCards, demoProfile), []);
   const rankedCards = useMemo(() => {
     const cards = rankedImportedCards.length > 0 ? rankedImportedCards : demoRankedCards;
-    // 已 ✕ / 已复习的卡本地立即退场,与服务端时间线的过滤结果保持一致。
+    // Locally removed or reviewed cards leave the feed immediately.
     return locallyRemovedIds.size === 0 ? cards : cards.filter((card) => !locallyRemovedIds.has(card.id));
   }, [demoRankedCards, locallyRemovedIds, rankedImportedCards]);
   // "For you" keeps the personalized ranking; "Latest" re-sorts the same cards
@@ -306,8 +381,7 @@ export function App() {
 
     return byId;
   }, [allCards]);
-  // 复习页要能取到还躺在 pendingCards 缓冲区里的到期卡本体,否则题面退化成裸 postId、
-  // 评分也推进不了服务端状态;在 cardsById 之上补上缓冲卡。
+  // Review cards can be in the pending buffer, so merge them into the lookup.
   const reviewCardsById = useMemo(() => {
     if (pendingCards.length === 0) {
       return cardsById;
@@ -506,7 +580,7 @@ export function App() {
     () => (selectedCardId ? buildCardNeighborhoodGraph(linkedGraph, selectedCardId) : null),
     [linkedGraph, selectedCardId]
   );
-  // 复习队列直接由服务端到期列表(/api/review/due)派生,不再前端另算一套调度。
+  // The due-review queue comes directly from the server schedule.
   const reviewQueue = useMemo<ReviewItem[]>(
     () =>
       reviewDueItems.map((item) => ({
@@ -516,7 +590,7 @@ export function App() {
         intervalDays: item.intervalDays,
         strength: 0
       })),
-    [reviewDueItems, cardsById]
+    [reviewDueItems, reviewCardsById]
   );
   const boundary = useMemo(
     () => buildKnowledgeBoundary({ cards: allCards, signals: allSignals }),
@@ -657,7 +731,7 @@ export function App() {
           saveSyncedSignalSignatures(syncedSignalSignatures.current);
         })
         .catch(() => {
-          setApiMessage("信号同步失败,本地反馈仍然可用");
+          setApiMessage(t("api.signalSyncFailed"));
         })
         .finally(() => {
           if (pendingSignalSignatures.current[signal.postId] === signature) {
@@ -731,7 +805,7 @@ export function App() {
     };
   }, [apiStatus, autoScoutEnabled, hasHydrated, hasQueuedScoutWork]);
 
-  // 打开着的标签页要跟服务器保持同步:否则服务端删掉的帖子会一直留在页面上。
+  // Keep visible tabs aligned with server-side timeline removals.
   useEffect(() => {
     if (!hasHydrated) {
       return;
@@ -758,7 +832,7 @@ export function App() {
     recordInteraction(card, { dwellTimeMs, skippedQuickly: false });
   }, []);
 
-  // 卡片进入视口 ≥1s(PostView 内计时)后进曝光队列;实际上报由下面的节流 flush 负责。
+  // PostView queues impressions after a visible dwell; the throttled sender flushes them.
   const handleImpression = useCallback((card: KnowledgeCard) => {
     if (impressionReportedIds.current.has(card.id) || impressionQueue.current.has(card.id)) {
       return;
@@ -767,8 +841,7 @@ export function App() {
     impressionQueue.current.set(card.id, card);
   }, []);
 
-  // 轻量 sender:一次一条纯曝光走 POST /api/signals(服务端当作主题中性、只计生命周期),
-  // 故意不走 syncInteractionSignal——那条路每次都 refreshFromApi,滚动会打爆接口。
+  // Impression signals use a lightweight endpoint path without refreshing the feed.
   const flushImpressions = useCallback(() => {
     if (impressionQueue.current.size === 0) {
       return;
@@ -778,8 +851,7 @@ export function App() {
     impressionQueue.current.clear();
 
     for (const card of pending) {
-      // 乐观标记:每卡每次会话至多一条,失败也不重报(纯曝光是尽力而为的统计信号)。
-      // keepalive 让关标签页前的最后一批 flush 也能送达。
+      // Impression analytics are best-effort and capped to one send per card.
       impressionReportedIds.current.add(card.id);
       void apiRequest<unknown>("/api/signals", {
         method: "POST",
@@ -790,12 +862,12 @@ export function App() {
           sourceCandidates: []
         }
       }).catch(() => {
-        // 上报失败就丢弃,不影响阅读。
+        // Drop failed analytics sends without affecting reading.
       });
     }
   }, []);
 
-  // 每 5 秒 flush 一次曝光队列;页面切走时立即 flush,尽量不丢关闭前的曝光。
+  // Flush impressions periodically and when the page is hidden.
   useEffect(() => {
     const interval = window.setInterval(flushImpressions, 5000);
     const handleVisibilityChange = () => {
@@ -822,7 +894,7 @@ export function App() {
 
     if (!options.silent) {
       setApiStatus("checking");
-      setApiMessage("正在刷新本地 API 状态");
+      setApiMessage(t("api.refreshing"));
     }
 
     const now = new Date().toISOString();
@@ -845,8 +917,7 @@ export function App() {
       const registryAssets = snapshot.sourceRegistries.flatMap((record) => record.registry.assets);
       const registryChunks = snapshot.sourceRegistries.flatMap((record) => record.registry.chunks);
 
-      // 缓冲模式:不打乱正在阅读的列表——服务端已删除的卡立即移除,已有卡原位
-      // 更新内容,新到的卡进缓冲区等「显示 N 张新卡」一次性插入。
+      // Buffered refreshes update known cards in place and hold new cards for insertion.
       const displayed = importedCardsRef.current;
 
       if (options.mode === "buffer" && displayed.length > 0) {
@@ -879,14 +950,14 @@ export function App() {
         queuedJobs.jobs.length === 0 ? 0 : Math.max(productionPeakRef.current, queuedJobs.jobs.length);
       setAgentTurnCount(snapshot.agentTurns.length);
       setApiStatus("connected");
-      setApiMessage("已连接本地 API");
+      setApiMessage(t("api.connected"));
     } catch (error) {
       if (requestId !== refreshSequence.current) {
         return;
       }
 
       setApiStatus("offline");
-      setApiMessage(error instanceof Error ? error.message : "运行 npm run dev:api 才能使用来源导入");
+      setApiMessage(error instanceof Error ? error.message : t("api.offlineImport"));
     }
   }
 
@@ -897,12 +968,12 @@ export function App() {
       body: {
         url,
         createdAt: new Date().toISOString(),
-        recommendedBecause: "你从 Web 时间线导入了这个来源。"
+        recommendedBecause: t("import.webReason")
       }
     });
 
     setApiStatus("connected");
-    setApiMessage("已连接本地 API");
+    setApiMessage(t("api.connected"));
 
     return result;
   }
@@ -991,10 +1062,10 @@ export function App() {
         }
       });
 
-      const actionLabel = { like: "点赞", save: "收藏", ask: "追问" }[action];
-      setMemoryMessage(`${actionLabel}产生了 ${result.events.length} 条记忆改动`);
+      const actionLabel = t(`memory.action.${action}`);
+      setMemoryMessage(t("memory.changed", { action: actionLabel, count: result.events.length }));
     } catch {
-      setMemoryMessage("记忆 API 不可用,已保留本地反馈");
+      setMemoryMessage(t("memory.apiUnavailable"));
     }
   }
 
@@ -1015,7 +1086,7 @@ export function App() {
     const trimmedUrl = sourceUrl.trim();
 
     if (!trimmedUrl) {
-      setImportError("请先粘贴一个文章或 YouTube 链接。");
+      setImportError(t("import.error.emptyUrl"));
       return;
     }
 
@@ -1034,7 +1105,7 @@ export function App() {
       }
     } catch (error) {
       if (isYouTubeUrl(trimmedUrl)) {
-        const result = transformMockYouTubeUrl(trimmedUrl, new Date().toISOString());
+        const result = transformMockYouTubeUrl(trimmedUrl, new Date().toISOString(), language);
 
         applyImportResult({
           importRecord: result.importRecord,
@@ -1046,9 +1117,9 @@ export function App() {
           showDetail(result.cards[0].id);
         }
         setApiStatus("offline");
-        setApiMessage("API 不可用,改用本地模拟的 YouTube 导入");
+        setApiMessage(t("import.localFallback"));
       } else {
-        setImportError(error instanceof Error ? error.message : "导入失败。");
+        setImportError(error instanceof Error ? error.message : t("import.error.failed"));
       }
     } finally {
       setIsImporting(false);
@@ -1062,7 +1133,7 @@ export function App() {
     const trimmedConcept = candidateConcept.trim();
 
     if (!trimmedUrl || !trimmedConcept) {
-      setCandidateMessage("加入队列前请先填好 URL 和话题");
+      setCandidateMessage(t("candidate.missing"));
       return;
     }
 
@@ -1079,18 +1150,18 @@ export function App() {
           relevanceScore: 0.74,
           noveltyScore: 0.66,
           qualityScore: 0.72,
-          reason: `从 Web 时间线为「${trimmedConcept}」加入队列。`,
+          reason: t("candidate.reason.web", { concept: trimmedConcept }),
           discoveredAt: new Date().toISOString()
         }
       });
 
       setSourceCandidates((records) => upsertById(records, [result.record]));
-      setCandidateMessage(`已加入队列:${result.record.candidate.source.title}`);
+      setCandidateMessage(t("candidate.added", { title: result.record.candidate.source.title }));
       setApiStatus("connected");
-      setApiMessage("已连接本地 API");
+      setApiMessage(t("api.connected"));
     } catch (error) {
       setApiStatus("offline");
-      setCandidateMessage(error instanceof Error ? error.message : "无法把候选源加入队列");
+      setCandidateMessage(error instanceof Error ? error.message : t("candidate.unable"));
     } finally {
       setIsSavingCandidate(false);
     }
@@ -1103,7 +1174,7 @@ export function App() {
 
     curationRunInFlight.current = true;
     setIsRunningCuration(true);
-    setCurationMessage(trigger === "auto" ? "自动观察员正在处理到期任务" : "正在处理到期任务");
+    setCurationMessage(trigger === "auto" ? t("curation.autoRunning") : t("curation.manualRunning"));
 
     try {
       const result = await apiRequest<ApiCurationRunResponse>("/api/curation/run", {
@@ -1118,19 +1189,19 @@ export function App() {
       const checkedAt = new Date().toISOString();
 
       setApiStatus("connected");
-      setApiMessage("已连接本地 API");
+      setApiMessage(t("api.connected"));
       setLastScoutAt(checkedAt);
-      const scoutLabel = trigger === "auto" ? "自动观察员" : "观察员";
+      const scoutLabel = trigger === "auto" ? t("curation.autoLabel") : t("curation.manualLabel");
       setCurationMessage(
         result.records.length > 0
-          ? `${scoutLabel}处理了 ${result.records.length} 个任务 · 导入 ${importedCount} 个来源`
-          : `${scoutLabel}已检查 · 没有到期任务`
+          ? t("curation.imported", { label: scoutLabel, records: result.records.length, imports: importedCount })
+          : t("curation.checkedEmpty", { label: scoutLabel })
       );
       await refreshFromApi({ silent: true, mode: "buffer" });
     } catch (error) {
       setApiStatus("offline");
-      setApiMessage(error instanceof Error ? error.message : "API 不可用");
-      setCurationMessage("观察员无法运行");
+      setApiMessage(error instanceof Error ? error.message : t("api.unavailable"));
+      setCurationMessage(t("curation.failed"));
     } finally {
       curationRunInFlight.current = false;
       setIsRunningCuration(false);
@@ -1246,23 +1317,23 @@ export function App() {
     void syncMemoryForCard(card, "save");
   }
 
-  // 本地立即退场:渲染层(rankedCards)马上隐藏,在途刷新也不会再把它当「新卡」缓冲。
+  // Hide locally right away so in-flight refreshes cannot reinsert the card.
   function markLocallyRemoved(postId: string) {
     locallyRemovedIdsRef.current.add(postId);
     setLocallyRemovedIds(new Set(locallyRemovedIdsRef.current));
   }
 
   function handleSkip(card: RankedKnowledgeCard) {
-    // 保留原有的同主题降权信号(skippedQuickly)。
+    // Keep the same-topic downrank signal.
     recordInteraction(card, { skippedQuickly: true, dwellTimeMs: 800, openedThread: false });
-    // 持久化退场:/api/timeline 过滤 dismissed,刷新后不会再回来。
+    // Persist dismissal; refreshed timelines filter dismissed posts.
     void apiRequest(`/api/posts/${encodeURIComponent(card.id)}/dismiss`, { method: "POST" }).catch(() => {
-      // 幂等接口,失败不影响本地移除。
+      // Best-effort persistence does not block local removal.
     });
     markLocallyRemoved(card.id);
   }
 
-  // 「已复习」:服务端推进复习间隔(1→3→7→14→30 天)并落盘,该卡到下次到期前不再进流。
+  // Completing a review advances the server interval and hides the card until due.
   async function completeReview(card: KnowledgeCard) {
     try {
       await apiRequest(`/api/review/${encodeURIComponent(card.id)}/complete`, {
@@ -1270,14 +1341,14 @@ export function App() {
         body: { reviewedAt: new Date().toISOString() }
       });
     } catch {
-      // 服务端不可用时尽力而为;下次刷新会与服务端对齐。
+      // Best effort; the next refresh reconciles with the server.
     }
 
     await refreshFromApi({ silent: true, mode: "buffer" });
   }
 
   function handleReviewComplete(card: RankedKnowledgeCard) {
-    // 立即从流里移除(到下次到期前不再出现),再静默推进服务端间隔。
+    // Remove immediately, then advance the server review interval quietly.
     markLocallyRemoved(card.id);
     void completeReview(card);
   }
@@ -1340,7 +1411,7 @@ export function App() {
     } catch (error) {
       setDiscoveryRun({
         status: "error",
-        message: error instanceof Error ? error.message : "找来源失败,请稍后再试。"
+        message: error instanceof Error ? error.message : t("agent.discovery.error")
       });
     }
   }
@@ -1359,8 +1430,7 @@ export function App() {
     setAgentQuestion("");
 
     try {
-      // 发布即笔记:内容成为一条 user_note 帖子进时间线,观察员的回复
-      // 由 API 有出处地生成并计入 Agent 用量。
+      // Posting a note adds it to the timeline and generates a grounded reply.
       const result = await apiRequest<AgentAskApiResponse>("/api/notes", {
         method: "POST",
         body: { text: question }
@@ -1371,7 +1441,7 @@ export function App() {
       void refreshFromApi({ silent: true });
     } catch (error) {
       setAgentMessage(
-        error instanceof Error ? error.message : "Agent 请求失败，请先运行 npm run dev:api。"
+        error instanceof Error ? error.message : t("ask.error")
       );
     } finally {
       setIsAgentAsking(false);
@@ -1404,14 +1474,18 @@ export function App() {
     }));
   }
 
-  const activeTitle = viewTitles[activeView];
+  const activeTitleKeys = viewTitleKeys[activeView];
+  const activeTitle = {
+    title: t(activeTitleKeys.title),
+    sub: activeTitleKeys.sub ? t(activeTitleKeys.sub) : undefined
+  };
   const pendingDiscoverCount = sourceCandidates.filter(
     (record) => record.status === "pending" || record.status === "queued"
   ).length;
 
   return (
     <div className="x-frame">
-      <nav className="x-navrail" aria-label="主导航">
+      <nav className="x-navrail" aria-label={t("nav.main")}>
         <button
           className="x-logo"
           onClick={() => {
@@ -1424,6 +1498,7 @@ export function App() {
           AI
         </button>
         {navItems.map((item) => {
+          const label = t(item.labelKey);
           const showDot =
             (item.key === "discover" && pendingDiscoverCount > 0) ||
             (item.key === "review" && reviewQueue.length > 0);
@@ -1431,7 +1506,7 @@ export function App() {
           return (
             <button
               aria-current={activeView === item.key ? "page" : undefined}
-              aria-label={item.label}
+              aria-label={label}
               className={`x-navbtn${activeView === item.key ? " active" : ""}`}
               key={item.key}
               onClick={() => {
@@ -1440,30 +1515,30 @@ export function App() {
                   setSelectedCardId(null);
                 }
               }}
-              title={item.label}
+              title={label}
               type="button"
             >
               <span className="x-navicon">
                 <item.icon size={26} strokeWidth={activeView === item.key ? 2.4 : 1.9} />
                 {showDot ? <span className="x-navdot" /> : null}
               </span>
-              <span className="x-navlabel">{item.label}</span>
+              <span className="x-navlabel">{label}</span>
             </button>
           );
         })}
         <button
-          aria-label="发布想法"
+          aria-label={t("nav.composeTitle")}
           className="x-compose"
           onClick={() => {
             setActiveView("timeline");
             setSelectedCardId(null);
             requestAnimationFrame(() => composerInputRef.current?.focus());
           }}
-          title="发布想法"
+          title={t("nav.composeTitle")}
           type="button"
         >
           <PenLine size={22} />
-          <span className="x-navlabel">发帖</span>
+          <span className="x-navlabel">{t("nav.compose")}</span>
         </button>
       </nav>
 
@@ -1471,11 +1546,11 @@ export function App() {
         <header className="x-colhead">
           {selectedCard ? (
             <div className="x-detail-head">
-              <button aria-label="返回时间线" className="x-detail-back" onClick={handleCloseDetail} type="button">
+              <button aria-label={t("post.back")} className="x-detail-back" onClick={handleCloseDetail} type="button">
                 <ArrowLeft size={21} />
               </button>
               <div>
-                <h1>帖子</h1>
+                <h1>{t("post.detailTitle")}</h1>
                 <p className="x-colsub">{selectedCard.title}</p>
               </div>
             </div>
@@ -1488,12 +1563,12 @@ export function App() {
             </div>
           )}
           {activeView === "timeline" && !selectedCard ? (
-            <div className="x-tabs" role="tablist" aria-label="信息流视图">
+            <div className="x-tabs" role="tablist" aria-label={t("feed.views")}>
               {(
                 [
-                  ["foryou", "推荐"],
-                  ["latest", "最新"],
-                  ["saved", "已收藏"]
+                  ["foryou", t("feed.tab.foryou")],
+                  ["latest", t("feed.tab.latest")],
+                  ["saved", t("feed.tab.saved")]
                 ] as const
               ).map(([tabKey, tabLabel]) => (
                 <button
@@ -1567,23 +1642,25 @@ export function App() {
 
             {pendingCards.length > 0 ? (
               <button className="x-newpill" onClick={handleShowPendingCards} type="button">
-                显示 {pendingCards.length} 张新卡
+                {t("feed.newCards", { count: pendingCards.length })}
               </button>
             ) : queuedJobCount > 0 ? (
               <div className="x-prodchip" role="status">
-                新内容生产中 {Math.max(0, productionPeakRef.current - queuedJobCount)}/
-                {Math.max(productionPeakRef.current, queuedJobCount)}
+                {t("feed.production", {
+                  done: Math.max(0, productionPeakRef.current - queuedJobCount),
+                  total: Math.max(productionPeakRef.current, queuedJobCount)
+                })}
               </div>
             ) : null}
 
-            <section className="x-feedlist" aria-label="知识卡片">
+            <section className="x-feedlist" aria-label={t("feed.label")}>
               {visibleCards.length === 0 ? (
                 <p className="x-empty">
                   {searchQuery.trim()
-                    ? `没有匹配「${searchQuery.trim()}」的卡片。`
+                    ? t("feed.noMatch", { query: searchQuery.trim() })
                     : feedTab === "saved"
-                      ? "还没有收藏的卡片，点书签图标收藏。"
-                      : "时间线是空的，去「智能体」导入一个来源吧。"}
+                      ? t("feed.savedEmpty")
+                      : t("feed.empty")}
                 </p>
               ) : (
                 visibleCards.map((card, index) => (
@@ -1613,7 +1690,7 @@ export function App() {
               {visibleCards.length > 0 ? (
                 <p className="x-empty" role="status">
                   <CheckCircle2 aria-hidden="true" size={16} style={{ verticalAlign: "-3px", marginRight: 6 }} />
-                  已经看完啦，你刷到时间线的底部了。
+                  {t("feed.end")}
                 </p>
               ) : null}
             </section>
@@ -1683,6 +1760,8 @@ export function App() {
           <SettingsView
             apiMessage={apiMessage}
             apiStatus={apiStatus}
+            language={language}
+            onLanguageChange={setLanguage}
             onShowShortcuts={() => setShortcutsOpen(true)}
             onToggleTheme={() => setTheme((value) => (value === "dark" ? "light" : "dark"))}
             theme={theme}
@@ -1717,7 +1796,7 @@ export function App() {
 
       {shortcutsOpen ? (
         <div
-          aria-label="键盘快捷键"
+          aria-label={t("shortcuts.title")}
           aria-modal="true"
           className="x-overlay"
           onClick={() => setShortcutsOpen(false)}
@@ -1725,9 +1804,9 @@ export function App() {
         >
           <div className="x-modal" onClick={(event) => event.stopPropagation()}>
             <div className="x-shortcuts-head">
-              <h2>键盘快捷键</h2>
+              <h2>{t("shortcuts.title")}</h2>
               <button
-                aria-label="关闭快捷键"
+                aria-label={t("shortcuts.close")}
                 className="x-iconbtn"
                 onClick={() => setShortcutsOpen(false)}
                 type="button"
@@ -1738,43 +1817,43 @@ export function App() {
             <ul className="x-shortcuts-list">
               <li>
                 <kbd>j</kbd>
-                <span>下一张卡</span>
+                <span>{t("shortcuts.next")}</span>
               </li>
               <li>
                 <kbd>k</kbd>
-                <span>上一张卡</span>
+                <span>{t("shortcuts.previous")}</span>
               </li>
               <li>
                 <kbd>g</kbd>
-                <span>回到顶部</span>
+                <span>{t("shortcuts.top")}</span>
               </li>
               <li>
                 <kbd>Enter</kbd>
-                <span>打开详情</span>
+                <span>{t("shortcuts.detail")}</span>
               </li>
               <li>
                 <kbd>l</kbd>
-                <span>点赞</span>
+                <span>{t("shortcuts.like")}</span>
               </li>
               <li>
                 <kbd>s</kbd>
-                <span>收藏</span>
+                <span>{t("shortcuts.save")}</span>
               </li>
               <li>
                 <kbd>/</kbd>
-                <span>搜索</span>
+                <span>{t("shortcuts.search")}</span>
               </li>
               <li>
                 <kbd>t</kbd>
-                <span>切换主题</span>
+                <span>{t("shortcuts.theme")}</span>
               </li>
               <li>
                 <kbd>?</kbd>
-                <span>开关此菜单</span>
+                <span>{t("shortcuts.menu")}</span>
               </li>
               <li>
                 <kbd>Esc</kbd>
-                <span>关闭 / 清除</span>
+                <span>{t("shortcuts.clear")}</span>
               </li>
             </ul>
           </div>
@@ -1783,10 +1862,10 @@ export function App() {
 
       {showScrollTop && !selectedCard ? (
         <button
-          aria-label="回到顶部"
+          aria-label={t("shortcuts.top")}
           className="x-scrolltop"
           onClick={() => window.scrollTo({ top: 0, behavior: scrollMotion() })}
-          title="回到顶部"
+          title={t("shortcuts.top")}
           type="button"
         >
           <ArrowUp size={20} />

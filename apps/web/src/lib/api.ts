@@ -1,3 +1,5 @@
+import { t } from "./i18n";
+
 export const apiBaseUrl = (import.meta.env.VITE_AITIMELINE_API_URL ?? "http://127.0.0.1:8787").replace(/\/$/, "");
 export const sampleSourceUrl = `${apiBaseUrl}/fixtures/article`;
 
@@ -19,7 +21,7 @@ export async function apiRequest<T>(
     const message =
       isRecord(payload) && typeof payload.error === "string"
         ? payload.error
-        : `AITimeline API 请求失败,状态码 ${response.status}。`;
+        : t("api.requestFailed", { status: response.status });
 
     throw new Error(message);
   }
@@ -49,7 +51,6 @@ export interface CardMediaItem {
   figureLabel?: string;
 }
 
-// 论文卡的附图:media 由 API 在返回时补上 url/figureLabel,旧卡没有 media 字段。
 export function getCardMedia(card: unknown): CardMediaItem[] {
   if (!isRecord(card) || !Array.isArray(card.media)) {
     return [];

@@ -15,6 +15,7 @@ import type {
   UserMemory
 } from "../types.js";
 import type { UserMemoryEditEvent } from "../memory/userMemoryControls.js";
+import { parseContentLanguage, type ContentLanguage } from "../harness/contentLanguage.js";
 
 export interface PersistenceStorageAdapter {
   read(): string | null | undefined;
@@ -73,6 +74,10 @@ export interface AgentTurnRecord {
   createdAt: string;
 }
 
+export interface UserSettings {
+  contentLanguage?: ContentLanguage;
+}
+
 export interface SourceCandidateRecord {
   id: string;
   candidate: BackgroundSourceCandidate;
@@ -105,6 +110,7 @@ export interface AITimelinePersistenceSnapshot {
   reviewStates: ReviewState[];
   sourceCandidates: SourceCandidateRecord[];
   agentTurns: AgentTurnRecord[];
+  userSettings: UserSettings;
 }
 
 export interface AITimelinePersistenceStore {
@@ -125,6 +131,7 @@ export interface AITimelinePersistenceStore {
   saveDismissedPostIds(postIds: string[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
   saveReviewStates(records: ReviewState[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
   saveAgentTurnRecords(records: AgentTurnRecord[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
+  saveUserSettings(settings: UserSettings, savedAt?: string | Date): AITimelinePersistenceSnapshot;
   saveUserMemory(
     userId: string,
     memory: UserMemory,
@@ -261,6 +268,16 @@ export function createAITimelinePersistenceStore(
 
       return cloneSnapshot(snapshot);
     },
+    saveUserSettings(settings, savedAt = new Date()) {
+      snapshot = {
+        ...snapshot,
+        updatedAt: normalizeDate(savedAt).toISOString(),
+        userSettings: normalizeUserSettings(settings)
+      };
+      persist(storage, snapshot);
+
+      return cloneSnapshot(snapshot);
+    },
     saveUserMemory(userId, memory, events = [], savedAt = new Date()) {
       const updatedAt = normalizeDate(savedAt).toISOString();
 
@@ -321,8 +338,19 @@ function createSnapshot(input: Partial<AITimelinePersistenceSnapshot> = {}): AIT
     dismissedPostIds: input.dismissedPostIds ?? [],
     reviewStates: input.reviewStates ?? [],
     sourceCandidates: input.sourceCandidates ?? [],
-    agentTurns: input.agentTurns ?? []
+    agentTurns: input.agentTurns ?? [],
+    userSettings: normalizeUserSettings(input.userSettings)
   };
+}
+
+function normalizeUserSettings(value: unknown): UserSettings {
+  if (!isRecord(value)) {
+    return {};
+  }
+
+  const contentLanguage = parseContentLanguage(value.contentLanguage);
+
+  return contentLanguage ? { contentLanguage } : {};
 }
 
 function createValidationRecords(

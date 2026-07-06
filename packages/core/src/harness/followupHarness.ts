@@ -1,5 +1,6 @@
 import type { BackgroundCurationJob } from "../agents/backgroundCuration.js";
 import type { SourceImportWorkerInput } from "../source/sourceImportWorker.js";
+import { getKnowledgePostLanguagePolicy, type ContentLanguage } from "./contentLanguage.js";
 import type {
   HarnessValidationIssue,
   HarnessValidationResult,
@@ -40,6 +41,7 @@ export interface FollowupGenerationProtocol {
     chunkIds: string[];
     postIdPrefix: string;
   };
+  contentLanguage: ContentLanguage;
   systemPrompt: string;
   userPrompt: string;
   createdAt: string;
@@ -54,13 +56,15 @@ export interface CreateFollowupGenerationProtocolInput {
   job: BackgroundCurationJob;
   seedPost?: KnowledgePost;
   createdAt?: string | Date;
+  contentLanguage?: ContentLanguage;
 }
 
 export interface CreateFollowupSourceImportPlanInput extends CreateFollowupGenerationProtocolInput {
   seedPost: KnowledgePost;
 }
 
-export const followupHarnessSystemPrompt = `You are the AITimeline Follow-up Agent.
+export function getFollowupHarnessSystemPrompt(language: ContentLanguage = "zh"): string {
+  return `You are the AITimeline Follow-up Agent.
 
 Your job is to create the next timeline post after a user interaction.
 
@@ -73,15 +77,10 @@ Hard rules:
 6. Make the post addictive through clarity, tension, and curiosity, not unsupported claims.
 7. Write mathematical formulas in LaTeX: inline \`$...$\`, display \`$$...$$\`; do not flatten them into Unicode subscripts/superscripts.
 
-Language policy:
-- Write all user-facing text in Simplified Chinese.
-- Keep technical terms, proper nouns, and concept names in their original English (e.g., AI Agent, RAG, LLM); do not translate them.
-- Quotes from sources must stay verbatim in the source language.
-- Except inside citation quote fields, never copy sentences from the evidence verbatim; explain in your own words in Simplified Chinese while keeping the key English terms.
-- Numbers must match the cited evidence exactly.
-- Keep concepts and graphEdges concept names in English so graph nodes stay continuous.
-- graphEdges evidence must stay in the source language: quote or closely paraphrase the cited chunk; do not translate it into Chinese.
-- Every source-fact field (summary, thesis, shortBody, graphEdges evidence) must retain at least one key English term or number taken from the cited evidence.`;
+${getKnowledgePostLanguagePolicy(language).join("\n")}`;
+}
+
+export const followupHarnessSystemPrompt = getFollowupHarnessSystemPrompt("zh");
 
 const protocolVersion = "followup-harness-v0" as const;
 const requiredThreadKinds: ThreadBlockKind[] = ["explain", "example", "contrast", "extension", "quiz"];
@@ -107,6 +106,7 @@ export function createFollowupGenerationProtocol(
   input: CreateFollowupGenerationProtocolInput
 ): FollowupGenerationProtocol {
   const createdAt = normalizeDate(input.createdAt).toISOString();
+  const contentLanguage = input.contentLanguage ?? "zh";
   const intent = inferFollowupIntent(input.job.nextAction);
   const sourceId = buildFollowupSourceId(input.job);
   const chunkIds = [`${sourceId}-chunk-1`];
@@ -147,7 +147,8 @@ export function createFollowupGenerationProtocol(
       chunkIds,
       postIdPrefix: `${sourceId}-post`
     },
-    systemPrompt: followupHarnessSystemPrompt,
+    contentLanguage,
+    systemPrompt: getFollowupHarnessSystemPrompt(contentLanguage),
     userPrompt: buildUserPrompt(intent, input.job, input.seedPost),
     createdAt
   };
@@ -175,6 +176,10 @@ export function validateFollowupGenerationProtocol(protocol: unknown): HarnessVa
 
   if (protocol.version !== protocolVersion) {
     issues.push({ path: "$.version", message: "Follow-up protocol version is unsupported.", severity: "error" });
+  }
+
+  if (protocol.contentLanguage !== "zh" && protocol.contentLanguage !== "en") {
+    issues.push({ path: "$.contentLanguage", message: "Follow-up protocol content language is unsupported.", severity: "error" });
   }
 
   if (!isFollowupIntent(protocol.intent)) {
@@ -221,6 +226,7 @@ export function createFollowupSourceImportPlan(input: CreateFollowupSourceImport
       id: `${protocol.storagePlan.sourceId}-import-${dateSlug(protocol.createdAt)}`,
       source,
       chunks,
+      contentLanguage: protocol.contentLanguage,
       createdAt: protocol.createdAt,
       recommendedBecause: buildRecommendedBecause(protocol, input.job),
       config: createAgentHarnessConfig({
@@ -324,6 +330,22 @@ function buildUserPrompt(
 }
 
 function buildRecommendedBecause(protocol: FollowupGenerationProtocol, job: BackgroundCurationJob): string {
+  if (protocol.contentLanguage === "en") {
+    if (protocol.intent === "expand_broader") {
+      return "You showed enough interest to broaden this topic with a follow-up card.";
+    }
+
+    if (protocol.intent === "reframe_simpler") {
+      return "You asked a question or hesitated, so this follow-up reframes the idea more simply.";
+    }
+
+    if (protocol.intent === "review_reinforcement") {
+      return "You saved or reviewed this, so this follow-up returns as recall practice.";
+    }
+
+    return "You showed interest, so this follow-up goes one level deeper.";
+  }
+
   if (protocol.intent === "expand_broader") {
     return `你表现出足够的兴趣,可以把这个话题往外延展了。${job.reason}`;
   }

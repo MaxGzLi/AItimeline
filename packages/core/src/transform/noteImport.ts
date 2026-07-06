@@ -1,5 +1,6 @@
 import { slugConcept } from "../graph/knowledgeBoundary.js";
 import { createSourceRegistry, hashContent } from "../source/sourceRegistry.js";
+import type { ContentLanguage } from "../harness/contentLanguage.js";
 import type {
   KnowledgeChunk,
   KnowledgePost,
@@ -14,6 +15,7 @@ export interface UserNoteTransformOptions {
   /** Library concepts to match against so the note joins the knowledge graph. */
   libraryConcepts?: string[];
   userLabel?: string;
+  contentLanguage?: ContentLanguage;
 }
 
 export interface UserNoteTransformResult {
@@ -45,7 +47,7 @@ export function transformUserNote(text: string, options: UserNoteTransformOption
     title: buildNoteTitle(noteText),
     url: `local://notes/${noteHash}`,
     type: "user_note",
-    author: options.userLabel ?? "你",
+    author: options.userLabel ?? (options.contentLanguage === "en" ? "You" : "你"),
     publishedAt: createdAt
   };
   const asset: SourceAsset = {
@@ -81,7 +83,7 @@ export function transformUserNote(text: string, options: UserNoteTransformOption
     concepts,
     sources: [source],
     citations: [{ sourceId: source.id, chunkId: chunks[0]!.id }],
-    recommendedBecause: "你发布的笔记。",
+    recommendedBecause: options.contentLanguage === "en" ? "Your note." : "你发布的笔记。",
     trustState: "emerging",
     createdAt,
     estimatedReadMinutes: Math.max(1, Math.round(noteText.length / 600)),

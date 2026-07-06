@@ -10,6 +10,7 @@ import type {
   NextActionPolicy,
   Source
 } from "../types.js";
+import type { ContentLanguage } from "./contentLanguage.js";
 
 export interface KnowledgePostHarnessInput {
   source: Source;
@@ -17,12 +18,14 @@ export interface KnowledgePostHarnessInput {
   index: number;
   createdAt: string;
   recommendedBecause: string;
+  contentLanguage?: ContentLanguage;
 }
 
 export const harnessVersion = "harness-v0";
 
 export function createKnowledgePost(input: KnowledgePostHarnessInput): KnowledgePost {
-  const concepts = input.chunk.conceptHints?.length ? input.chunk.conceptHints : ["Imported Knowledge"];
+  const language = input.contentLanguage ?? "zh";
+  const concepts = input.chunk.conceptHints?.length ? input.chunk.conceptHints : [defaultImportedConcept(language)];
   const primaryConcept = concepts[0];
   const citation: Citation = {
     sourceId: input.source.id,
@@ -35,8 +38,8 @@ export function createKnowledgePost(input: KnowledgePostHarnessInput): Knowledge
 
   return {
     id: `${input.source.id}-post-${input.index + 1}`,
-    title: buildTitle(input.chunk.content, primaryConcept),
-    hook: buildHook(input.chunk.content, primaryConcept),
+    title: buildTitle(input.chunk.content, primaryConcept, language),
+    hook: buildHook(input.chunk.content, primaryConcept, language),
     thesis,
     shortBody: buildShortBody(input.chunk.content),
     summary: input.chunk.content,
@@ -50,22 +53,46 @@ export function createKnowledgePost(input: KnowledgePostHarnessInput): Knowledge
     estimatedReadMinutes: Math.max(1, Math.ceil(input.chunk.content.length / 900)),
     difficulty: inferDifficulty(concepts),
     confidence: inferConfidence(input.source, input.chunk),
-    thread: buildThread(input.chunk, concepts),
+    thread: buildThread(input.chunk, concepts, language),
     graphEdges: buildGraphEdges(input.chunk, concepts),
-    reviewPrompts: buildReviewPrompts(input.chunk, concepts),
+    reviewPrompts: buildReviewPrompts(input.chunk, concepts, language),
     nextActions: buildNextActions(concepts),
     harnessVersion
   };
 }
 
-function buildTitle(text: string, fallbackConcept: string): string {
+function buildTitle(text: string, fallbackConcept: string, language: ContentLanguage): string {
   const sentence = firstUsefulSentence(text);
-  const title = sentence ?? `${fallbackConcept} is worth learning from this source`;
+  const title = sentence ?? (
+    language === "zh"
+      ? `${fallbackConcept} 值得从这个来源里学`
+      : `${fallbackConcept} is worth learning from this source`
+  );
 
   return trimTo(title, 96);
 }
 
-function buildHook(text: string, concept: string): string {
+function buildHook(text: string, concept: string, language: ContentLanguage): string {
+  if (language === "zh") {
+    if (/does not simply summarize/i.test(text)) {
+      return "关键不只是摘要,而是哪些内容能沉淀成长期记忆。";
+    }
+
+    if (/source grounding/i.test(text)) {
+      return "NotebookLM 给出 grounding;学习流还需要把知识重新带回时间线。";
+    }
+
+    if (/recommendation/i.test(text)) {
+      return "当 ranking 知道用户准备好学什么,知识流才会变强。";
+    }
+
+    if (/evaluation/i.test(text)) {
+      return "导入知识很容易,验证用户是否记住才是难点。";
+    }
+
+    return `${concept} 重要,因为它会改变用户接下来看到什么。`;
+  }
+
   if (/does not simply summarize/i.test(text)) {
     return "The interesting part is not the summary. It is what survives into memory.";
   }
@@ -115,39 +142,39 @@ function buildKeyTakeaway(text: string, thesis: string): string {
   return thesis;
 }
 
-function buildThread(chunk: KnowledgeChunk, concepts: string[]): KnowledgeThreadBlock[] {
-  const primaryConcept = concepts[0] ?? "Imported Knowledge";
+function buildThread(chunk: KnowledgeChunk, concepts: string[], language: ContentLanguage): KnowledgeThreadBlock[] {
+  const primaryConcept = concepts[0] ?? defaultImportedConcept(language);
   const secondaryConcept = concepts[1] ?? "Memory";
 
   return [
     {
       id: `${chunk.id}-thread-explain`,
       kind: "explain",
-      title: "What this means",
+      title: language === "zh" ? "这是什么意思" : "What this means",
       body: `This post turns ${primaryConcept} into one teachable claim: ${buildShortBody(chunk.content)}`
     },
     {
       id: `${chunk.id}-thread-example`,
       kind: "example",
-      title: "Example",
+      title: language === "zh" ? "例子" : "Example",
       body: `If a user imports a long video, the agent should create a small post, a source citation, a review prompt, and graph links instead of one giant summary.`
     },
     {
       id: `${chunk.id}-thread-contrast`,
       kind: "contrast",
-      title: "Contrast",
+      title: language === "zh" ? "对比" : "Contrast",
       body: `A normal summarizer compresses content once. A learning feed turns the idea into something that can be recommended, questioned, reviewed, and connected.`
     },
     {
       id: `${chunk.id}-thread-extension`,
       kind: "extension",
-      title: "Where to go next",
+      title: language === "zh" ? "下一步" : "Where to go next",
       body: `Connect ${primaryConcept} to ${secondaryConcept}, then decide whether the user needs a deeper explanation, a broader adjacent concept, or a simpler reframe.`
     },
     {
       id: `${chunk.id}-thread-quiz`,
       kind: "quiz",
-      title: "Quick check",
+      title: language === "zh" ? "快速检查" : "Quick check",
       body: `In one sentence, explain why this idea should return in the timeline later instead of staying buried in the source.`
     }
   ];
@@ -174,23 +201,29 @@ function buildGraphEdges(chunk: KnowledgeChunk, concepts: string[]): KnowledgeGr
   });
 }
 
-function buildReviewPrompts(chunk: KnowledgeChunk, concepts: string[]): KnowledgeReviewPrompt[] {
-  const primaryConcept = concepts[0] ?? "Imported Knowledge";
+function buildReviewPrompts(chunk: KnowledgeChunk, concepts: string[], language: ContentLanguage): KnowledgeReviewPrompt[] {
+  const primaryConcept = concepts[0] ?? defaultImportedConcept(language);
   const secondaryConcept = concepts[1] ?? "Memory";
 
   return [
     {
       id: `${chunk.id}-review-recall`,
       kind: "recall",
-      prompt: `What is the core lesson about ${primaryConcept}?`,
+      prompt: language === "zh" ? `${primaryConcept} 的核心启发是什么?` : `What is the core lesson about ${primaryConcept}?`,
       answerHint: buildKeyTakeaway(chunk.content, primaryConcept),
       dueInDays: 1
     },
     {
       id: `${chunk.id}-review-compare`,
       kind: "compare",
-      prompt: `How does ${primaryConcept} connect to ${secondaryConcept}?`,
-      answerHint: `Look for how the source links concepts into a learning system, not only a summary.`,
+      prompt:
+        language === "zh"
+          ? `${primaryConcept} 和 ${secondaryConcept} 怎么连起来?`
+          : `How does ${primaryConcept} connect to ${secondaryConcept}?`,
+      answerHint:
+        language === "zh"
+          ? "关注来源如何把概念连成学习系统,而不只是做摘要。"
+          : `Look for how the source links concepts into a learning system, not only a summary.`,
       dueInDays: 3
     }
   ];
@@ -220,6 +253,10 @@ function inferConfidence(source: Source, chunk: KnowledgeChunk): KnowledgeConfid
   return chunk.content.length > 120 ? "medium" : "low";
 }
 
+function defaultImportedConcept(language: ContentLanguage): string {
+  return language === "zh" ? "导入知识" : "Imported Knowledge";
+}
+
 function inferRelation(concept: string, nextConcept: string): KnowledgeGraphEdge["relation"] {
   if (concept === "Evaluation" || nextConcept === "Evaluation") {
     return "evaluates";
@@ -247,4 +284,3 @@ function trimTo(text: string, maxLength: number): string {
 function slugConcept(concept: string): string {
   return concept.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 }
-

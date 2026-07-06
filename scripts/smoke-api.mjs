@@ -3,7 +3,10 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createApiServer, listen } from "../apps/api/src/server.mjs";
+import { createApiServer } from "../apps/api/src/server.mjs";
+
+const previousContentLanguage = process.env.AITIMELINE_CONTENT_LANGUAGE;
+process.env.AITIMELINE_CONTENT_LANGUAGE = "zh";
 
 const tempDir = await mkdtemp(join(tmpdir(), "aitimeline-api-"));
 const mediaRootDir = join(tempDir, "media");
@@ -13,6 +16,7 @@ await mkdir(join(mediaRootDir, "smoke-source"), { recursive: true });
 await writeFile(join(mediaRootDir, "smoke-source", "1.png"), new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]));
 
 let discoveryBaseUrl = "";
+const baseUrl = "http://aitimeline-smoke.local";
 const fakeSearchProvider = {
   id: "smoke",
   async search(query) {
@@ -33,14 +37,72 @@ const server = createApiServer({
   enableFixtures: true,
   searchProvider: fakeSearchProvider
 });
-const address = await listen(server, 0);
-const baseUrl = `http://${address.address}:${address.port}`;
 discoveryBaseUrl = baseUrl;
+const originalFetch = globalThis.fetch;
+
+globalThis.fetch = async (input, init = {}) => {
+  const url = getFetchUrl(input);
+
+  if (url.startsWith(baseUrl)) {
+    return dispatchToServer(server, url, init);
+  }
+
+  return originalFetch(input, init);
+};
 
 try {
   const health = await requestJson("/health");
 
   assert.equal(health.ok, true, "API health check should pass");
+
+  const initialSettings = await requestJson("/api/settings");
+
+  assert.equal(initialSettings.contentLanguage, "zh", "settings API should default to Chinese");
+  assert.deepEqual(initialSettings.userSettings, {}, "settings API should keep old snapshots compatible");
+
+  const savedSettings = await requestJson("/api/settings", {
+    method: "POST",
+    body: { contentLanguage: "en" }
+  });
+  const settingsSnapshot = await requestJson("/api/snapshot");
+
+  assert.equal(savedSettings.contentLanguage, "en", "settings API should accept English mode");
+  assert.equal(savedSettings.userSettings.contentLanguage, "en", "settings API should return persisted user settings");
+  assert.equal(
+    settingsSnapshot.userSettings.contentLanguage,
+    "en",
+    "settings API should persist content language into the snapshot"
+  );
+
+  const settingsReloadedServer = createApiServer({
+    dataPath,
+    curationDataPath,
+    mediaRootDir,
+    enableFixtures: true,
+    searchProvider: fakeSearchProvider
+  });
+
+  try {
+    const settingsReloadedResponse = await dispatchToServer(settingsReloadedServer, `${baseUrl}/api/settings`);
+    const settingsReloaded = await settingsReloadedResponse.json();
+
+    assert.equal(settingsReloadedResponse.ok, true, "reloaded API server should read settings");
+    assert.equal(settingsReloaded.contentLanguage, "en", "settings should survive server recreation");
+    assert.equal(
+      settingsReloaded.userSettings.contentLanguage,
+      "en",
+      "reloaded settings should expose persisted user language"
+    );
+  } finally {
+    await closeServer(settingsReloadedServer);
+  }
+
+  const resetSettings = await requestJson("/api/settings", {
+    method: "POST",
+    body: { userSettings: { contentLanguage: "zh" } }
+  });
+
+  assert.equal(resetSettings.contentLanguage, "zh", "settings API should reset back to Chinese mode");
 
   const mediaResponse = await fetch(`${baseUrl}/media/smoke-source/1.png`);
   const mediaBytes = new Uint8Array(await mediaResponse.arrayBuffer());
@@ -104,11 +166,11 @@ try {
     enableFixtures: true,
     searchProvider: fakeSearchProvider
   });
-  const reloadedAddress = await listen(reloadedServer, 0);
 
   try {
-    const reloadedResponse = await fetch(
-      `http://${reloadedAddress.address}:${reloadedAddress.port}/api/timeline?now=2026-06-10T00:00:00.000Z`
+    const reloadedResponse = await dispatchToServer(
+      reloadedServer,
+      `${baseUrl}/api/timeline?now=2026-06-10T00:00:00.000Z`
     );
     const reloadedTimeline = await reloadedResponse.json();
 
@@ -119,9 +181,7 @@ try {
       "dismissed posts should stay dismissed after recreating the store"
     );
   } finally {
-    await new Promise((resolveClose, rejectClose) => {
-      reloadedServer.close((error) => (error ? rejectClose(error) : resolveClose()));
-    });
+    await closeServer(reloadedServer);
   }
 
   const firstTopic = firstPost.concepts[0] ?? "agentic-learning";
@@ -568,10 +628,9 @@ try {
       dataPath: join(tempDir, "bare.json"),
       curationDataPath: join(tempDir, "bare-jobs.json")
     });
-    const bareAddress = await listen(bareServer, 0);
 
     try {
-      const bareResponse = await fetch(`http://${bareAddress.address}:${bareAddress.port}/api/discovery/run`, {
+      const bareResponse = await dispatchToServer(bareServer, `${baseUrl}/api/discovery/run`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ queries: ["anything"], concepts: [] })
@@ -582,9 +641,7 @@ try {
       assert.equal(barePayload.configured, false, "unconfigured discovery/run should report configured=false");
       assert.deepEqual(barePayload.candidates, [], "unconfigured discovery/run should return no candidates");
     } finally {
-      await new Promise((resolveClose, rejectClose) => {
-        bareServer.close((error) => (error ? rejectClose(error) : resolveClose()));
-      });
+      await closeServer(bareServer);
     }
   }
 
@@ -620,10 +677,126 @@ try {
 
   console.log("API smoke passed");
 } finally {
-  await new Promise((resolveClose, rejectClose) => {
-    server.close((error) => (error ? rejectClose(error) : resolveClose()));
-  });
+  globalThis.fetch = originalFetch;
+  await closeServer(server);
   await rm(tempDir, { recursive: true, force: true });
+  if (previousContentLanguage === undefined) {
+    delete process.env.AITIMELINE_CONTENT_LANGUAGE;
+  } else {
+    process.env.AITIMELINE_CONTENT_LANGUAGE = previousContentLanguage;
+  }
+}
+
+function getFetchUrl(input) {
+  if (typeof input === "string") {
+    return input;
+  }
+
+  if (input instanceof URL) {
+    return input.toString();
+  }
+
+  return input.url;
+}
+
+async function dispatchToServer(targetServer, url, options = {}) {
+  const parsedUrl = new URL(url);
+  const body = await normalizeRequestBody(options.body);
+  const headers = {
+    host: parsedUrl.host,
+    ...(options.headers ? Object.fromEntries(new Headers(options.headers).entries()) : {})
+  };
+  const request = {
+    method: options.method ?? "GET",
+    url: `${parsedUrl.pathname}${parsedUrl.search}`,
+    headers,
+    destroy() {},
+    async *[Symbol.asyncIterator]() {
+      if (body.byteLength > 0) {
+        yield body;
+      }
+    }
+  };
+  const response = createMockResponse();
+  const handler = targetServer.listeners("request")[0];
+
+  await new Promise((resolve, reject) => {
+    response.done.then(resolve, reject);
+
+    try {
+      const handled = handler(request, response);
+      Promise.resolve(handled).catch(reject);
+    } catch (error) {
+      reject(error);
+    }
+  });
+
+  return new Response(response.body, {
+    status: response.statusCode,
+    headers: response.headers
+  });
+}
+
+async function normalizeRequestBody(body) {
+  if (!body) {
+    return Buffer.alloc(0);
+  }
+
+  if (typeof body === "string") {
+    return Buffer.from(body);
+  }
+
+  if (body instanceof Uint8Array) {
+    return Buffer.from(body);
+  }
+
+  if (body instanceof ArrayBuffer) {
+    return Buffer.from(body);
+  }
+
+  return Buffer.from(String(body));
+}
+
+function createMockResponse() {
+  const chunks = [];
+  const headers = new Headers();
+  let resolveDone;
+  const done = new Promise((resolve) => {
+    resolveDone = resolve;
+  });
+
+  return {
+    statusCode: 200,
+    headers,
+    done,
+    get body() {
+      return Buffer.concat(chunks);
+    },
+    setHeader(name, value) {
+      headers.set(name, String(value));
+    },
+    writeHead(statusCode, nextHeaders = {}) {
+      this.statusCode = statusCode;
+      for (const [name, value] of Object.entries(nextHeaders)) {
+        headers.set(name, String(value));
+      }
+    },
+    write(chunk) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    },
+    end(chunk) {
+      if (chunk) {
+        this.write(chunk);
+      }
+      resolveDone();
+    }
+  };
+}
+
+async function closeServer(targetServer) {
+  await new Promise((resolveClose) => {
+    targetServer.close(() => resolveClose());
+  });
 }
 
 async function requestJson(path, options = {}) {

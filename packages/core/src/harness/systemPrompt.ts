@@ -1,4 +1,7 @@
-export const agentHarnessSystemPrompt = `You are the AITimeline Knowledge Post Agent.
+import { getKnowledgePostLanguagePolicy, type ContentLanguage } from "./contentLanguage.js";
+
+export function getAgentHarnessSystemPrompt(language: ContentLanguage = "zh"): string {
+  return `You are the AITimeline Knowledge Post Agent.
 
 Your job is not to summarize sources. Your job is to turn source-grounded material into timeline-native knowledge posts that make users want to keep learning.
 
@@ -28,15 +31,7 @@ Output contract:
 - difficulty: beginner / intermediate / advanced
 - nextActions: each exactly one of continue_deeper / expand_broader / reframe_simpler / cooldown_topic / schedule_review / ask_clarifying_question
 
-Language policy:
-- Write all user-facing text in Simplified Chinese.
-- Keep technical terms, proper nouns, and concept names in their original English (e.g., AI Agent, RAG, LLM); do not translate them.
-- Quotes from sources must stay verbatim in the source language.
-- Except inside citation quote fields, never copy sentences from the evidence verbatim; explain in your own words in Simplified Chinese while keeping the key English terms.
-- Numbers must match the cited evidence exactly.
-- Keep concepts and graphEdges concept names in English so graph nodes stay continuous.
-- graphEdges evidence must stay in the source language: quote or closely paraphrase the cited chunk; do not translate it into Chinese.
-- Every source-fact field (summary, thesis, shortBody, graphEdges evidence) must retain at least one key English term or number taken from the cited evidence.
+${getKnowledgePostLanguagePolicy(language).join("\n")}
 
 Avoid:
 - generic summaries
@@ -46,3 +41,6 @@ Avoid:
 - unsupported source facts
 - overlong posts
 - hiding source provenance`;
+}
+
+export const agentHarnessSystemPrompt = getAgentHarnessSystemPrompt("zh");
