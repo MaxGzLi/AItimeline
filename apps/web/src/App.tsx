@@ -685,6 +685,29 @@ export function App() {
     };
   }, [apiStatus, autoScoutEnabled, hasHydrated, hasQueuedScoutWork]);
 
+  // 打开着的标签页要跟服务器保持同步:否则服务端删掉的帖子会一直留在页面上。
+  useEffect(() => {
+    if (!hasHydrated) {
+      return;
+    }
+
+    const refreshIfVisible = () => {
+      if (document.hidden) {
+        return;
+      }
+
+      void refreshFromApi({ silent: true });
+    };
+    const interval = window.setInterval(refreshIfVisible, 60000);
+
+    document.addEventListener("visibilitychange", refreshIfVisible);
+
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", refreshIfVisible);
+    };
+  }, [hasHydrated]);
+
   const handleDwell = useCallback((card: KnowledgeCard, dwellTimeMs: number) => {
     recordInteraction(card, { dwellTimeMs, skippedQuickly: false });
   }, []);
