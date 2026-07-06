@@ -585,6 +585,30 @@ body:has(.x-frame) {
   font-size: 14px;
   border-bottom: 1px solid var(--x-line);
 }
+/* X 式「显示 N 帖子」按钮:发帖框下、信息流上的整行入口 */
+.x-newpill {
+  display: block;
+  width: 100%;
+  padding: 14px 16px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--x-line);
+  color: var(--x-blue);
+  font: inherit;
+  font-size: 15px;
+  text-align: center;
+  cursor: pointer;
+}
+.x-newpill:hover {
+  background: var(--x-hover);
+}
+.x-prodchip {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--x-line);
+  color: var(--x-muted);
+  font-size: 14px;
+  text-align: center;
+}
 
 /* ---------- 右栏 ---------- */
 .x-rail {
