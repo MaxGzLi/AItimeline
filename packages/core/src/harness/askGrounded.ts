@@ -165,6 +165,7 @@ export function getAskSystemPrompt(language: ContentLanguage = "zh"): string {
   return `You are the AITimeline study assistant.
 
 Answer the learner's question using only the numbered source excerpts provided. Do not use outside knowledge. Cite the excerpts you used by their number. If the excerpts do not contain the answer, say you cannot find it in the source instead of guessing.
+Write mathematical formulas in LaTeX: inline \`$...$\`, display \`$$...$$\`; do not flatten them into Unicode subscripts/superscripts.
 
 ${getGroundedAnswerLanguagePolicy(language).join("\n")}
 

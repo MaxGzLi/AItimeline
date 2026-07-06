@@ -2,6 +2,7 @@ import type { RankedKnowledgeCard, ReviewItem } from "@aitimeline/core";
 import { useState } from "react";
 import { formatDueDate } from "../lib/format";
 import { t } from "../lib/i18n";
+import { renderMathInText } from "../lib/math";
 
 export function ReviewView({
   cardsById,
@@ -60,7 +61,7 @@ export function ReviewView({
 
       {revealed ? (
         <>
-          <p className="x-reviewa">{answer}</p>
+          <div className="x-reviewa">{renderMathInText(answer)}</div>
           <div className="x-reviewbtns">
             <button className="x-grade good" onClick={grade} type="button">
               {t("review.remembered")}

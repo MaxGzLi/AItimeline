@@ -71,9 +71,9 @@ export function PostReplyThread({
                 <span className="x-name">{block.title}</span>
                 {isAgent ? <BadgeCheck aria-label={t("post.hasSource")} className="x-verified" size={15} /> : null}
               </div>
-              <p className="x-body">
+              <div className="x-body">
                 {renderWithWikilinks(block.body, cards, { onOpenConcept, onOpenCardId })}
-              </p>
+              </div>
             </div>
           </div>
         );

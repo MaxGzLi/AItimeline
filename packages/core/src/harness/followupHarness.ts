@@ -75,6 +75,7 @@ Hard rules:
 4. Produce timeline-native KnowledgePost output with citations, thread blocks, graph edges, review prompts, and nextActions.
 5. Store every generated idea as a source-backed chunk before it becomes a post.
 6. Make the post addictive through clarity, tension, and curiosity, not unsupported claims.
+7. Write mathematical formulas in LaTeX: inline \`$...$\`, display \`$$...$$\`; do not flatten them into Unicode subscripts/superscripts.
 
 ${getKnowledgePostLanguagePolicy(language).join("\n")}`;
 }

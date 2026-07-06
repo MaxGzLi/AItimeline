@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { getCardMedia, resolveMediaUrl } from "../lib/api";
 import { formatConnectionKind, formatRelativeTime, getAgentInitials, getAgentName, slugConcept } from "../lib/format";
 import { t } from "../lib/i18n";
+import { renderMathInText } from "../lib/math";
 import { renderWithWikilinks } from "../lib/wikilinks";
 import { PostReplyThread } from "./PostReplyThread";
 import type { WikilinkAutocompleteCandidate } from "./WikilinkAutocomplete";
@@ -48,7 +49,7 @@ export function PostView({
   wikilinkCandidates: WikilinkAutocompleteCandidate[];
 }) {
   const postRef = useRef<HTMLElement | null>(null);
-  const bodyRef = useRef<HTMLParagraphElement | null>(null);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
   const visibleSince = useRef<number | null>(null);
   const reportedDwellMs = useRef(0);
   const impressionFired = useRef(false);
@@ -239,10 +240,10 @@ export function PostView({
           </div>
 
           <button className="x-open" onClick={() => onOpen(card)} type="button">
-            {isUserNote ? null : <p className="x-title">{card.title}</p>}
-            <p className="x-body x-body-clamp" ref={bodyRef}>
+            {isUserNote ? null : <div className="x-title">{renderMathInText(card.title)}</div>}
+            <div className="x-body x-body-clamp" ref={bodyRef}>
               {renderWithWikilinks(card.shortBody ?? card.summary, cards, { onOpenConcept, onOpenCardId })}
-            </p>
+            </div>
             {bodyOverflows ? <span className="x-showmore">{t("post.showMore")}</span> : null}
           </button>
 
@@ -272,7 +273,7 @@ export function PostView({
                 <span className="x-name">{t("post.originalSource")}</span>
                 <span className="x-meta">· {source?.title ?? t("format.unknownSource")}</span>
               </span>
-              <p className="x-qtext">“{quoteText}”</p>
+              <div className="x-qtext">“{renderMathInText(quoteText)}”</div>
             </button>
           ) : null}
 
