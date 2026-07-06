@@ -36,6 +36,8 @@ const ALPHA_DECAY = 0.975;
 const REDUCED_MOTION_STEPS = 320;
 const MIN_SCALE = 0.35;
 const MAX_SCALE = 3;
+// Fit-to-view: viewport margin kept clear around the node bounding box.
+const FIT_PADDING = 28;
 
 // A self-authored Canvas force-directed graph: repulsion + springs + centering
 // + damping, seeded deterministically so screenshots are reproducible. Nodes are
@@ -67,6 +69,9 @@ export function LinkedGraphCanvas({
   const panRef = useRef<{ x: number; y: number } | null>(null);
   const pointerStartRef = useRef({ x: 0, y: 0 });
   const reducedMotionRef = useRef(false);
+  // Once the user zooms or pans, fit-to-view stops overriding their camera —
+  // including across graph rebuilds, so it must outlive this effect.
+  const userTookOverRef = useRef(false);
   const graphRef = useRef(graph);
   graphRef.current = graph;
 
@@ -254,6 +259,70 @@ export function LinkedGraphCanvas({
       return { x: node.x * scale + tx, y: node.y * scale + ty };
     }
 
+    function estimateLabelWidth(node: SimNode): number {
+      if (node.kind !== "concept" && node.kind !== "ghost") {
+        return 0;
+      }
+      if (!node.label) {
+        return 0;
+      }
+      // Rough width for the 11px label font; matches the gap used in draw().
+      return truncate(node.label).length * 7 + 4;
+    }
+
+    function computeBoundingBox() {
+      const nodes = nodesRef.current;
+
+      if (nodes.length === 0) {
+        return null;
+      }
+
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+
+      for (const node of nodes) {
+        const radius = nodeRadius(node);
+        const labelWidth = estimateLabelWidth(node);
+        minX = Math.min(minX, node.x - radius);
+        maxX = Math.max(maxX, node.x + radius + labelWidth);
+        minY = Math.min(minY, node.y - radius);
+        maxY = Math.max(maxY, node.y + radius);
+      }
+
+      return { minX, minY, maxX, maxY };
+    }
+
+    // Frames every node (plus its right-side label, for always-labeled
+    // concept/ghost nodes) inside the viewport: never zooms in past 1:1, and
+    // is a no-op once the user has zoomed or panned the camera themselves.
+    function fitToView() {
+      const { width, height } = sizeRef.current;
+
+      if (width === 0 || height === 0) {
+        return;
+      }
+
+      const box = computeBoundingBox();
+
+      if (!box) {
+        return;
+      }
+
+      const bboxWidth = Math.max(box.maxX - box.minX, 1);
+      const bboxHeight = Math.max(box.maxY - box.minY, 1);
+      const viewWidth = Math.max(width - FIT_PADDING * 2, 1);
+      const viewHeight = Math.max(height - FIT_PADDING * 2, 1);
+      const scale = Math.min(1, Math.max(MIN_SCALE, Math.min(viewWidth / bboxWidth, viewHeight / bboxHeight)));
+      const centerX = (box.minX + box.maxX) / 2;
+      const centerY = (box.minY + box.maxY) / 2;
+
+      viewRef.current.scale = scale;
+      viewRef.current.tx = width / 2 - centerX * scale;
+      viewRef.current.ty = height / 2 - centerY * scale;
+    }
+
     function draw() {
       const { width, height } = sizeRef.current;
 
@@ -403,6 +472,11 @@ export function LinkedGraphCanvas({
         alphaRef.current *= ALPHA_DECAY;
       }
       alphaRef.current = 0;
+
+      if (!userTookOverRef.current) {
+        fitToView();
+      }
+
       draw();
     }
 
@@ -464,6 +538,7 @@ export function LinkedGraphCanvas({
       const pan = panRef.current;
 
       if (pan) {
+        userTookOverRef.current = true;
         const view = viewRef.current;
         view.tx += local.x - pan.x;
         view.ty += local.y - pan.y;
@@ -506,6 +581,7 @@ export function LinkedGraphCanvas({
 
     function onWheel(event: WheelEvent) {
       event.preventDefault();
+      userTookOverRef.current = true;
       const rect = cnv.getBoundingClientRect();
       const local = { x: event.clientX - rect.left, y: event.clientY - rect.top };
       const view = viewRef.current;
@@ -525,12 +601,11 @@ export function LinkedGraphCanvas({
         return;
       }
       const { width, height } = entry.contentRect;
-      const wasEmpty = sizeRef.current.width === 0;
       sizeRef.current = { width, height };
-      if (wasEmpty && width > 0 && height > 0) {
-        // First real size: center the world origin in the viewport.
-        viewRef.current.tx = width / 2;
-        viewRef.current.ty = height / 2;
+      if (!userTookOverRef.current) {
+        // Reframe for the new size as long as the user hasn't taken the
+        // camera over themselves.
+        fitToView();
       }
       requestDraw();
     });
