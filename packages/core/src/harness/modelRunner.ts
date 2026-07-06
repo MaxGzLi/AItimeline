@@ -310,6 +310,12 @@ function buildRepairPrompt(validation: HarnessValidationResult[], previousRespon
         "For number mismatches: every number in source-fact fields must appear verbatim in the cited chunks. Remove or reword any number the cited chunks do not contain; do not round, convert, or derive new numbers. Digits inside product or model names (GPT-4o, Claude-3.5) count as numbers — drop such comparisons unless a cited chunk contains them."
       ]
     : [];
+  const overlapGuidance = hasSourceFactOverlapValidationError(validation)
+    ? [
+        "",
+        "For weak source-fact overlap: when rewriting the failing field, keep key English terms and numbers from the cited chunks verbatim as anchors (method names, model names, metric names, etc.), then organize the Simplified Chinese wording around those anchors. Do not use a pure-Chinese paraphrase for source facts."
+      ]
+    : [];
 
   return [
     "The previous JSON response failed the AITimeline harness.",
@@ -317,6 +323,7 @@ function buildRepairPrompt(validation: HarnessValidationResult[], previousRespon
     "Do not apologize. Do not explain the fix. Do not reuse unsupported claims.",
     ...truncationGuidance,
     ...numberGuidance,
+    ...overlapGuidance,
     "",
     "Validation issues:",
     JSON.stringify(
@@ -346,6 +353,12 @@ function hasJsonParseValidationError(validation: readonly HarnessValidationResul
 function hasNumberMismatchValidationError(validation: readonly HarnessValidationResult[]): boolean {
   return validation.some((result) =>
     result.issues.some((issue) => /numbers that do not appear in cited evidence/i.test(issue.message))
+  );
+}
+
+function hasSourceFactOverlapValidationError(validation: readonly HarnessValidationResult[]): boolean {
+  return validation.some((result) =>
+    result.issues.some((issue) => /Source fact does not overlap enough with cited evidence/i.test(issue.message))
   );
 }
 
