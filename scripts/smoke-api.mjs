@@ -193,34 +193,6 @@ try {
   assert.equal(dueTimelinePost.reviewDueAt, firstReviewState.dueAt, "due review timeline post should expose reviewDueAt");
   assert.equal(dueTimelinePost.recommendationIntent, "review", "due review timeline post should use review intent");
 
-  const completedReview = await requestJson(`/api/review/${encodeURIComponent(firstPost.id)}/complete`, {
-    method: "POST",
-    body: {
-      reviewedAt: firstReviewState.dueAt
-    }
-  });
-
-  assert.equal(completedReview.reviewState.intervalDays, 3, "completing review should advance the interval");
-  assert.equal(
-    completedReview.reviewState.lastReviewedAt,
-    firstReviewState.dueAt,
-    "completing review should record lastReviewedAt"
-  );
-
-  const dueAfterComplete = await requestJson(`/api/review/due?now=${encodeURIComponent(firstReviewState.dueAt)}`);
-  const timelineAfterComplete = await requestJson(`/api/timeline?now=${encodeURIComponent(firstReviewState.dueAt)}`);
-  const completedTimelinePost = timelineAfterComplete.posts.find((post) => post.id === firstPost.id);
-
-  assert.equal(
-    dueAfterComplete.due.some((state) => state.postId === firstPost.id),
-    false,
-    "completed reviews should leave the due review endpoint until their next dueAt"
-  );
-  assert.equal(
-    completedTimelinePost,
-    undefined,
-    "completed reviews should rest out of the timeline entirely until the next dueAt"
-  );
 
   const evidenceResult = await requestJson(`/api/evidence/${encodeURIComponent(firstPost.id)}`);
 
@@ -418,7 +390,7 @@ try {
   assert.ok(snapshot.posts.length >= importResult.posts.length, "snapshot should persist posts");
   assert.ok(snapshot.curationJobs.length >= signalResult.records.length, "snapshot should persist curation records");
   assert.equal(snapshot.userMemories.length, 1, "snapshot should persist user memory");
-  assert.ok(snapshot.interactionSignals.length >= 5, "snapshot should persist lifecycle and interaction signals");
+  assert.ok(snapshot.interactionSignals.length >= 4, "snapshot should persist lifecycle and interaction signals");
   assert.equal(snapshot.topicStates.length, 1, "snapshot should persist topic states");
   assert.ok(snapshot.dismissedPostIds.includes(dismissedPost.id), "snapshot should persist dismissed post ids");
   assert.equal(snapshot.reviewStates.length, 1, "snapshot should persist review states");
@@ -615,6 +587,36 @@ try {
       });
     }
   }
+
+  // 完成复习放在最后:休眠期排除会让这张卡退出时间线,中段的排序/整理断言需要它在场。
+  const completedReview = await requestJson(`/api/review/${encodeURIComponent(firstPost.id)}/complete`, {
+    method: "POST",
+    body: {
+      reviewedAt: firstReviewState.dueAt
+    }
+  });
+
+  assert.equal(completedReview.reviewState.intervalDays, 3, "completing review should advance the interval");
+  assert.equal(
+    completedReview.reviewState.lastReviewedAt,
+    firstReviewState.dueAt,
+    "completing review should record lastReviewedAt"
+  );
+
+  const dueAfterComplete = await requestJson(`/api/review/due?now=${encodeURIComponent(firstReviewState.dueAt)}`);
+  const timelineAfterComplete = await requestJson(`/api/timeline?now=${encodeURIComponent(firstReviewState.dueAt)}`);
+  const completedTimelinePost = timelineAfterComplete.posts.find((post) => post.id === firstPost.id);
+
+  assert.equal(
+    dueAfterComplete.due.some((state) => state.postId === firstPost.id),
+    false,
+    "completed reviews should leave the due review endpoint until their next dueAt"
+  );
+  assert.equal(
+    completedTimelinePost,
+    undefined,
+    "completed reviews should rest out of the timeline entirely until the next dueAt"
+  );
 
   console.log("API smoke passed");
 } finally {
