@@ -1,6 +1,7 @@
 import type { RankedKnowledgeCard, ReviewItem } from "@aitimeline/core";
 import { useState } from "react";
 import { formatDueDate } from "../lib/format";
+import { renderMathInText } from "../lib/math";
 
 // One-question-at-a-time spaced review. Grading calls onReviewed, which the
 // parent uses to complete the review on the server; the queue comes from the
@@ -61,7 +62,7 @@ export function ReviewView({
 
       {revealed ? (
         <>
-          <p className="x-reviewa">{answer}</p>
+          <div className="x-reviewa">{renderMathInText(answer)}</div>
           <div className="x-reviewbtns">
             <button className="x-grade good" onClick={grade} type="button">
               记得

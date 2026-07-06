@@ -186,6 +186,7 @@ function buildInitialMessages(
         "- Each thread must include explain, example, contrast, extension, and quiz blocks.",
         "- Use graphEdges for durable concept links that can power review and recommendation.",
         "- Use nextActions to say whether the user should go deeper, broader, simpler, review, or cool down.",
+        "- Write mathematical formulas in LaTeX: inline `$...$`, display `$$...$$`; do not flatten them into Unicode subscripts/superscripts.",
         "- Do not include markdown, comments, or prose outside JSON.",
         ...(contentLanguage === "zh"
           ? [
@@ -204,6 +205,7 @@ function buildInitialMessages(
         "- Each thread must include explain, example, contrast, extension, and quiz blocks.",
         "- Use graphEdges for durable concept links that can power review and recommendation.",
         "- Use nextActions to say whether the user should go deeper, broader, simpler, review, or cool down.",
+        "- Write mathematical formulas in LaTeX: inline `$...$`, display `$$...$$`; do not flatten them into Unicode subscripts/superscripts.",
         "- Do not include markdown, comments, or prose outside JSON.",
         ...(contentLanguage === "zh"
           ? [
