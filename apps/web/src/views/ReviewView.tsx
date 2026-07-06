@@ -2,8 +2,9 @@ import type { RankedKnowledgeCard, ReviewItem } from "@aitimeline/core";
 import { useState } from "react";
 import { formatDueDate } from "../lib/format";
 
-// One-question-at-a-time spaced review. Every grade records a reviewed
-// interaction; the schedule itself is recomputed by createReviewQueue.
+// One-question-at-a-time spaced review. Grading calls onReviewed, which the
+// parent uses to complete the review on the server; the queue comes from the
+// server's due list.
 export function ReviewView({
   cardsById,
   onReviewed,

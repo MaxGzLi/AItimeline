@@ -564,23 +564,6 @@ body:has(.x-frame) {
   font-size: 13px;
   color: var(--x-like);
 }
-.x-dismissed {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--x-line);
-  font-size: 14px;
-  color: var(--x-muted);
-}
-.x-dismissed button {
-  color: var(--x-blue);
-  background: none;
-  border: none;
-  cursor: pointer;
-  font: inherit;
-}
 .x-empty {
   padding: 28px 16px;
   color: var(--x-muted);
