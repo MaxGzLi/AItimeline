@@ -49,6 +49,10 @@ export type SourceQualityGateRunnerKind = "deterministic" | "model";
 
 export type SourceSnapshotKind = SourceAssetKind;
 
+export type SubscriptionKind = "rss" | "youtube_channel";
+
+export type SubscriptionFilterMode = "all" | "relevant" | "listOnly";
+
 export type KnowledgeDifficulty = "beginner" | "intermediate" | "advanced";
 
 export type KnowledgeConfidence = "low" | "medium" | "high";
@@ -600,6 +604,19 @@ export interface DailyAutoJobBudgetRecord {
   limit: number;
   discarded: number;
   updatedAt: string;
+}
+
+export interface SubscriptionRecord {
+  id: string;
+  kind: SubscriptionKind;
+  feedUrl: string;
+  siteUrl?: string;
+  title: string;
+  filterMode: SubscriptionFilterMode;
+  createdAt: string;
+  lastPolledAt?: string;
+  lastItemPublishedAt?: string;
+  lastError?: string;
 }
 
 export interface UserMemory {

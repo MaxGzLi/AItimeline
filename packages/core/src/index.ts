@@ -37,6 +37,7 @@ export * from "./source/sourceImportWorker.js";
 export * from "./source/sourceQualityGate.js";
 export * from "./source/sourceRegistry.js";
 export * from "./storage/persistenceStore.js";
+export * from "./subscriptions/feedParser.js";
 export * from "./text/mathDelimiters.js";
 export * from "./transform/arxivHtmlImport.js";
 export * from "./transform/articleImport.js";

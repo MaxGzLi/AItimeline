@@ -133,6 +133,202 @@ try {
 
   assert.equal(resetSettings.contentLanguage, "zh", "settings API should reset back to Chinese mode");
 
+  const subscriptionDataPath = join(tempDir, "subscriptions.json");
+  const subscriptionCurationPath = join(tempDir, "subscriptions-curation-jobs.json");
+  const subscriptionFeedUrl = "https://feeds.local/aitimeline-rss.xml";
+  const subscriptionFeedFixture = `
+    <rss version="2.0">
+      <channel>
+        <title>Subscription Smoke Feed</title>
+        <link>https://feeds.local/</link>
+        <item>
+          <title>RAG retrieval architecture 4</title>
+          <link>https://sources.local/rag-4</link>
+          <pubDate>Tue, 07 Jul 2026 04:00:00 GMT</pubDate>
+          <description>RAG retrieval architecture and evaluation notes.</description>
+        </item>
+        <item>
+          <title>RAG retrieval architecture 3</title>
+          <link>https://sources.local/rag-3</link>
+          <pubDate>Tue, 07 Jul 2026 03:00:00 GMT</pubDate>
+          <description>RAG retrieval quality improves with grounded evaluation.</description>
+        </item>
+        <item>
+          <title>RAG retrieval architecture 2</title>
+          <link>https://sources.local/rag-2</link>
+          <pubDate>Tue, 07 Jul 2026 02:00:00 GMT</pubDate>
+          <description>RAG system design and indexing trade-offs.</description>
+        </item>
+        <item>
+          <title>RAG retrieval architecture 1</title>
+          <link>https://sources.local/rag-1</link>
+          <pubDate>Tue, 07 Jul 2026 01:00:00 GMT</pubDate>
+          <description>RAG notes beyond the single-source import cap.</description>
+        </item>
+        <item>
+          <title>Gardening calendar</title>
+          <link>https://sources.local/garden</link>
+          <pubDate>Tue, 07 Jul 2026 00:00:00 GMT</pubDate>
+          <description>Tomato watering schedule with no relevant AI concepts.</description>
+        </item>
+      </channel>
+    </rss>
+  `;
+  let subscriptionFeedFetchCount = 0;
+
+  await writeFile(
+    subscriptionDataPath,
+    JSON.stringify({
+      version: 1,
+      updatedAt: "2026-07-07T00:00:00.000Z",
+      topicStates: [
+        {
+          topicId: "RAG",
+          interestScore: 0.8,
+          fatigueScore: 0.1,
+          comprehensionScore: 0.7,
+          updatedAt: "2026-07-07T00:00:00.000Z"
+        }
+      ],
+      userSettings: { contentLanguage: "en" }
+    })
+  );
+
+  const subscriptionServer = createApiServer({
+    dataPath: subscriptionDataPath,
+    curationDataPath: subscriptionCurationPath,
+    mediaRootDir,
+    enableFixtures: true,
+    searchProvider: fakeSearchProvider,
+    feedFetch: async (input) => {
+      const url = getFetchUrl(input);
+
+      if (url !== subscriptionFeedUrl) {
+        throw new Error(`Unexpected subscription fetch: ${url}`);
+      }
+
+      subscriptionFeedFetchCount += 1;
+      return new Response(subscriptionFeedFixture, {
+        status: 200,
+        headers: { "content-type": "application/rss+xml" }
+      });
+    }
+  });
+
+  try {
+    const legacySubscriptionSnapshot = await requestJsonFromServer(subscriptionServer, "/api/snapshot");
+
+    assert.deepEqual(
+      legacySubscriptionSnapshot.subscriptions,
+      [],
+      "legacy API snapshots without subscriptions should expose an empty subscriptions array"
+    );
+
+    const createdSubscription = await requestJsonFromServer(subscriptionServer, "/api/subscriptions", {
+      method: "POST",
+      body: { url: subscriptionFeedUrl }
+    });
+    const listedSubscriptions = await requestJsonFromServer(subscriptionServer, "/api/subscriptions");
+
+    assert.equal(createdSubscription.record.title, "Subscription Smoke Feed", "subscription API should store feed title");
+    assert.equal(createdSubscription.record.filterMode, "relevant", "subscription API should default to relevant mode");
+    assert.equal(listedSubscriptions.records.length, 1, "subscription list API should expose the stored subscription");
+    assert.equal(subscriptionFeedFetchCount, 1, "subscription create should validate by fetching the feed once");
+
+    await requestJsonFromServer(subscriptionServer, "/api/curation/run", {
+      method: "POST",
+      body: {
+        now: "2026-07-07T06:00:00.000Z",
+        kinds: []
+      }
+    });
+
+    const subscriptionSnapshot = await requestJsonFromServer(subscriptionServer, "/api/snapshot");
+    const subscriptionCandidates = subscriptionSnapshot.sourceCandidates.filter(
+      (record) => record.intakeKind === "subscription"
+    );
+    const subscriptionQueuedJobs = await requestJsonFromServer(subscriptionServer, "/api/curation/jobs?status=queued");
+    const subscriptionImportJobs = subscriptionQueuedJobs.jobs.filter((record) => record.job.kind === "import_source");
+
+    assert.equal(subscriptionFeedFetchCount, 2, "first curation run should poll the subscription feed");
+    assert.equal(subscriptionCandidates.length, 5, "subscription poll should save all new feed entries as candidates");
+    assert.equal(
+      subscriptionCandidates.filter((record) => record.status === "queued").length,
+      3,
+      "relevant subscription polling should queue at most three entries per source"
+    );
+    assert.equal(
+      subscriptionCandidates.filter((record) => record.status === "pending").length,
+      2,
+      "irrelevant and over-cap subscription entries should remain pending candidates"
+    );
+    assert.equal(subscriptionImportJobs.length, 3, "subscription import jobs should be enqueued through curation");
+
+    await requestJsonFromServer(subscriptionServer, "/api/curation/run", {
+      method: "POST",
+      body: {
+        now: "2026-07-07T06:00:00.000Z",
+        kinds: []
+      }
+    });
+
+    const subscriptionSnapshotAfterRepeat = await requestJsonFromServer(subscriptionServer, "/api/snapshot");
+    const subscriptionQueuedJobsAfterRepeat = await requestJsonFromServer(
+      subscriptionServer,
+      "/api/curation/jobs?status=queued"
+    );
+
+    assert.equal(subscriptionFeedFetchCount, 2, "repeat subscription polling inside 6h should not fetch again");
+    assert.equal(
+      subscriptionSnapshotAfterRepeat.sourceCandidates.filter((record) => record.intakeKind === "subscription").length,
+      5,
+      "repeat subscription polling should not duplicate candidates"
+    );
+    assert.equal(
+      subscriptionQueuedJobsAfterRepeat.jobs.filter((record) => record.job.kind === "import_source").length,
+      3,
+      "repeat subscription polling should not duplicate import jobs"
+    );
+
+    await requestJsonFromServer(subscriptionServer, "/api/curation/run", {
+      method: "POST",
+      body: {
+        now: "2026-07-07T11:59:00.000Z",
+        kinds: []
+      }
+    });
+
+    assert.equal(subscriptionFeedFetchCount, 2, "lastPolledAt younger than 6h should skip subscription feed fetch");
+
+    await requestJsonFromServer(subscriptionServer, "/api/curation/run", {
+      method: "POST",
+      body: {
+        now: "2026-07-07T13:00:00.000Z",
+        kinds: []
+      }
+    });
+
+    const subscriptionSnapshotAfterRefetch = await requestJsonFromServer(subscriptionServer, "/api/snapshot");
+    const subscriptionQueuedJobsAfterRefetch = await requestJsonFromServer(
+      subscriptionServer,
+      "/api/curation/jobs?status=queued"
+    );
+
+    assert.equal(subscriptionFeedFetchCount, 3, "polling after 6h should fetch the subscription feed again");
+    assert.equal(
+      subscriptionSnapshotAfterRefetch.sourceCandidates.filter((record) => record.intakeKind === "subscription").length,
+      5,
+      "re-fetching an unchanged feed should not duplicate candidates"
+    );
+    assert.equal(
+      subscriptionQueuedJobsAfterRefetch.jobs.filter((record) => record.job.kind === "import_source").length,
+      3,
+      "re-fetching an unchanged feed should not duplicate import jobs"
+    );
+  } finally {
+    await closeServer(subscriptionServer);
+  }
+
   const weeklyDataPath = join(tempDir, "weekly-recap.json");
   const weeklyCurationPath = join(tempDir, "weekly-recap-curation-jobs.json");
   const weeklyPosts = [

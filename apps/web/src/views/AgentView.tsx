@@ -1,8 +1,10 @@
-import type { SourceImport } from "@aitimeline/core";
+import type { SourceImport, SubscriptionRecord } from "@aitimeline/core";
+import { LoaderCircle, Plus, Rss, Trash2 } from "lucide-react";
 import type { FormEvent } from "react";
 import { ImportRow } from "../components/ImportRow";
 import { SourceCandidatePanel } from "../components/SourceCandidatePanel";
 import { SourceImportPanel } from "../components/SourceImportPanel";
+import { formatShortTime } from "../lib/format";
 import { t } from "../lib/i18n";
 import type { ApiStatus, SourceCandidateRecord } from "../lib/types";
 
@@ -21,19 +23,29 @@ export function AgentView({
   isImporting,
   isRunningCuration,
   isSavingCandidate,
+  isSavingSubscription,
   lastScoutAt,
   memoryMessage,
   onAutoScoutChange,
   onCandidateConceptChange,
   onCandidateUrlChange,
+  onDeleteSubscription,
   onImportSubmit,
   onRunCuration,
   onSaveCandidate,
   onSourceUrlChange,
+  onSubscriptionFilterChange,
+  onSubscriptionSubmit,
+  onSubscriptionUrlChange,
   queuedJobCount,
   sourceCandidates,
   sourceImports,
-  sourceUrl
+  sourceUrl,
+  subscriptionMessage,
+  subscriptions,
+  subscriptionUrl,
+  deletingSubscriptionIds,
+  updatingSubscriptionIds
 }: {
   agentTurnCount: number;
   apiMessage: string;
@@ -49,22 +61,34 @@ export function AgentView({
   isImporting: boolean;
   isRunningCuration: boolean;
   isSavingCandidate: boolean;
+  isSavingSubscription: boolean;
   lastScoutAt: string | null;
   memoryMessage: string;
   onAutoScoutChange: (value: boolean) => void;
   onCandidateConceptChange: (value: string) => void;
   onCandidateUrlChange: (value: string) => void;
+  onDeleteSubscription: (id: string) => void;
   onImportSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onRunCuration: () => void;
   onSaveCandidate: (event: FormEvent<HTMLFormElement>) => void;
   onSourceUrlChange: (value: string) => void;
+  onSubscriptionFilterChange: (id: string, filterMode: SubscriptionRecord["filterMode"]) => void;
+  onSubscriptionSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onSubscriptionUrlChange: (value: string) => void;
   queuedJobCount: number;
   sourceCandidates: SourceCandidateRecord[];
   sourceImports: SourceImport[];
   sourceUrl: string;
+  subscriptionMessage: string;
+  subscriptions: SubscriptionRecord[];
+  subscriptionUrl: string;
+  deletingSubscriptionIds: string[];
+  updatingSubscriptionIds: string[];
 }) {
   const rejectedSourceCandidates = sourceCandidates.filter((record) => record.status === "rejected_source");
   const activeSourceCandidates = sourceCandidates.filter((record) => record.status !== "rejected_source");
+  const deletingSubscriptionSet = new Set(deletingSubscriptionIds);
+  const updatingSubscriptionSet = new Set(updatingSubscriptionIds);
 
   return (
     <>
@@ -84,6 +108,80 @@ export function AgentView({
           onUrlChange={onSourceUrlChange}
           url={sourceUrl}
         />
+      </section>
+
+      <section className="x-mr" aria-label={t("mr.subscriptions")}>
+        <h2 className="x-mrhead">
+          <span className="x-pulse" aria-hidden="true" />
+          {t("mr.subscriptions")}
+        </h2>
+        <section className="x-sub-panel">
+          <form className="x-import-form" onSubmit={onSubscriptionSubmit}>
+            <label className="x-import-field">
+              <Rss size={16} />
+              <input
+                aria-label={t("subscription.title")}
+                onChange={(event) => onSubscriptionUrlChange(event.target.value)}
+                placeholder={t("subscription.placeholder")}
+                value={subscriptionUrl}
+              />
+            </label>
+            <button className="x-pill start" disabled={isSavingSubscription} type="submit">
+              {isSavingSubscription ? <LoaderCircle className="x-spin" size={16} /> : <Plus size={16} />}
+              <span>{isSavingSubscription ? t("subscription.adding") : t("subscription.add")}</span>
+            </button>
+          </form>
+          <div className="x-cand-note">{subscriptionMessage}</div>
+
+          {subscriptions.length === 0 ? (
+            <div className="x-cand-empty">{t("subscription.empty")}</div>
+          ) : (
+            <div className="x-sub-list">
+              {subscriptions.map((subscription) => (
+                <article className="x-sub-row" key={subscription.id}>
+                  <div className="x-sub-main">
+                    <div className="x-sub-titleline">
+                      <strong>{subscription.title}</strong>
+                      <span className="x-chip">{t(`subscription.kind.${subscription.kind}`)}</span>
+                    </div>
+                    <small>
+                      {subscription.lastPolledAt
+                        ? t("subscription.lastPolled", { time: formatShortTime(subscription.lastPolledAt) })
+                        : t("subscription.neverPolled")}
+                      {subscription.lastError ? ` · ${t("subscription.lastError", { message: subscription.lastError })}` : ""}
+                    </small>
+                  </div>
+                  <div className="x-sub-actions">
+                    {(["relevant", "all", "listOnly"] as const).map((mode) => (
+                      <button
+                        className={`x-chip action${subscription.filterMode === mode ? " active" : ""}`}
+                        disabled={updatingSubscriptionSet.has(subscription.id)}
+                        key={mode}
+                        onClick={() => onSubscriptionFilterChange(subscription.id, mode)}
+                        type="button"
+                      >
+                        {t(`subscription.filter.${mode}`)}
+                      </button>
+                    ))}
+                    <button
+                      className="x-iconbtn"
+                      disabled={deletingSubscriptionSet.has(subscription.id)}
+                      onClick={() => onDeleteSubscription(subscription.id)}
+                      title={t("subscription.delete")}
+                      type="button"
+                    >
+                      {deletingSubscriptionSet.has(subscription.id) ? (
+                        <LoaderCircle className="x-spin" size={16} />
+                      ) : (
+                        <Trash2 size={16} />
+                      )}
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
       </section>
 
       <section className="x-mr" aria-label={t("mr.observer")}>

@@ -80,6 +80,9 @@ const { createOpenAICompatibleSourceImportWorker, createSourceImportWorker } = a
 );
 const { evaluateSourceQualityDeterministic } = await import("../packages/core/dist/source/sourceQualityGate.js");
 const { createAITimelinePersistenceStore } = await import("../packages/core/dist/storage/persistenceStore.js");
+const { normalizeSubscriptionFeedUrl, parseSubscriptionFeed } = await import(
+  "../packages/core/dist/subscriptions/feedParser.js"
+);
 const { normalizeMathDelimiters } = await import("../packages/core/dist/text/mathDelimiters.js");
 const { fetchArticle, parseArxivAtom, transformArticleUrl } = await import(
   "../packages/core/dist/transform/articleImport.js"
@@ -195,6 +198,133 @@ function makeSourceQualityInput(fixture, sourceId, url, concepts, title = fixtur
     createdAt: "2026-06-10T00:00:00.000Z"
   };
 }
+
+const rssSubscriptionFixture = `
+  <rss version="2.0">
+    <channel>
+      <title>AI Timeline RSS</title>
+      <link>https://example.com/</link>
+      <item>
+        <title><![CDATA[RAG & Agents]]></title>
+        <link>https://example.com/rag-agents</link>
+        <pubDate>Tue, 07 Jul 2026 00:00:00 GMT</pubDate>
+        <description><![CDATA[<p>RAG summary with CDATA.</p>]]></description>
+      </item>
+      <item>
+        <guid>https://example.com/missing-title</guid>
+        <dc:date>2026-07-06T00:00:00.000Z</dc:date>
+        <description>Missing title should not drop the item.</description>
+      </item>
+    </channel>
+  </rss>
+`;
+const atomSubscriptionFixture = `
+  <feed xmlns="http://www.w3.org/2005/Atom">
+    <title>AI Timeline Atom</title>
+    <link href="https://example.org/" />
+    <entry>
+      <title>Agent Memory</title>
+      <link rel="alternate" href="https://example.org/agent-memory" />
+      <updated>2026-07-05T12:00:00Z</updated>
+      <summary><![CDATA[Agent <b>memory</b> summary.]]></summary>
+    </entry>
+    <entry>
+      <title>Entry without link tag</title>
+      <id>https://example.org/no-link-tag</id>
+    </entry>
+  </feed>
+`;
+const parsedRssSubscription = parseSubscriptionFeed(rssSubscriptionFixture, "https://example.com/rss.xml");
+const parsedAtomSubscription = parseSubscriptionFeed(atomSubscriptionFixture, "https://example.org/atom.xml");
+const parsedBadSubscription = parseSubscriptionFeed("<rss><channel><item></channel></rss>", "https://example.com/bad.xml");
+
+assert.equal(parsedRssSubscription.error, undefined, "RSS subscription fixture should parse without error");
+assert.equal(parsedRssSubscription.entries.length, 2, "RSS subscription fixture should keep CDATA and missing-field items");
+assert.equal(parsedRssSubscription.entries[0].title, "RAG & Agents", "RSS parser should decode CDATA text");
+assert.equal(parsedRssSubscription.entries[0].summary, "RAG summary with CDATA.", "RSS parser should strip summary HTML");
+assert.equal(
+  parsedRssSubscription.entries[1].title,
+  "Untitled feed item",
+  "RSS parser should retain entries missing title"
+);
+assert.equal(parsedAtomSubscription.error, undefined, "Atom subscription fixture should parse without error");
+assert.equal(parsedAtomSubscription.entries.length, 2, "Atom subscription fixture should keep missing-link entries");
+assert.equal(parsedAtomSubscription.entries[0].link, "https://example.org/agent-memory", "Atom parser should read link href");
+assert.equal(
+  parsedAtomSubscription.entries[1].link,
+  "https://example.org/no-link-tag",
+  "Atom parser should fall back to entry id"
+);
+assert.equal(parsedBadSubscription.entries.length, 0, "bad feed XML should return an empty entries array");
+assert.ok(parsedBadSubscription.error, "bad feed XML should return an error instead of throwing");
+
+const parsedEntitySubscription = parseSubscriptionFeed(
+  `<rss version="2.0"><channel><title>Entities</title><item><title>It&rsquo;s here &mdash; now &amp; then</title><link>https://example.com/entities</link></item></channel></rss>`,
+  "https://example.com/entities.xml"
+);
+
+assert.equal(
+  parsedEntitySubscription.entries[0].title,
+  "It’s here — now & then",
+  "feed parser should decode common HTML named entities in titles"
+);
+
+const youtubeChannelId = "UCaaaaaaaaaaaaaaaaaaaaaa";
+const youtubeFeedUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${youtubeChannelId}`;
+const youtubeHandleFetch = async () =>
+  new Response(`<html><script>{"channelId":"${youtubeChannelId}"}</script></html>`, {
+    status: 200,
+    headers: { "content-type": "text/html" }
+  });
+const normalizedYouTubeByChannel = await normalizeSubscriptionFeedUrl(
+  `youtube.com/channel/${youtubeChannelId}`
+);
+const normalizedYouTubeByFeed = await normalizeSubscriptionFeedUrl(
+  `youtube.com/feeds/videos.xml?channel_id=${youtubeChannelId}`
+);
+const normalizedYouTubeByHandle = await normalizeSubscriptionFeedUrl("youtube.com/@aitimeline", {
+  fetch: youtubeHandleFetch
+});
+
+assert.equal(normalizedYouTubeByChannel.feedUrl, youtubeFeedUrl, "YouTube channel URL should normalize to feed URL");
+assert.equal(normalizedYouTubeByFeed.feedUrl, youtubeFeedUrl, "YouTube feed URL should stay canonical");
+assert.equal(normalizedYouTubeByHandle.feedUrl, youtubeFeedUrl, "YouTube handle URL should resolve through fixture HTML");
+assert.equal(normalizedYouTubeByHandle.kind, "youtube_channel", "YouTube handle normalization should mark channel kind");
+
+const youtubeCrowdedHandleFetch = async () =>
+  new Response(
+    `<html><script>{"channelId":"UCbbbbbbbbbbbbbbbbbbbbbb"}</script><script>{"externalId":"${youtubeChannelId}"}</script></html>`,
+    {
+      status: 200,
+      headers: { "content-type": "text/html" }
+    }
+  );
+const normalizedYouTubeCrowdedHandle = await normalizeSubscriptionFeedUrl("youtube.com/@crowded", {
+  fetch: youtubeCrowdedHandleFetch
+});
+
+assert.equal(
+  normalizedYouTubeCrowdedHandle.feedUrl,
+  youtubeFeedUrl,
+  "handle resolution should prefer the page owner's externalId over an earlier channelId"
+);
+
+let legacySubscriptionJson = JSON.stringify({
+  version: 1,
+  updatedAt: "2026-07-07T00:00:00.000Z"
+});
+const legacySubscriptionStore = createAITimelinePersistenceStore({
+  read: () => legacySubscriptionJson,
+  write: (serialized) => {
+    legacySubscriptionJson = serialized;
+  }
+});
+
+assert.deepEqual(
+  legacySubscriptionStore.getSnapshot().subscriptions,
+  [],
+  "old snapshots without subscriptions should expose an empty subscriptions array"
+);
 
 const weeklyRecapWeekStart = "2026-06-29T00:00:00.000Z";
 const weeklyRecap = buildWeeklyRecap(

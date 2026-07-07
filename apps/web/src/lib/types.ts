@@ -15,12 +15,14 @@ import type {
   SourceImport,
   SourceRegistry,
   SourceQualityVerdict,
+  SubscriptionRecord,
   TopicState,
   WeeklyRecapRecord
 } from "@aitimeline/core";
 
 export type { DailyAutoJobBudgetRecord };
 export type { ConceptBrief };
+export type { SubscriptionRecord };
 
 export type AiMessage = {
   id: string;
@@ -126,6 +128,7 @@ export type ApiSnapshot = {
   mergedSources?: MergedSourceRecord[];
   autoJobBudget?: DailyAutoJobBudgetRecord[];
   conceptBriefs?: ConceptBrief[];
+  subscriptions?: SubscriptionRecord[];
 };
 
 export type ApiConceptBriefResponse = {
@@ -266,7 +269,7 @@ export type SourceCandidateRecord = {
   id: string;
   candidate: BackgroundSourceCandidate;
   status: SourceCandidateStatus;
-  intakeKind: "user_paste" | "browser_share" | "agent_discovery" | "manual";
+  intakeKind: "user_paste" | "browser_share" | "agent_discovery" | "manual" | "subscription";
   createdAt: string;
   updatedAt: string;
   qualityGate?: SourceQualityVerdict;
