@@ -98,6 +98,10 @@ try {
     Array.isArray(settingsSnapshot.conceptBriefs),
     "old snapshots should expose conceptBriefs as an empty compatible field"
   );
+  assert.ok(
+    Array.isArray(settingsSnapshot.weeklyRecaps),
+    "old snapshots should expose weeklyRecaps as an empty compatible field"
+  );
 
   const settingsReloadedServer = createApiServer({
     dataPath,
@@ -128,6 +132,164 @@ try {
   });
 
   assert.equal(resetSettings.contentLanguage, "zh", "settings API should reset back to Chinese mode");
+
+  const weeklyDataPath = join(tempDir, "weekly-recap.json");
+  const weeklyCurationPath = join(tempDir, "weekly-recap-curation-jobs.json");
+  const weeklyPosts = [
+    makeApiSmokePost({
+      id: "weekly-api-old",
+      title: "Old RAG API card",
+      concepts: ["RAG", "Evaluation"],
+      createdAt: "2026-06-23T00:00:00.000Z"
+    }),
+    makeApiSmokePost({
+      id: "weekly-api-new-rag",
+      title: "New RAG API card",
+      concepts: ["RAG", "Retrieval"],
+      createdAt: "2026-06-29T00:00:00.000Z"
+    }),
+    makeApiSmokePost({
+      id: "weekly-api-new-agent",
+      title: "New Agent API card",
+      concepts: ["Agent Memory"],
+      createdAt: "2026-07-02T00:00:00.000Z"
+    })
+  ];
+
+  await writeFile(
+    weeklyDataPath,
+    JSON.stringify({
+      version: 1,
+      updatedAt: "2026-07-06T00:00:00.000Z",
+      posts: weeklyPosts,
+      reviewStates: [
+        {
+          postId: "weekly-api-old",
+          intervalDays: 3,
+          dueAt: "2026-07-03T00:00:00.000Z",
+          lastReviewedAt: "2026-07-04T00:00:00.000Z"
+        },
+        {
+          postId: "weekly-api-new-rag",
+          intervalDays: 1,
+          dueAt: "2026-07-05T00:00:00.000Z"
+        }
+      ],
+      interactionSignals: [
+        {
+          id: "weekly-api-signal",
+          signal: {
+            postId: "weekly-api-new-agent",
+            topicId: "Agent Memory",
+            conceptIds: ["Agent Memory"],
+            impression: true,
+            dwellTimeMs: 9000,
+            openedThread: true,
+            liked: false,
+            saved: true,
+            askedQuestion: false,
+            reviewed: true,
+            skippedQuickly: false,
+            createdAt: "2026-07-02T00:00:00.000Z"
+          },
+          feedback: {
+            postId: "weekly-api-new-agent",
+            topicId: "Agent Memory",
+            conceptIds: ["Agent Memory"],
+            signalStrength: 1,
+            inferredState: "needs_review",
+            nextAction: "schedule_review",
+            reason: "Weekly recap smoke."
+          },
+          createdAt: "2026-07-02T00:00:00.000Z"
+        }
+      ],
+      userSettings: { contentLanguage: "en" }
+    })
+  );
+
+  const weeklyServer = createApiServer({
+    dataPath: weeklyDataPath,
+    curationDataPath: weeklyCurationPath,
+    mediaRootDir,
+    enableFixtures: true,
+    searchProvider: fakeSearchProvider
+  });
+
+  try {
+    const weeklyFirst = await requestJsonFromServer(
+      weeklyServer,
+      `/api/recap/weekly?now=${encodeURIComponent("2026-07-07T12:00:00.000Z")}`
+    );
+    const weeklySecond = await requestJsonFromServer(
+      weeklyServer,
+      `/api/recap/weekly?now=${encodeURIComponent("2026-07-07T12:00:00.000Z")}`
+    );
+    const weeklySnapshot = await requestJsonFromServer(weeklyServer, "/api/snapshot");
+
+    assert.ok(weeklyFirst.recap, "weekly recap API should lazily generate the latest completed week");
+    assert.equal(weeklyFirst.recap.id, weeklySecond.recap.id, "weekly recap API should return the same id on repeat");
+    assert.equal(weeklyFirst.recap.stats.newCardCount, 2, "weekly recap API should expose correct new-card count");
+    assert.equal(weeklyFirst.recap.stats.newConceptCount, 2, "weekly recap API should expose correct new-concept count");
+    assert.equal(weeklyFirst.recap.stats.reviewCompletedCount, 2, "weekly recap API should expose correct review completion count");
+    assert.equal(weeklySnapshot.weeklyRecaps.length, 1, "weekly recap API should not duplicate same-week records");
+
+    const weeklySeen = await requestJsonFromServer(weeklyServer, "/api/recap/weekly/seen", {
+      method: "POST",
+      body: {
+        dismissed: true,
+        id: weeklyFirst.recap.id,
+        seenAt: "2026-07-07T12:30:00.000Z"
+      }
+    });
+
+    assert.equal(weeklySeen.recap.seenAt, "2026-07-07T12:30:00.000Z", "weekly recap seen endpoint should mark seenAt");
+    assert.equal(
+      weeklySeen.recap.dismissedAt,
+      "2026-07-07T12:30:00.000Z",
+      "weekly recap seen endpoint should persist dismissals"
+    );
+  } finally {
+    await closeServer(weeklyServer);
+  }
+
+  const shortWeeklyDataPath = join(tempDir, "weekly-recap-short.json");
+  const shortWeeklyCurationPath = join(tempDir, "weekly-recap-short-curation-jobs.json");
+
+  await writeFile(
+    shortWeeklyDataPath,
+    JSON.stringify({
+      version: 1,
+      updatedAt: "2026-07-06T00:00:00.000Z",
+      posts: [
+        makeApiSmokePost({
+          id: "weekly-api-too-new",
+          title: "Too new API card",
+          concepts: ["Fresh"],
+          createdAt: "2026-07-02T00:00:00.000Z"
+        })
+      ]
+    })
+  );
+
+  const shortWeeklyServer = createApiServer({
+    dataPath: shortWeeklyDataPath,
+    curationDataPath: shortWeeklyCurationPath,
+    mediaRootDir,
+    enableFixtures: true,
+    searchProvider: fakeSearchProvider
+  });
+
+  try {
+    const shortWeekly = await requestJsonFromServer(
+      shortWeeklyServer,
+      `/api/recap/weekly?now=${encodeURIComponent("2026-07-07T12:00:00.000Z")}`
+    );
+
+    assert.equal(shortWeekly.recap, null, "weekly recap API should return null when data is younger than a full week");
+  } finally {
+    await closeServer(shortWeeklyServer);
+  }
 
   const connectionDataPath = join(tempDir, "connection-note.json");
   const connectionCurationPath = join(tempDir, "connection-curation-jobs.json");
@@ -453,6 +615,7 @@ try {
     const legacyDue = await legacyDueResponse.json();
 
     assert.equal(legacySnapshotResponse.ok, true, "legacy dismissed snapshot should load");
+    assert.deepEqual(legacySnapshot.weeklyRecaps, [], "legacy snapshots without weeklyRecaps should load with an empty array");
     assert.deepEqual(
       legacySnapshot.dismissedPosts,
       [

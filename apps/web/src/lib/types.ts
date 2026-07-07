@@ -15,7 +15,8 @@ import type {
   SourceImport,
   SourceRegistry,
   SourceQualityVerdict,
-  TopicState
+  TopicState,
+  WeeklyRecapRecord
 } from "@aitimeline/core";
 
 export type { DailyAutoJobBudgetRecord };
@@ -166,6 +167,14 @@ export type ApiReviewDueResponse = {
 
 export type ApiDismissedPostsResponse = {
   records: DismissedPostSummary[];
+};
+
+export type ApiWeeklyRecapResponse = {
+  recap: WeeklyRecapRecord | null;
+};
+
+export type ApiWeeklyRecapSeenResponse = {
+  recap: WeeklyRecapRecord;
 };
 
 export type ApiEvidenceResponse = {

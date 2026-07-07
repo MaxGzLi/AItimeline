@@ -27,10 +27,13 @@ import {
   createSourceImportWorker,
   createSourcePostReleasePlan,
   createTavilySearchProvider,
+  buildWeeklyRecap,
+  buildWeeklyRecapId,
   evaluateInteraction,
   fetchArticle,
   fetchYouTubeTranscript,
   filterTimelineLifecycle,
+  getMostRecentCompletedIsoWeekStart,
   getHardDismissedPostIds,
   getSoftDismissalReturnAt,
   isTimelineDismissalActive,
@@ -170,6 +173,32 @@ export function createApiServer(options = {}) {
         });
 
         sendJson(response, 200, getSettingsResponse(persistenceStore, process.env, snapshot));
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/recap/weekly") {
+        sendJson(
+          response,
+          200,
+          getWeeklyRecapResponse(
+            persistenceStore,
+            url.searchParams.get("now"),
+            resolveContentLanguage(persistenceStore, process.env)
+          )
+        );
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/recap/weekly/seen") {
+        const body = await readJsonBody(request);
+        const result = markWeeklyRecapSeen(persistenceStore, body);
+
+        if (!result) {
+          sendJson(response, 404, { error: "Weekly recap not found." });
+          return;
+        }
+
+        sendJson(response, 200, result);
         return;
       }
 
@@ -923,6 +952,82 @@ function getSettingsResponse(persistenceStore, env, snapshot = persistenceStore.
     userSettings: snapshot.userSettings,
     environmentContentLanguage: environmentContentLanguage ?? null
   };
+}
+
+function getWeeklyRecapResponse(persistenceStore, nowValue, contentLanguage) {
+  const now = parseOptionalDate(nowValue);
+  const weekStart = getMostRecentCompletedIsoWeekStart(now);
+  const recapId = buildWeeklyRecapId(weekStart);
+  let snapshot = persistenceStore.getSnapshot();
+  const existing = snapshot.weeklyRecaps.find((record) => record.id === recapId);
+
+  if (existing) {
+    return {
+      recap: existing,
+      snapshotSummary: summarizeSnapshot(snapshot)
+    };
+  }
+
+  const recap = buildWeeklyRecap(
+    {
+      posts: snapshot.posts,
+      reviewStates: snapshot.reviewStates,
+      interactionSignals: snapshot.interactionSignals.map((record) => record.signal),
+      topicStates: snapshot.topicStates,
+      contentLanguage
+    },
+    weekStart
+  );
+
+  if (!recap) {
+    return {
+      recap: null,
+      snapshotSummary: summarizeSnapshot(snapshot)
+    };
+  }
+
+  snapshot = persistenceStore.saveWeeklyRecaps([recap], now);
+
+  return {
+    recap: snapshot.weeklyRecaps.find((record) => record.id === recap.id) ?? recap,
+    snapshotSummary: summarizeSnapshot(snapshot)
+  };
+}
+
+function markWeeklyRecapSeen(persistenceStore, body) {
+  const now = typeof body.seenAt === "string" ? body.seenAt : new Date().toISOString();
+  const snapshot = persistenceStore.getSnapshot();
+  const id =
+    typeof body.id === "string" && body.id.trim()
+      ? body.id.trim()
+      : buildWeeklyRecapId(getMostRecentCompletedIsoWeekStart(typeof body.now === "string" ? body.now : now));
+  const existing = snapshot.weeklyRecaps.find((record) => record.id === id);
+
+  if (!existing) {
+    return null;
+  }
+
+  const nextRecord = {
+    ...existing,
+    seenAt: existing.seenAt ?? now,
+    dismissedAt: body.dismissed ? existing.dismissedAt ?? now : existing.dismissedAt
+  };
+  const nextSnapshot = persistenceStore.saveWeeklyRecaps([nextRecord], now);
+
+  return {
+    recap: nextSnapshot.weeklyRecaps.find((record) => record.id === id) ?? nextRecord,
+    snapshotSummary: summarizeSnapshot(nextSnapshot)
+  };
+}
+
+function parseOptionalDate(value) {
+  if (typeof value !== "string") {
+    return new Date();
+  }
+
+  const date = new Date(value);
+
+  return Number.isFinite(date.getTime()) ? date : new Date();
 }
 
 function createConfiguredAskModelClient(env) {
@@ -3264,7 +3369,8 @@ function summarizeSnapshot(snapshot) {
     sourceQualityVerdicts: snapshot.sourceQualityVerdicts.length,
     mergedSources: snapshot.mergedSources.length,
     autoJobBudget: snapshot.autoJobBudget,
-    conceptBriefs: snapshot.conceptBriefs.length
+    conceptBriefs: snapshot.conceptBriefs.length,
+    weeklyRecaps: snapshot.weeklyRecaps.length
   };
 }
 

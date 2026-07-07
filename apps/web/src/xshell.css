@@ -691,6 +691,92 @@ body:has(.x-frame) {
   text-align: center;
 }
 
+/* ---------- Weekly recap card ---------- */
+.x-weekly-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px 16px 16px;
+  border-bottom: 1px solid var(--x-line);
+  background: var(--x-bg);
+}
+.x-weekly-head,
+.x-weekly-foot {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+.x-weekly-head h2 {
+  margin: 2px 0 0;
+  color: var(--x-ink);
+  font-size: 18px;
+  font-weight: 800;
+}
+.x-weekly-range {
+  margin: 0;
+  color: var(--x-muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+.x-weekly-copy {
+  display: grid;
+  gap: 3px;
+}
+.x-weekly-copy p {
+  margin: 0;
+  color: var(--x-ink);
+  font-size: 14px;
+  line-height: 1.42;
+}
+.x-weekly-chart {
+  width: 100%;
+  height: 150px;
+  overflow: hidden;
+  border: 1px solid var(--x-line);
+  border-radius: 8px;
+  background: var(--x-module);
+}
+.x-weekly-chart canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.x-weekly-foot {
+  align-items: center;
+}
+.x-weekly-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  flex: 1;
+  min-width: 0;
+}
+.x-weekly-stat {
+  min-width: 0;
+  padding-right: 12px;
+}
+.x-weekly-stat + .x-weekly-stat {
+  padding-left: 12px;
+  border-left: 1px solid var(--x-line);
+}
+.x-weekly-stat strong {
+  display: block;
+  color: var(--x-ink);
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.x-weekly-stat span {
+  display: block;
+  margin-top: 4px;
+  color: var(--x-muted);
+  font-size: 12px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ---------- 右栏 ---------- */
 .x-rail {
   position: sticky;
