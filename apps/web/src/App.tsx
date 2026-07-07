@@ -100,6 +100,7 @@ import type {
   ApiStatus,
   ApiTimelineResponse,
   AskApiResult,
+  DailyAutoJobBudgetRecord,
   DismissedPostSummary,
   EvidenceLedger,
   InteractionSignals,
@@ -188,6 +189,7 @@ export function App() {
   });
   const [lastScoutAt, setLastScoutAt] = useState<string | null>(null);
   const [queuedJobCount, setQueuedJobCount] = useState(0);
+  const [autoJobBudget, setAutoJobBudget] = useState<DailyAutoJobBudgetRecord | null>(null);
   const [agentTurnCount, setAgentTurnCount] = useState(0);
   const [memoryMessage, setMemoryMessage] = useState(() => t("memory.default"));
   const [candidateMessage, setCandidateMessage] = useState(() => t("candidate.message.default"));
@@ -1013,6 +1015,7 @@ export function App() {
       setAgentTurns(snapshot.agentTurns);
       setNotifications(notificationsResult.records);
       setReviewDueItems(reviewDue.due);
+      setAutoJobBudget(snapshot.autoJobBudget?.find((record) => record.date === now.slice(0, 10)) ?? null);
       setQueuedJobCount(queuedJobs.jobs.length);
       productionPeakRef.current =
         queuedJobs.jobs.length === 0 ? 0 : Math.max(productionPeakRef.current, queuedJobs.jobs.length);
@@ -1913,6 +1916,7 @@ export function App() {
             {autoScoutEnabled ? <Pause size={14} /> : <Play size={14} />}
             <span>{autoScoutEnabled ? t("scout.on") : t("scout.off")}</span>
             {queuedJobCount > 0 ? <em>{t("scout.queued", { count: queuedJobCount })}</em> : null}
+            <em>{t("scout.budget", { used: autoJobBudget?.used ?? 0, limit: autoJobBudget?.limit ?? 20 })}</em>
           </button>
         </header>
 
@@ -2049,7 +2053,7 @@ export function App() {
             isRunning={isRunningCuration}
             message={curationMessage}
             onRunCuration={handleRunCuration}
-            records={sourceCandidates}
+            records={sourceCandidates.filter((record) => record.status !== "rejected_source")}
           />
         ) : null}
 

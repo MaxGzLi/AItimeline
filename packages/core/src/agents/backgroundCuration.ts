@@ -6,6 +6,7 @@ import type {
   InteractionSignal,
   LearningFeedback,
   NextActionPolicy,
+  DailyAutoJobBudgetRecord,
   Source,
   TopicState
 } from "../types.js";
@@ -91,6 +92,19 @@ export interface BackgroundCurationConfig {
   sourceDiscoveryDelayMinutes: number;
 }
 
+export interface ApplyDailyAutoJobBudgetInput {
+  plan: BackgroundCurationPlan;
+  budget?: DailyAutoJobBudgetRecord;
+  limit: number;
+  now?: string | Date;
+}
+
+export interface DailyAutoJobBudgetResult {
+  plan: BackgroundCurationPlan;
+  budget: DailyAutoJobBudgetRecord;
+  discardedJobIds: string[];
+}
+
 export interface CreateBackgroundCurationPlanInput {
   signals: InteractionSignal[];
   feedback: LearningFeedback[];
@@ -131,6 +145,39 @@ export function createBackgroundCurationPlan(input: CreateBackgroundCurationPlan
   for (const expansionJob of expansionPlan.jobs) {
     const signal = signalsByPost.get(expansionJob.postId);
     const feedback = feedbackByPost.get(expansionJob.postId);
+
+    if (expansionJob.nextAction === "continue_deeper") {
+      const selectedCandidates = selectSourceCandidates(
+        expansionJob,
+        input.sourceCandidates ?? [],
+        usedCandidateIds,
+        config
+      );
+
+      if (selectedCandidates.length === 0) {
+        queueJob(
+          createSourceDiscoveryJob(expansionJob, generatedAt, config, input.contentLanguage ?? "zh"),
+          jobs,
+          jobsPerTopic,
+          suppressions,
+          config
+        );
+        continue;
+      }
+
+      for (const candidate of selectedCandidates) {
+        usedCandidateIds.add(candidate.id);
+        queueJob(
+          createSourceImportJob(expansionJob, candidate, generatedAt, input.contentLanguage ?? "zh"),
+          jobs,
+          jobsPerTopic,
+          suppressions,
+          config
+        );
+      }
+
+      continue;
+    }
 
     queueJob(mapExpansionJob(expansionJob), jobs, jobsPerTopic, suppressions, config);
 
@@ -176,6 +223,65 @@ export function createBackgroundCurationPlan(input: CreateBackgroundCurationPlan
     cooledTopicIds: expansionPlan.cooledTopicIds,
     expansionPlan
   };
+}
+
+export function applyDailyAutoJobBudget(input: ApplyDailyAutoJobBudgetInput): DailyAutoJobBudgetResult {
+  const now = normalizeDate(input.now ?? input.plan.generatedAt);
+  const date = now.toISOString().slice(0, 10);
+  const limit = Math.max(0, Math.floor(input.limit));
+  const startingUsed = input.budget?.date === date ? input.budget.used : 0;
+  const startingDiscarded = input.budget?.date === date ? input.budget.discarded : 0;
+  let used = startingUsed;
+  let discarded = startingDiscarded;
+  const discardedJobIds: string[] = [];
+  const discardedSourceCandidateIds = new Set<string>();
+  const jobs = input.plan.jobs.filter((job) => {
+    if (!isMeteredAutoJobKind(job.kind)) {
+      return true;
+    }
+
+    if (used < limit) {
+      used += 1;
+      return true;
+    }
+
+    discarded += 1;
+    discardedJobIds.push(job.id);
+    if (job.sourceCandidate?.id) {
+      discardedSourceCandidateIds.add(job.sourceCandidate.id);
+    }
+    return false;
+  });
+  const budget: DailyAutoJobBudgetRecord = {
+    date,
+    used,
+    limit,
+    discarded,
+    updatedAt: now.toISOString()
+  };
+
+  return {
+    plan: {
+      ...input.plan,
+      jobs,
+      acceptedSourceCandidateIds: input.plan.acceptedSourceCandidateIds.filter(
+        (candidateId) => !discardedSourceCandidateIds.has(candidateId)
+      ),
+      suppressions: [
+        ...input.plan.suppressions,
+        ...discardedJobIds.map((jobId) => ({
+          topicId: "daily-auto-job-budget",
+          reason: `Discarded automatic job ${jobId} because the daily budget was exhausted.`
+        }))
+      ]
+    },
+    budget,
+    discardedJobIds
+  };
+}
+
+export function isMeteredAutoJobKind(kind: BackgroundCurationJobKind): boolean {
+  return kind === "discover_sources" || kind === "import_source" || kind === "generate_followup";
 }
 
 function shouldQueueBackgroundSources(
@@ -269,9 +375,13 @@ function createSourceImportJob(
     nextAction: expansionJob.nextAction,
     priority: roundPriority(Math.min(1, expansionJob.priority * 0.65 + sourceScore * 0.35)),
     reason:
-      contentLanguage === "en"
-        ? `You showed interest, so this related source is being packaged for your timeline: ${candidate.reason}`
-        : `你表现出了兴趣,所以为时间线打包这个相关来源:${candidate.reason}`,
+      expansionJob.nextAction === "continue_deeper"
+        ? contentLanguage === "en"
+          ? `You asked to go deeper, so this new source is being packaged for your timeline: ${candidate.reason}`
+          : `你点了深入,所以为时间线打包这个新来源:${candidate.reason}`
+        : contentLanguage === "en"
+          ? `You showed interest, so this related source is being packaged for your timeline: ${candidate.reason}`
+          : `你表现出了兴趣,所以为时间线打包这个相关来源:${candidate.reason}`,
     createdAt: generatedAt.toISOString(),
     runAfter: generatedAt.toISOString(),
     sourceCandidate: candidate

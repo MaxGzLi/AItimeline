@@ -9,6 +9,24 @@ export const demoProfile: UserProfile = {
   weakConcepts: ["评估", "RAG"]
 };
 
+export const seoWaterSourceFixture = {
+  title: "Grok Advanced Guide: Unlock AI Success",
+  body: [
+    "Welcome to the ultimate guide for Grok success. In today's fast-moving world, businesses need innovative AI solutions to transform productivity and unlock growth.",
+    "This comprehensive advanced guide helps teams leverage cutting-edge technology, boost workflows, empower stakeholders, and revolutionize domain knowledge with seamless intelligence.",
+    "Whether you are a beginner or expert, mastering AI will skyrocket outcomes. Start your journey, embrace the future, and discover game-changing strategies for every industry."
+  ].join("\n\n")
+};
+
+export const technicalSourceFixture = {
+  title: "Speculative decoding reduces LLM serving latency",
+  body: [
+    "Speculative decoding uses a small draft model to propose several tokens, then asks the target model to verify the proposed block in one forward pass. The mechanism preserves exact target-model sampling when rejected tokens are resampled from the target distribution.",
+    "In a serving benchmark with batch size 8, a 1.3B draft model paired with a 13B target model reduced median latency from 186 ms/token to 91 ms/token when the draft acceptance rate stayed above 0.62. The throughput gain disappeared when prompts caused long rejection runs.",
+    "The practical trade-off is memory pressure: the draft model adds parameters and KV-cache traffic, so deployments need admission control and per-route evaluation before enabling the method globally."
+  ].join("\n\n")
+};
+
 export const demoCards: KnowledgeCard[] = [
   {
     id: "agent-memory-layers",

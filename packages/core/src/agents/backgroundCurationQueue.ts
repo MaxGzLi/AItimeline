@@ -7,7 +7,14 @@ import type {
 import { createFollowupSourceImportPlan, type FollowupGenerationProtocol } from "../harness/followupHarness.js";
 import type { ContentLanguage } from "../harness/contentLanguage.js";
 import type { SourceImportWorker, SourceImportWorkerResult } from "../source/sourceImportWorker.js";
-import type { KnowledgeChunk, KnowledgePost, SourceAsset, SourceRegistry } from "../types.js";
+import type {
+  AgentHarnessUserContext,
+  KnowledgeChunk,
+  KnowledgePost,
+  SourceAsset,
+  SourceQualityVerdict,
+  SourceRegistry
+} from "../types.js";
 
 export type BackgroundCurationJobStatus = "queued" | "running" | "succeeded" | "failed" | "skipped";
 
@@ -72,6 +79,8 @@ export interface BackgroundCurationExecutionHandlers {
     job: BackgroundCurationJob
   ) => Promise<BackgroundSourceCandidate[]> | BackgroundSourceCandidate[];
   loadSeedPost?: (job: BackgroundCurationJob) => Promise<KnowledgePost | undefined> | KnowledgePost | undefined;
+  loadSourceQualityVerdicts?: () => Promise<SourceQualityVerdict[]> | SourceQualityVerdict[];
+  loadSourceQualityUserContext?: () => Promise<AgentHarnessUserContext | undefined> | AgentHarnessUserContext | undefined;
   generateFollowup?: (job: BackgroundCurationJob) => Promise<BackgroundCurationJobResult> | BackgroundCurationJobResult;
   scheduleReview?: (job: BackgroundCurationJob) => Promise<BackgroundCurationJobResult> | BackgroundCurationJobResult;
   askClarifyingQuestion?: (job: BackgroundCurationJob) => Promise<BackgroundCurationJobResult> | BackgroundCurationJobResult;
@@ -264,15 +273,7 @@ async function runJob(
   }
 
   if (job.kind === "discover_sources") {
-    if (!handlers.discoverSources) {
-      return skippedResult(job, "source discovery handler is not configured.");
-    }
-
-    return {
-      kind: job.kind,
-      discoveredSourceCandidates: await handlers.discoverSources(job),
-      message: "Discovered source candidates for background curation."
-    };
+    return runDiscoverSourcesJob(job, handlers, now);
   }
 
   if (job.kind === "research_question") {
@@ -320,6 +321,19 @@ async function runGenerateFollowupJob(
   handlers: BackgroundCurationExecutionHandlers,
   now: string
 ): Promise<BackgroundCurationJobResult> {
+  if (job.nextAction === "continue_deeper" && handlers.discoverSources) {
+    return runDeepDiveSourceJob(job, handlers, now);
+  }
+
+  return runSameSourceFollowupJob(job, handlers, now);
+}
+
+async function runSameSourceFollowupJob(
+  job: BackgroundCurationJob,
+  handlers: BackgroundCurationExecutionHandlers,
+  now: string,
+  fallbackReason?: string
+): Promise<BackgroundCurationJobResult> {
   const seedPost = await handlers.loadSeedPost?.(job);
 
   if (!seedPost) {
@@ -336,6 +350,15 @@ async function runGenerateFollowupJob(
     createdAt: now,
     contentLanguage: handlers.contentLanguage
   });
+  plan.input.skipQualityGate = true;
+
+  if (fallbackReason) {
+    plan.input.recommendedBecause =
+      handlers.contentLanguage === "en"
+        ? `No better source was found, so this same-source follow-up was generated after "${seedPost.title}". ${fallbackReason}`
+        : `没找到更好的来源,所以先基于《${seedPost.title}》生成同源跟进卡。${fallbackReason}`;
+  }
+
   const sourceImport = await handlers.sourceImportWorker.run(plan.input);
 
   if (sourceImport.importRecord.status === "failed") {
@@ -346,8 +369,117 @@ async function runGenerateFollowupJob(
     kind: job.kind,
     sourceImport,
     followupProtocol: plan.protocol,
-    message: "Generated a grounded follow-up post for the timeline."
+    message: fallbackReason
+      ? "Generated a same-source fallback follow-up because deep-dive discovery found no qualified source."
+      : "Generated a grounded follow-up post for the timeline."
   };
+}
+
+async function runDiscoverSourcesJob(
+  job: BackgroundCurationJob,
+  handlers: BackgroundCurationExecutionHandlers,
+  now: string
+): Promise<BackgroundCurationJobResult> {
+  if (!handlers.discoverSources) {
+    return skippedResult(job, "source discovery handler is not configured.");
+  }
+
+  if (job.nextAction === "continue_deeper" && job.postId) {
+    return runDeepDiveSourceJob(job, handlers, now);
+  }
+
+  return {
+    kind: job.kind,
+    discoveredSourceCandidates: await handlers.discoverSources(job),
+    message: "Discovered source candidates for background curation."
+  };
+}
+
+async function runDeepDiveSourceJob(
+  job: BackgroundCurationJob,
+  handlers: BackgroundCurationExecutionHandlers,
+  now: string
+): Promise<BackgroundCurationJobResult> {
+  if (!handlers.discoverSources) {
+    return runSameSourceFollowupJob(job, handlers, now, "Source discovery handler is not configured.");
+  }
+
+  const seedPost = await handlers.loadSeedPost?.(job);
+  const discoveredSourceCandidates = await handlers.discoverSources(job);
+  const rankedCandidates = rankDeepDiveCandidates(discoveredSourceCandidates);
+  const remainingCandidates: BackgroundSourceCandidate[] = [];
+  const importFailures: string[] = [];
+
+  if (!seedPost) {
+    return {
+      kind: job.kind,
+      discoveredSourceCandidates: rankedCandidates.slice(0, 1),
+      message: "Discovered a source candidate for deep-dive grounding because the seed post is unavailable."
+    };
+  }
+
+  if (!rankedCandidates.length) {
+    return runSameSourceFollowupJob(job, handlers, now, "Deep-dive discovery returned no new candidates.");
+  }
+
+  if (!handlers.sourceImportWorker || !handlers.ingestSourceCandidate) {
+    return {
+      kind: job.kind,
+      discoveredSourceCandidates: rankedCandidates,
+      message: "Discovered deep-dive source candidates; import handlers are not configured."
+    };
+  }
+
+  for (const candidate of rankedCandidates) {
+    try {
+      const ingested = await handlers.ingestSourceCandidate(candidate, job);
+      const sourceImport = await handlers.sourceImportWorker.run({
+        source: candidate.source,
+        assets: ingested.assets,
+        chunks: ingested.chunks,
+        sourceRegistry: ingested.sourceRegistry,
+        createdAt: now,
+        contentLanguage: handlers.contentLanguage,
+        recommendedBecause: formatDeepDiveRecommendedBecause(seedPost, candidate, handlers.contentLanguage),
+        userContext: await handlers.loadSourceQualityUserContext?.(),
+        qualityGateConceptHints: mergeUnique(job.conceptIds, candidate.conceptIds),
+        sourceQualityVerdicts: await handlers.loadSourceQualityVerdicts?.()
+      });
+
+      if (sourceImport.qualityGate?.verdict === "reject") {
+        importFailures.push(sourceImport.errorMessage ?? "Source quality gate rejected the candidate.");
+        remainingCandidates.push(candidate);
+        continue;
+      }
+
+      if (sourceImport.importRecord.status === "failed" || sourceImport.posts.length === 0) {
+        importFailures.push(sourceImport.errorMessage ?? "Deep-dive source import worker produced no posts.");
+        remainingCandidates.push(candidate);
+        continue;
+      }
+
+      sourceImport.posts = sourceImport.posts.map((post) =>
+        frameDeepDivePost(post, seedPost, candidate, handlers.contentLanguage)
+      );
+
+      return {
+        kind: job.kind,
+        sourceImport,
+        discoveredSourceCandidates: remainingCandidates,
+        message: "Imported a qualified new source for a deep-dive follow-up."
+      };
+    } catch (error) {
+      importFailures.push(error instanceof Error ? error.message : "Unknown deep-dive source import error.");
+      remainingCandidates.push(candidate);
+    }
+  }
+
+  return runSameSourceFollowupJob(
+    job,
+    handlers,
+    now,
+    importFailures.slice(0, 3).join("; ") || "No qualified deep-dive source passed the quality gate."
+  );
 }
 
 async function runMissingSeedFollowupJob(
@@ -396,8 +528,23 @@ async function runImportSourceJob(
     sourceRegistry: ingested.sourceRegistry,
     createdAt: now,
     contentLanguage: handlers.contentLanguage,
-    recommendedBecause: ingested.recommendedBecause ?? job.reason
+    recommendedBecause: ingested.recommendedBecause ?? job.reason,
+    userContext: await handlers.loadSourceQualityUserContext?.(),
+    qualityGateConceptHints: mergeUnique(job.conceptIds, job.sourceCandidate.conceptIds),
+    sourceQualityVerdicts: await handlers.loadSourceQualityVerdicts?.()
   });
+
+  if (sourceImport.qualityGate?.verdict === "reject") {
+    if (job.nextAction === "continue_deeper") {
+      return runSameSourceFollowupJob(job, handlers, now, sourceImport.errorMessage);
+    }
+
+    return {
+      kind: job.kind,
+      sourceImport,
+      message: "Source quality gate rejected the candidate; no card was generated."
+    };
+  }
 
   if (sourceImport.importRecord.status === "failed") {
     throw new Error(sourceImport.errorMessage ?? "Source import worker failed.");
@@ -407,6 +554,62 @@ async function runImportSourceJob(
     kind: job.kind,
     sourceImport,
     message: "Imported source candidate into timeline-ready knowledge posts."
+  };
+}
+
+function rankDeepDiveCandidates(candidates: BackgroundSourceCandidate[]): BackgroundSourceCandidate[] {
+  return [...candidates].sort((left, right) => scoreDeepDiveCandidate(right) - scoreDeepDiveCandidate(left));
+}
+
+function scoreDeepDiveCandidate(candidate: BackgroundSourceCandidate): number {
+  const sourceTypeBoost =
+    candidate.source.type === "paper"
+      ? 0.18
+      : candidate.source.type === "repo"
+        ? 0.12
+        : candidate.source.type === "article" || candidate.source.type === "blog"
+          ? 0.06
+          : 0;
+  const officialBoost = /(^|\.)docs\.|(^|\.)developer\.|github\.com|arxiv\.org/i.test(candidate.source.url) ? 0.08 : 0;
+
+  return (
+    candidate.qualityScore * 0.38 +
+    candidate.relevanceScore * 0.34 +
+    candidate.noveltyScore * 0.16 +
+    sourceTypeBoost +
+    officialBoost
+  );
+}
+
+function formatDeepDiveRecommendedBecause(
+  seedPost: KnowledgePost,
+  candidate: BackgroundSourceCandidate,
+  contentLanguage: ContentLanguage | undefined
+): string {
+  if (contentLanguage === "en") {
+    return `You clicked go deeper on "${seedPost.title}", so this new source was imported: ${candidate.reason}`;
+  }
+
+  return `你在《${seedPost.title}》点了深入,所以导入这个新来源:${candidate.reason}`;
+}
+
+function frameDeepDivePost(
+  post: KnowledgePost,
+  seedPost: KnowledgePost,
+  candidate: BackgroundSourceCandidate,
+  contentLanguage: ContentLanguage | undefined
+): KnowledgePost {
+  const knownConcept = seedPost.concepts[0] ?? seedPost.title;
+  const nextConcept = post.concepts.find((concept) => !seedPost.concepts.includes(concept)) ?? post.concepts[0] ?? candidate.conceptIds[0] ?? knownConcept;
+  const bridge =
+    contentLanguage === "en"
+      ? `You already know ${knownConcept}; this card goes under it into ${nextConcept}.`
+      : `你已经知道 ${knownConcept},这张讲 ${knownConcept} 底下的 ${nextConcept}。`;
+
+  return {
+    ...post,
+    hook: post.hook.startsWith(bridge) ? post.hook : `${bridge} ${post.hook}`,
+    recommendedBecause: formatDeepDiveRecommendedBecause(seedPost, candidate, contentLanguage)
   };
 }
 
@@ -423,6 +626,10 @@ function normalizeDate(value: string | Date | undefined): Date {
   }
 
   return value ? new Date(value) : new Date();
+}
+
+function mergeUnique(left: string[], right: string[]): string[] {
+  return Array.from(new Set([...left, ...right].map((value) => value.trim()).filter(Boolean)));
 }
 
 function readStoredRecords(storage: BackgroundCurationJobStorageAdapter): BackgroundCurationJobRecord[] {

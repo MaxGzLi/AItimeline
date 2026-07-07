@@ -6,13 +6,16 @@ import type {
   AgentHarnessRun,
   ConceptAliasRecord,
   ConceptMergeSuggestion,
+  DailyAutoJobBudgetRecord,
   HarnessValidationResult,
   InteractionSignal,
   KnowledgePost,
   LearningFeedback,
+  MergedSourceRecord,
   ReviewState,
   SourceImport,
   SourceRegistry,
+  SourceQualityVerdict,
   TopicState,
   UserMemory
 } from "../types.js";
@@ -61,7 +64,7 @@ export interface TopicStateRecord extends TopicState {
   updatedAt: string;
 }
 
-export type SourceCandidateRecordStatus = "pending" | "queued" | "imported" | "dismissed";
+export type SourceCandidateRecordStatus = "pending" | "queued" | "imported" | "dismissed" | "rejected_source";
 
 export type SourceCandidateIntakeKind = "user_paste" | "browser_share" | "agent_discovery" | "manual";
 
@@ -122,9 +125,12 @@ export interface SourceCandidateRecord {
   updatedAt: string;
   userId?: string;
   notes?: string;
+  qualityGate?: SourceQualityVerdict;
+  rejectionReasons?: string[];
   lastQueuedAt?: string;
   importedAt?: string;
   dismissedAt?: string;
+  rejectedAt?: string;
 }
 
 export interface AITimelinePersistenceSnapshot {
@@ -149,6 +155,9 @@ export interface AITimelinePersistenceSnapshot {
   userSettings: UserSettings;
   conceptAliases: ConceptAliasRecord[];
   conceptMergeSuggestions: ConceptMergeSuggestion[];
+  sourceQualityVerdicts: SourceQualityVerdict[];
+  mergedSources: MergedSourceRecord[];
+  autoJobBudget: DailyAutoJobBudgetRecord[];
 }
 
 export interface AITimelinePersistenceStore {
@@ -159,6 +168,12 @@ export interface AITimelinePersistenceStore {
   saveReleasePlan(plan: SourcePostReleasePlan, savedAt?: string | Date): AITimelinePersistenceSnapshot;
   saveSourceCandidateRecords(
     records: SourceCandidateRecord[],
+    savedAt?: string | Date
+  ): AITimelinePersistenceSnapshot;
+  saveSourceQualityVerdicts(records: SourceQualityVerdict[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
+  saveMergedSourceRecords(records: MergedSourceRecord[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
+  saveDailyAutoJobBudgetRecords(
+    records: DailyAutoJobBudgetRecord[],
     savedAt?: string | Date
   ): AITimelinePersistenceSnapshot;
   saveInteractionSignalRecords(
@@ -209,6 +224,7 @@ export function createAITimelinePersistenceStore(
     },
     saveSourceImportResult(result, savedAt = new Date()) {
       const updatedAt = normalizeDate(savedAt).toISOString();
+      const prepared = prepareSourceImportResultForPersistence(snapshot.posts, result, updatedAt);
 
       snapshot = {
         ...snapshot,
@@ -220,11 +236,15 @@ export function createAITimelinePersistenceStore(
           registry: result.sourceRegistry,
           createdAt: updatedAt
         }),
-        posts: upsertManyById(snapshot.posts, result.posts),
+        posts: upsertManyById(snapshot.posts, prepared.postsToSave),
         harnessRuns: result.harnessRun ? upsertById(snapshot.harnessRuns, result.harnessRun) : snapshot.harnessRuns,
         validation: result.harnessRun
           ? upsertManyById(snapshot.validation, createValidationRecords(result.harnessRun, result.validation, updatedAt))
-          : snapshot.validation
+          : snapshot.validation,
+        sourceQualityVerdicts: result.qualityGate
+          ? upsertSourceQualityVerdicts(snapshot.sourceQualityVerdicts, [result.qualityGate])
+          : snapshot.sourceQualityVerdicts,
+        mergedSources: upsertManyById(snapshot.mergedSources, prepared.mergedSources)
       };
       persist(storage, snapshot);
 
@@ -257,6 +277,36 @@ export function createAITimelinePersistenceStore(
         ...snapshot,
         updatedAt: normalizeDate(savedAt).toISOString(),
         sourceCandidates: upsertManyById(snapshot.sourceCandidates, records)
+      };
+      persist(storage, snapshot);
+
+      return cloneSnapshot(snapshot);
+    },
+    saveSourceQualityVerdicts(records, savedAt = new Date()) {
+      snapshot = {
+        ...snapshot,
+        updatedAt: normalizeDate(savedAt).toISOString(),
+        sourceQualityVerdicts: upsertSourceQualityVerdicts(snapshot.sourceQualityVerdicts, records)
+      };
+      persist(storage, snapshot);
+
+      return cloneSnapshot(snapshot);
+    },
+    saveMergedSourceRecords(records, savedAt = new Date()) {
+      snapshot = {
+        ...snapshot,
+        updatedAt: normalizeDate(savedAt).toISOString(),
+        mergedSources: upsertManyById(snapshot.mergedSources, records)
+      };
+      persist(storage, snapshot);
+
+      return cloneSnapshot(snapshot);
+    },
+    saveDailyAutoJobBudgetRecords(records, savedAt = new Date()) {
+      snapshot = {
+        ...snapshot,
+        updatedAt: normalizeDate(savedAt).toISOString(),
+        autoJobBudget: upsertDailyAutoJobBudgetRecords(snapshot.autoJobBudget, records)
       };
       persist(storage, snapshot);
 
@@ -422,7 +472,10 @@ function createSnapshot(input: AITimelinePersistenceSnapshotInput = {}): AITimel
     notifications: (input.notifications ?? []).map(normalizeNotificationRecord),
     userSettings: normalizeUserSettings(input.userSettings),
     conceptAliases: normalizeConceptAliasesInput(input.conceptAliases ?? []),
-    conceptMergeSuggestions: normalizeConceptMergeSuggestions(input.conceptMergeSuggestions ?? [])
+    conceptMergeSuggestions: normalizeConceptMergeSuggestions(input.conceptMergeSuggestions ?? []),
+    sourceQualityVerdicts: normalizeSourceQualityVerdicts(input.sourceQualityVerdicts ?? []),
+    mergedSources: normalizeMergedSourceRecords(input.mergedSources ?? []),
+    autoJobBudget: normalizeDailyAutoJobBudgetRecords(input.autoJobBudget ?? [])
   };
 }
 
@@ -623,6 +676,228 @@ function normalizeConceptMergeSuggestions(value: unknown): ConceptMergeSuggestio
   return Array.from(byId.values()).sort((left, right) => left.createdAt.localeCompare(right.createdAt));
 }
 
+function normalizeSourceQualityVerdicts(value: unknown): SourceQualityVerdict[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((record): SourceQualityVerdict[] => {
+    if (
+      !isRecord(record) ||
+      typeof record.url !== "string" ||
+      typeof record.sourceId !== "string" ||
+      typeof record.sourceTitle !== "string" ||
+      typeof record.score !== "number" ||
+      (record.verdict !== "accept" && record.verdict !== "reject") ||
+      (record.runnerKind !== "deterministic" && record.runnerKind !== "model") ||
+      typeof record.evaluatedAt !== "string"
+    ) {
+      return [];
+    }
+
+    return [
+      {
+        url: record.url,
+        sourceId: record.sourceId,
+        sourceTitle: record.sourceTitle,
+        score: clampScore(record.score),
+        verdict: record.verdict,
+        reasons: Array.isArray(record.reasons)
+          ? record.reasons.filter((reason): reason is string => typeof reason === "string" && reason.trim().length > 0)
+          : [],
+        runnerKind: record.runnerKind,
+        evaluatedAt: record.evaluatedAt
+      }
+    ];
+  });
+}
+
+function normalizeMergedSourceRecords(value: unknown): MergedSourceRecord[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((record): MergedSourceRecord[] => {
+    if (
+      !isRecord(record) ||
+      typeof record.id !== "string" ||
+      typeof record.sourceImportId !== "string" ||
+      typeof record.sourcePostId !== "string" ||
+      typeof record.mergedIntoPostId !== "string" ||
+      typeof record.similarity !== "number" ||
+      typeof record.createdAt !== "string" ||
+      typeof record.reason !== "string"
+    ) {
+      return [];
+    }
+
+    return [
+      {
+        id: record.id,
+        sourceImportId: record.sourceImportId,
+        sourcePostId: record.sourcePostId,
+        mergedIntoPostId: record.mergedIntoPostId,
+        sourceIds: Array.isArray(record.sourceIds)
+          ? record.sourceIds.filter((sourceId): sourceId is string => typeof sourceId === "string" && sourceId.trim().length > 0)
+          : [],
+        similarity: clampScore(record.similarity),
+        createdAt: record.createdAt,
+        reason: record.reason
+      }
+    ];
+  });
+}
+
+function normalizeDailyAutoJobBudgetRecords(value: unknown): DailyAutoJobBudgetRecord[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((record): DailyAutoJobBudgetRecord[] => {
+    if (!isRecord(record) || typeof record.date !== "string" || typeof record.updatedAt !== "string") {
+      return [];
+    }
+
+    return [
+      {
+        date: record.date,
+        used: normalizeNonNegativeInteger(record.used),
+        limit: normalizeNonNegativeInteger(record.limit),
+        discarded: normalizeNonNegativeInteger(record.discarded),
+        updatedAt: record.updatedAt
+      }
+    ];
+  });
+}
+
+interface PreparedSourceImportForPersistence {
+  postsToSave: KnowledgePost[];
+  mergedSources: MergedSourceRecord[];
+}
+
+function prepareSourceImportResultForPersistence(
+  existingPosts: KnowledgePost[],
+  result: SourceImportWorkerResult,
+  createdAt: string
+): PreparedSourceImportForPersistence {
+  const postsById = new Map(existingPosts.map((post) => [post.id, post]));
+  const postsToSaveById = new Map<string, KnowledgePost>();
+  const mergedSources: MergedSourceRecord[] = [];
+  const acceptedImportPosts: KnowledgePost[] = [];
+  const skippedPostIds = new Set<string>();
+
+  for (const post of result.posts) {
+    const duplicate = findNearDuplicatePost(post, Array.from(postsById.values()));
+
+    if (duplicate) {
+      const mergedPost = mergePostSources(duplicate.post, post);
+
+      postsById.set(mergedPost.id, mergedPost);
+      postsToSaveById.set(mergedPost.id, mergedPost);
+      skippedPostIds.add(post.id);
+      mergedSources.push({
+        id: `merged-source-${hashText(`${result.importRecord.id}|${post.id}|${duplicate.post.id}`)}`,
+        sourceImportId: result.importRecord.id,
+        sourcePostId: post.id,
+        mergedIntoPostId: duplicate.post.id,
+        sourceIds: post.sources.map((source) => source.id),
+        similarity: duplicate.similarity,
+        createdAt,
+        reason: "merged_into"
+      });
+      continue;
+    }
+
+    postsById.set(post.id, post);
+    postsToSaveById.set(post.id, post);
+    acceptedImportPosts.push(post);
+  }
+
+  if (skippedPostIds.size) {
+    result.posts = acceptedImportPosts;
+    result.validation = result.validation.filter((record) => !record.postId || !skippedPostIds.has(record.postId));
+
+    if (result.harnessRun) {
+      result.harnessRun = {
+        ...result.harnessRun,
+        outputPostIds: result.harnessRun.outputPostIds.filter((postId) => !skippedPostIds.has(postId)),
+        validation: result.harnessRun.validation.filter(
+          (record) => !record.postId || !skippedPostIds.has(record.postId)
+        )
+      };
+    }
+  }
+
+  return {
+    postsToSave: Array.from(postsToSaveById.values()),
+    mergedSources
+  };
+}
+
+function findNearDuplicatePost(
+  post: KnowledgePost,
+  candidates: KnowledgePost[]
+): { post: KnowledgePost; similarity: number } | undefined {
+  return candidates
+    .filter((candidate) => candidate.id !== post.id)
+    .map((candidate) => ({
+      post: candidate,
+      similarity: scorePostLexicalSimilarity(post, candidate)
+    }))
+    .filter((candidate) => candidate.similarity >= 0.8)
+    .sort((left, right) => right.similarity - left.similarity)[0];
+}
+
+function scorePostLexicalSimilarity(left: KnowledgePost, right: KnowledgePost): number {
+  const leftTokens = tokenizeSimilarityText(`${left.summary} ${left.keyTakeaway}`);
+  const rightTokens = tokenizeSimilarityText(`${right.summary} ${right.keyTakeaway}`);
+
+  if (!leftTokens.size || !rightTokens.size) {
+    return 0;
+  }
+
+  const intersection = Array.from(leftTokens).filter((token) => rightTokens.has(token)).length;
+
+  return roundScore((2 * intersection) / (leftTokens.size + rightTokens.size));
+}
+
+function tokenizeSimilarityText(value: string): Set<string> {
+  return new Set(
+    value
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}]+/gu, " ")
+      .split(/\s+/)
+      .map((token) => token.trim())
+      .filter((token) => token.length >= 2)
+  );
+}
+
+function mergePostSources(target: KnowledgePost, duplicate: KnowledgePost): KnowledgePost {
+  return {
+    ...target,
+    sources: mergeByKey(target.sources, duplicate.sources, (source) => source.id),
+    citations: mergeByKey(target.citations ?? [], duplicate.citations ?? [], (citation) =>
+      [
+        citation.sourceId,
+        citation.chunkId ?? "",
+        citation.url ?? "",
+        citation.startTimeSeconds ?? "",
+        citation.endTimeSeconds ?? ""
+      ].join("|")
+    )
+  };
+}
+
+function mergeByKey<T>(left: T[], right: T[], getKey: (item: T) => string): T[] {
+  const byKey = new Map<string, T>();
+
+  for (const item of [...left, ...right]) {
+    byKey.set(getKey(item), item);
+  }
+
+  return Array.from(byKey.values());
+}
+
 function isConceptMergeSuggestionStatus(value: unknown): value is ConceptMergeSuggestion["status"] {
   return value === "pending" || value === "merged" || value === "separate";
 }
@@ -669,6 +944,32 @@ function upsertManyById<T extends { id: string }>(items: T[], nextItems: T[]): T
   }
 
   return Array.from(byId.values());
+}
+
+function upsertSourceQualityVerdicts(
+  items: SourceQualityVerdict[],
+  nextItems: SourceQualityVerdict[]
+): SourceQualityVerdict[] {
+  const byUrl = new Map(items.map((item) => [normalizeUrlKey(item.url), item]));
+
+  for (const item of nextItems) {
+    byUrl.set(normalizeUrlKey(item.url), item);
+  }
+
+  return Array.from(byUrl.values());
+}
+
+function upsertDailyAutoJobBudgetRecords(
+  items: DailyAutoJobBudgetRecord[],
+  nextItems: DailyAutoJobBudgetRecord[]
+): DailyAutoJobBudgetRecord[] {
+  const byDate = new Map(items.map((item) => [item.date, item]));
+
+  for (const item of nextItems) {
+    byDate.set(item.date, item);
+  }
+
+  return Array.from(byDate.values()).sort((left, right) => left.date.localeCompare(right.date));
 }
 
 function upsertUserMemory(items: UserMemoryRecord[], item: UserMemoryRecord): UserMemoryRecord[] {
@@ -731,6 +1032,25 @@ function hashText(value: string): string {
   return hash.toString(16);
 }
 
+function normalizeUrlKey(value: string): string {
+  try {
+    const url = new URL(value);
+
+    url.hash = "";
+    url.hostname = url.hostname.toLowerCase();
+
+    for (const param of Array.from(url.searchParams.keys())) {
+      if (/^(utm_|ref$|fbclid$|gclid$)/i.test(param)) {
+        url.searchParams.delete(param);
+      }
+    }
+
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return value.trim();
+  }
+}
+
 function withoutReleasePlanId(plan: SourcePostReleasePlan & { id: string }): SourcePostReleasePlan {
   const { id: _id, ...releasePlan } = plan;
 
@@ -743,6 +1063,18 @@ function cloneSnapshot(snapshot: AITimelinePersistenceSnapshot): AITimelinePersi
 
 function normalizeDate(value: string | Date): Date {
   return value instanceof Date ? value : new Date(value);
+}
+
+function normalizeNonNegativeInteger(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+}
+
+function clampScore(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
+function roundScore(value: number): number {
+  return Math.round(clampScore(value) * 100) / 100;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

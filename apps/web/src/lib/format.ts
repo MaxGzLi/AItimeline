@@ -104,7 +104,8 @@ export function formatCandidateStatus(status: SourceCandidateStatus): string {
     pending: t("format.candidate.pending"),
     queued: t("format.candidate.queued"),
     imported: t("format.candidate.imported"),
-    dismissed: t("format.candidate.dismissed")
+    dismissed: t("format.candidate.dismissed"),
+    rejected_source: t("format.candidate.rejected")
   };
 
   return labels[status];
