@@ -168,10 +168,42 @@ body:has(.x-frame) {
   position: sticky;
   top: 0;
   z-index: 10;
+  display: flex;
+  align-items: center;
   background: color-mix(in srgb, var(--x-bg) 65%, transparent);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--x-line);
+}
+.x-colhead > .x-coltitle,
+.x-colhead > .x-tabs,
+.x-colhead > .x-detail-head {
+  flex: 1;
+  min-width: 0;
+}
+.x-scout-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  margin: 0 12px;
+  padding: 5px 12px;
+  border: 1px solid var(--x-line);
+  border-radius: 999px;
+  background: none;
+  color: var(--x-muted);
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.x-scout-toggle:hover { background: var(--x-hover); }
+.x-scout-toggle.paused { color: var(--x-warn); border-color: color-mix(in srgb, var(--x-warn) 45%, transparent); }
+.x-scout-toggle em {
+  font-style: normal;
+  font-weight: 700;
+  font-size: 12px;
+  color: var(--x-blue);
 }
 .x-coltitle {
   display: flex;

@@ -10,3 +10,4 @@ coverage/
 *.tsbuildinfo
 apps/api/data/
 .claude/
+.env.bak
