@@ -14,6 +14,9 @@ import type {
   LearningFeedback,
   MergedSourceRecord,
   ReviewState,
+  SubscriptionFilterMode,
+  SubscriptionKind,
+  SubscriptionRecord,
   SourceImport,
   SourceRegistry,
   SourceQualityVerdict,
@@ -68,7 +71,7 @@ export interface TopicStateRecord extends TopicState {
 
 export type SourceCandidateRecordStatus = "pending" | "queued" | "imported" | "dismissed" | "rejected_source";
 
-export type SourceCandidateIntakeKind = "user_paste" | "browser_share" | "agent_discovery" | "manual";
+export type SourceCandidateIntakeKind = "user_paste" | "browser_share" | "agent_discovery" | "manual" | "subscription";
 
 export interface AgentTurnRecord {
   id: string;
@@ -162,6 +165,7 @@ export interface AITimelinePersistenceSnapshot {
   autoJobBudget: DailyAutoJobBudgetRecord[];
   conceptBriefs: ConceptBrief[];
   weeklyRecaps: WeeklyRecapRecord[];
+  subscriptions: SubscriptionRecord[];
 }
 
 export interface AITimelinePersistenceStore {
@@ -182,6 +186,8 @@ export interface AITimelinePersistenceStore {
   ): AITimelinePersistenceSnapshot;
   saveConceptBriefs(records: ConceptBrief[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
   saveWeeklyRecaps(records: WeeklyRecapRecord[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
+  saveSubscriptions(records: SubscriptionRecord[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
+  deleteSubscription(id: string, savedAt?: string | Date): AITimelinePersistenceSnapshot;
   saveInteractionSignalRecords(
     records: InteractionSignalRecord[],
     savedAt?: string | Date
@@ -333,6 +339,26 @@ export function createAITimelinePersistenceStore(
         ...snapshot,
         updatedAt: normalizeDate(savedAt).toISOString(),
         weeklyRecaps: upsertWeeklyRecaps(snapshot.weeklyRecaps, records)
+      };
+      persist(storage, snapshot);
+
+      return cloneSnapshot(snapshot);
+    },
+    saveSubscriptions(records, savedAt = new Date()) {
+      snapshot = {
+        ...snapshot,
+        updatedAt: normalizeDate(savedAt).toISOString(),
+        subscriptions: upsertSubscriptions(snapshot.subscriptions, records)
+      };
+      persist(storage, snapshot);
+
+      return cloneSnapshot(snapshot);
+    },
+    deleteSubscription(id, savedAt = new Date()) {
+      snapshot = {
+        ...snapshot,
+        updatedAt: normalizeDate(savedAt).toISOString(),
+        subscriptions: snapshot.subscriptions.filter((record) => record.id !== id)
       };
       persist(storage, snapshot);
 
@@ -503,7 +529,8 @@ function createSnapshot(input: AITimelinePersistenceSnapshotInput = {}): AITimel
     mergedSources: normalizeMergedSourceRecords(input.mergedSources ?? []),
     autoJobBudget: normalizeDailyAutoJobBudgetRecords(input.autoJobBudget ?? []),
     conceptBriefs: normalizeConceptBriefs(input.conceptBriefs ?? []),
-    weeklyRecaps: normalizeWeeklyRecaps(input.weeklyRecaps ?? [])
+    weeklyRecaps: normalizeWeeklyRecaps(input.weeklyRecaps ?? []),
+    subscriptions: normalizeSubscriptions(input.subscriptions ?? [])
   };
 }
 
@@ -989,6 +1016,61 @@ function normalizeWeeklyRecapNarrative(value: Record<string, unknown>): WeeklyRe
   };
 }
 
+function normalizeSubscriptions(value: unknown): SubscriptionRecord[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const byId = new Map<string, SubscriptionRecord>();
+
+  for (const record of value) {
+    if (
+      !isRecord(record) ||
+      typeof record.id !== "string" ||
+      typeof record.feedUrl !== "string" ||
+      typeof record.title !== "string" ||
+      typeof record.createdAt !== "string"
+    ) {
+      continue;
+    }
+
+    const id = record.id.trim();
+    const feedUrl = record.feedUrl.trim();
+    const title = record.title.trim();
+
+    if (!id || !feedUrl || !title) {
+      continue;
+    }
+
+    byId.set(id, {
+      id,
+      kind: normalizeSubscriptionKind(record.kind),
+      feedUrl,
+      siteUrl: typeof record.siteUrl === "string" && record.siteUrl.trim() ? record.siteUrl.trim() : undefined,
+      title,
+      filterMode: normalizeSubscriptionFilterMode(record.filterMode),
+      createdAt: record.createdAt,
+      lastPolledAt:
+        typeof record.lastPolledAt === "string" && record.lastPolledAt.trim() ? record.lastPolledAt : undefined,
+      lastItemPublishedAt:
+        typeof record.lastItemPublishedAt === "string" && record.lastItemPublishedAt.trim()
+          ? record.lastItemPublishedAt
+          : undefined,
+      lastError: typeof record.lastError === "string" && record.lastError.trim() ? record.lastError : undefined
+    });
+  }
+
+  return Array.from(byId.values()).sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+}
+
+function normalizeSubscriptionKind(value: unknown): SubscriptionKind {
+  return value === "youtube_channel" ? "youtube_channel" : "rss";
+}
+
+function normalizeSubscriptionFilterMode(value: unknown): SubscriptionFilterMode {
+  return value === "all" || value === "listOnly" || value === "relevant" ? value : "relevant";
+}
+
 function normalizeStringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
@@ -1220,6 +1302,10 @@ function upsertConceptBriefs(items: ConceptBrief[], nextItems: ConceptBrief[]): 
 
 function upsertWeeklyRecaps(items: WeeklyRecapRecord[], nextItems: WeeklyRecapRecord[]): WeeklyRecapRecord[] {
   return upsertManyById(items, nextItems).sort((left, right) => left.weekStart.localeCompare(right.weekStart));
+}
+
+function upsertSubscriptions(items: SubscriptionRecord[], nextItems: SubscriptionRecord[]): SubscriptionRecord[] {
+  return normalizeSubscriptions(upsertManyById(items, nextItems));
 }
 
 function upsertUserMemory(items: UserMemoryRecord[], item: UserMemoryRecord): UserMemoryRecord[] {

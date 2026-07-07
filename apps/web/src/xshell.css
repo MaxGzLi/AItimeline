@@ -1868,6 +1868,47 @@ body:has(.x-frame) {
 .x-cand-row strong { flex: none; font-size: 16px; font-weight: 800; font-variant-numeric: tabular-nums; }
 .x-cand-empty { font-size: 14px; color: var(--x-muted); padding: 8px 0; }
 
+/* ---------- 机器房：订阅源 ---------- */
+.x-sub-panel { display: grid; gap: 10px; padding: 4px 16px 0; }
+.x-sub-list { display: grid; gap: 2px; }
+.x-sub-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--x-line);
+}
+.x-sub-row:first-child { border-top: none; }
+.x-sub-main {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.x-sub-titleline {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+.x-sub-titleline strong {
+  min-width: 0;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.x-sub-main small {
+  color: var(--x-muted);
+  font-size: 12px;
+}
+.x-sub-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 /* ---------- 机器房：导入记录行 ---------- */
 .x-import-row {
   display: flex;

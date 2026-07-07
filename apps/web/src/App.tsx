@@ -115,6 +115,7 @@ import type {
   NoteApiResponse,
   ReviewDueItem,
   SourceCandidateRecord,
+  SubscriptionRecord,
   TimelineCard
 } from "./lib/types";
 
@@ -154,6 +155,7 @@ export function App() {
   const [sourceUrl, setSourceUrl] = useState(sampleSourceUrl);
   const [candidateUrl, setCandidateUrl] = useState(`${apiBaseUrl}/fixtures/article-background`);
   const [candidateConcept, setCandidateConcept] = useState(demoProfile.interests[0] ?? "AI Agent");
+  const [subscriptionUrl, setSubscriptionUrl] = useState("");
   const [sourceImports, setSourceImports] = useState<SourceImport[]>([]);
   const [importedCards, setImportedCards] = useState<KnowledgeCard[]>([]);
   // Newly synced cards stay buffered until the user inserts them into the feed.
@@ -164,6 +166,7 @@ export function App() {
   const [sourceAssets, setSourceAssets] = useState<SourceAsset[]>([]);
   const [sourceChunks, setSourceChunks] = useState<KnowledgeChunk[]>([]);
   const [sourceCandidates, setSourceCandidates] = useState<SourceCandidateRecord[]>([]);
+  const [subscriptions, setSubscriptions] = useState<SubscriptionRecord[]>([]);
   const [conceptAliases, setConceptAliases] = useState<ConceptAliasRecord[]>([]);
   const [conceptMergeSuggestions, setConceptMergeSuggestions] = useState<ConceptMergeSuggestion[]>([]);
   const [conceptBriefs, setConceptBriefs] = useState<ConceptBrief[]>([]);
@@ -202,6 +205,7 @@ export function App() {
   const [agentTurnCount, setAgentTurnCount] = useState(0);
   const [memoryMessage, setMemoryMessage] = useState(() => t("memory.default"));
   const [candidateMessage, setCandidateMessage] = useState(() => t("candidate.message.default"));
+  const [subscriptionMessage, setSubscriptionMessage] = useState(() => t("subscription.message.default"));
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
   const [conceptView, setConceptView] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<ViewKey>("timeline");
@@ -221,6 +225,9 @@ export function App() {
   const [aiPrompt, setAiPrompt] = useState("");
   const [isImporting, setIsImporting] = useState(false);
   const [isSavingCandidate, setIsSavingCandidate] = useState(false);
+  const [isSavingSubscription, setIsSavingSubscription] = useState(false);
+  const [updatingSubscriptionIds, setUpdatingSubscriptionIds] = useState<string[]>([]);
+  const [deletingSubscriptionIds, setDeletingSubscriptionIds] = useState<string[]>([]);
   const [isRunningCuration, setIsRunningCuration] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [hasHydrated, setHasHydrated] = useState(false);
@@ -1092,6 +1099,7 @@ export function App() {
       setSourceAssets(upsertById([], registryAssets));
       setSourceChunks(upsertById([], registryChunks));
       setSourceCandidates(snapshot.sourceCandidates);
+      setSubscriptions(snapshot.subscriptions ?? []);
       setConceptAliases(snapshot.conceptAliases ?? []);
       setConceptMergeSuggestions(snapshot.conceptMergeSuggestions ?? []);
       setConceptBriefs(snapshot.conceptBriefs ?? []);
@@ -1320,6 +1328,81 @@ export function App() {
       setCandidateMessage(error instanceof Error ? error.message : t("candidate.unable"));
     } finally {
       setIsSavingCandidate(false);
+    }
+  }
+
+  async function handleAddSubscription(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const trimmedUrl = subscriptionUrl.trim();
+
+    if (!trimmedUrl) {
+      setSubscriptionMessage(t("subscription.emptyUrl"));
+      return;
+    }
+
+    setIsSavingSubscription(true);
+
+    try {
+      const result = await apiRequest<{ record: SubscriptionRecord }>("/api/subscriptions", {
+        method: "POST",
+        body: {
+          url: trimmedUrl,
+          filterMode: "relevant"
+        }
+      });
+
+      setSubscriptions((records) => upsertById(records, [result.record]));
+      setSubscriptionUrl("");
+      setSubscriptionMessage(t("subscription.added", { title: result.record.title }));
+      setApiStatus("connected");
+      setApiMessage(t("api.connected"));
+    } catch (error) {
+      setApiStatus("offline");
+      setSubscriptionMessage(error instanceof Error ? error.message : t("subscription.error"));
+    } finally {
+      setIsSavingSubscription(false);
+    }
+  }
+
+  async function handleSubscriptionFilterChange(id: string, filterMode: SubscriptionRecord["filterMode"]) {
+    setUpdatingSubscriptionIds((ids) => Array.from(new Set([...ids, id])));
+
+    try {
+      const result = await apiRequest<{ record: SubscriptionRecord }>(`/api/subscriptions/${encodeURIComponent(id)}`, {
+        method: "POST",
+        body: { filterMode }
+      });
+
+      setSubscriptions((records) => upsertById(records, [result.record]));
+      setSubscriptionMessage(t("subscription.saved"));
+      setApiStatus("connected");
+      setApiMessage(t("api.connected"));
+    } catch (error) {
+      setApiStatus("offline");
+      setSubscriptionMessage(error instanceof Error ? error.message : t("subscription.error"));
+    } finally {
+      setUpdatingSubscriptionIds((ids) => ids.filter((value) => value !== id));
+    }
+  }
+
+  async function handleDeleteSubscription(id: string) {
+    setDeletingSubscriptionIds((ids) => Array.from(new Set([...ids, id])));
+
+    try {
+      await apiRequest(`/api/subscriptions/${encodeURIComponent(id)}`, {
+        method: "DELETE"
+      });
+
+      setSubscriptions((records) => records.filter((record) => record.id !== id));
+      setSubscriptionMessage(t("subscription.saved"));
+      setApiStatus("connected");
+      setApiMessage(t("api.connected"));
+    } catch (error) {
+      setApiStatus("offline");
+      setSubscriptionMessage(error instanceof Error ? error.message : t("subscription.error"));
+    } finally {
+      setDeletingSubscriptionIds((ids) => ids.filter((value) => value !== id));
     }
   }
 
@@ -2214,20 +2297,34 @@ export function App() {
             isImporting={isImporting}
             isRunningCuration={isRunningCuration}
             isSavingCandidate={isSavingCandidate}
+            isSavingSubscription={isSavingSubscription}
             lastScoutAt={lastScoutAt}
             memoryMessage={memoryMessage}
             onAutoScoutChange={setAutoScoutEnabled}
             onCandidateConceptChange={setCandidateConcept}
             onCandidateUrlChange={setCandidateUrl}
+            onDeleteSubscription={(id) => {
+              void handleDeleteSubscription(id);
+            }}
             onImportSubmit={handleImport}
             onRunCuration={handleRunCuration}
             onSaveCandidate={handleSaveCandidate}
             onSourceUrlChange={setSourceUrl}
+            onSubscriptionFilterChange={(id, filterMode) => {
+              void handleSubscriptionFilterChange(id, filterMode);
+            }}
+            onSubscriptionSubmit={handleAddSubscription}
+            onSubscriptionUrlChange={setSubscriptionUrl}
             agentTurnCount={agentTurnCount}
+            deletingSubscriptionIds={deletingSubscriptionIds}
             queuedJobCount={queuedJobCount}
             sourceCandidates={sourceCandidates}
             sourceImports={sourceImports}
             sourceUrl={sourceUrl}
+            subscriptionMessage={subscriptionMessage}
+            subscriptions={subscriptions}
+            subscriptionUrl={subscriptionUrl}
+            updatingSubscriptionIds={updatingSubscriptionIds}
           />
         ) : null}
 

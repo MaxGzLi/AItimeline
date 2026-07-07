@@ -46,6 +46,8 @@ import {
   rankPersonalizedTimeline,
   runConversationTurn,
   runDueBackgroundCurationJobs,
+  normalizeSubscriptionFeedUrl,
+  parseSubscriptionFeed,
   generateConceptBrief,
   runIdeaObservation,
   shouldRefreshConceptBrief,
@@ -80,6 +82,7 @@ export function createApiServer(options = {}) {
   const importRunner = sourceImportWorker.runner;
   const askModelClient = createConfiguredAskModelClient(process.env);
   const searchProvider = options.searchProvider ?? createConfiguredSearchProvider(process.env);
+  const feedFetch = options.feedFetch ?? globalThis.fetch;
 
   return createServer(async (request, response) => {
     response.setHeader("Access-Control-Allow-Origin", "*");
@@ -106,6 +109,11 @@ export function createApiServer(options = {}) {
           response,
           fixtureArticleHtml(query ? `Background source for ${query}` : "Background curation can prepare related sources")
         );
+        return;
+      }
+
+      if (enableFixtures && request.method === "GET" && url.pathname === "/fixtures/subscription-feed") {
+        sendXml(response, fixtureSubscriptionFeedXml(url.searchParams.get("variant") ?? "default"));
         return;
       }
 
@@ -451,6 +459,47 @@ export function createApiServer(options = {}) {
         return;
       }
 
+      if (request.method === "GET" && url.pathname === "/api/subscriptions") {
+        sendJson(response, 200, { records: persistenceStore.getSnapshot().subscriptions });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/subscriptions") {
+        const body = await readJsonBody(request);
+        const result = await handleCreateSubscription(body, persistenceStore, feedFetch);
+
+        sendJson(response, 200, result);
+        return;
+      }
+
+      if (request.method === "DELETE" && /^\/api\/subscriptions\/[^/]+$/.test(url.pathname)) {
+        const subscriptionId = decodeURIComponent(url.pathname.replace(/^\/api\/subscriptions\//, ""));
+        const snapshot = persistenceStore.getSnapshot();
+
+        if (!snapshot.subscriptions.some((record) => record.id === subscriptionId)) {
+          sendJson(response, 404, { error: "Subscription not found." });
+          return;
+        }
+
+        const nextSnapshot = persistenceStore.deleteSubscription(subscriptionId);
+
+        sendJson(response, 200, {
+          deleted: true,
+          id: subscriptionId,
+          snapshotSummary: summarizeSnapshot(nextSnapshot)
+        });
+        return;
+      }
+
+      if (request.method === "POST" && /^\/api\/subscriptions\/[^/]+$/.test(url.pathname)) {
+        const subscriptionId = decodeURIComponent(url.pathname.replace(/^\/api\/subscriptions\//, ""));
+        const body = await readJsonBody(request);
+        const result = handleUpdateSubscription(subscriptionId, body, persistenceStore);
+
+        sendJson(response, 200, result);
+        return;
+      }
+
       if (request.method === "GET" && url.pathname === "/api/curation/jobs") {
         const status = url.searchParams.get("status") ?? undefined;
         sendJson(response, 200, { jobs: curationStore.list(status) });
@@ -651,6 +700,13 @@ export function createApiServer(options = {}) {
         const body = await readJsonBody(request);
         const contentLanguage = resolveContentLanguage(persistenceStore, process.env);
         const runNow = body.now ?? new Date().toISOString();
+        const subscriptionPolling = await pollDueSubscriptions({
+          persistenceStore,
+          curationStore,
+          fetchImpl: feedFetch,
+          contentLanguage,
+          now: runNow
+        });
         const batch = await runDueBackgroundCurationJobs(
           curationStore,
           {
@@ -770,6 +826,7 @@ export function createApiServer(options = {}) {
 
         sendJson(response, 200, {
           ...filteredBatch,
+          subscriptionPolling,
           snapshotSummary: summarizeSnapshot(snapshot)
         });
         return;
@@ -941,6 +998,428 @@ function readConfiguredContentLanguage(env) {
 
 function resolveContentLanguage(persistenceStore, env) {
   return persistenceStore.getSnapshot().userSettings.contentLanguage ?? readConfiguredContentLanguage(env) ?? "zh";
+}
+
+async function handleCreateSubscription(body, persistenceStore, fetchImpl) {
+  const inputUrl = body.url ?? body.feedUrl;
+
+  requireString(inputUrl, "url");
+
+  if (!fetchImpl) {
+    throw new HttpError(500, "Feed fetch is not available.");
+  }
+
+  const normalized = await normalizeSubscriptionFeedUrl(inputUrl, { fetch: fetchImpl });
+  const parsedFeed = await fetchAndParseSubscriptionFeed(normalized.feedUrl, fetchImpl);
+  const now = new Date().toISOString();
+  const snapshot = persistenceStore.getSnapshot();
+  const existing = snapshot.subscriptions.find(
+    (record) => normalizeUrlKey(record.feedUrl) === normalizeUrlKey(normalized.feedUrl)
+  );
+  const record = {
+    id: existing?.id ?? `subscription-${hashText(normalized.feedUrl)}`,
+    kind: normalized.kind,
+    feedUrl: normalized.feedUrl,
+    siteUrl: normalized.siteUrl ?? parsedFeed.siteUrl,
+    title: normalizeSubscriptionTitle(body.title, parsedFeed.title, normalized.feedUrl),
+    filterMode: normalizeSubscriptionFilterModeForApi(body.filterMode, existing?.filterMode ?? "relevant"),
+    createdAt: existing?.createdAt ?? now,
+    lastPolledAt: existing?.lastPolledAt,
+    lastItemPublishedAt: existing?.lastItemPublishedAt,
+    lastError: undefined
+  };
+  const nextSnapshot = persistenceStore.saveSubscriptions([record], now);
+
+  return {
+    record: nextSnapshot.subscriptions.find((item) => item.id === record.id) ?? record,
+    snapshotSummary: summarizeSnapshot(nextSnapshot)
+  };
+}
+
+function handleUpdateSubscription(subscriptionId, body, persistenceStore) {
+  const filterMode = normalizeSubscriptionFilterModeForApi(body.filterMode, undefined, true);
+  const snapshot = persistenceStore.getSnapshot();
+  const record = snapshot.subscriptions.find((item) => item.id === subscriptionId);
+
+  if (!record) {
+    throw new HttpError(404, "Subscription not found.");
+  }
+
+  const now = new Date().toISOString();
+  const nextRecord = {
+    ...record,
+    filterMode
+  };
+  const nextSnapshot = persistenceStore.saveSubscriptions([nextRecord], now);
+
+  return {
+    record: nextSnapshot.subscriptions.find((item) => item.id === subscriptionId) ?? nextRecord,
+    snapshotSummary: summarizeSnapshot(nextSnapshot)
+  };
+}
+
+async function fetchAndParseSubscriptionFeed(feedUrl, fetchImpl) {
+  let response;
+
+  try {
+    // Polling runs inside page-driven /api/curation/run; a hanging feed host
+    // must not block it until the OS-level TCP timeout.
+    response = await fetchImpl(feedUrl, { signal: AbortSignal.timeout(10000) });
+  } catch (error) {
+    throw new HttpError(400, error instanceof Error ? error.message : "Feed URL request failed.");
+  }
+
+  if (!response.ok) {
+    throw new HttpError(400, `Feed URL request failed with ${response.status}.`);
+  }
+
+  const xml = await response.text();
+  const parsed = parseSubscriptionFeed(xml, feedUrl);
+
+  if (parsed.error) {
+    throw new HttpError(400, parsed.error);
+  }
+
+  return parsed;
+}
+
+async function pollDueSubscriptions({ persistenceStore, curationStore, fetchImpl, contentLanguage, now }) {
+  if (!fetchImpl) {
+    return { checked: 0, skipped: 0, queued: 0, pending: 0, errors: ["Feed fetch is not available."] };
+  }
+
+  const snapshot = persistenceStore.getSnapshot();
+  const dueSubscriptions = selectDueSubscriptions(snapshot.subscriptions, now, 3);
+
+  if (!dueSubscriptions.length) {
+    return { checked: 0, skipped: snapshot.subscriptions.length, queued: 0, pending: 0, errors: [] };
+  }
+
+  let workingSnapshot = snapshot;
+  const nowIso = normalizeIsoDate(now);
+  const confirmedConcepts = collectConfirmedDiscoveryConcepts(workingSnapshot);
+  const knownUrlKeys = new Set([
+    ...collectKnownSourceUrls(workingSnapshot),
+    ...curationStore.list().flatMap((record) => record.job.sourceCandidate?.source.url ?? [])
+  ].map(normalizeUrlKey));
+  const candidateRecords = [];
+  const importJobs = [];
+  const subscriptionUpdates = [];
+  const errors = [];
+
+  for (const subscription of dueSubscriptions) {
+    try {
+      const parsedFeed = await fetchAndParseSubscriptionFeed(subscription.feedUrl, fetchImpl);
+      const entries = selectNewSubscriptionEntries(parsedFeed.entries, subscription, knownUrlKeys);
+      const maxPublishedAt = maxIsoDate([
+        subscription.lastItemPublishedAt,
+        ...parsedFeed.entries.map((entry) => entry.publishedAt)
+      ]);
+      let queuedForSource = 0;
+
+      for (const entry of entries) {
+        const urlKey = normalizeUrlKey(entry.link);
+
+        if (!urlKey || knownUrlKeys.has(urlKey)) {
+          continue;
+        }
+
+        const relevance = scoreSubscriptionEntryRelevance(entry, confirmedConcepts);
+        const wouldQueue =
+          subscription.filterMode === "all" || (subscription.filterMode === "relevant" && relevance.passed);
+        const shouldQueue = wouldQueue && queuedForSource < 3;
+        const candidate = createSubscriptionSourceCandidate({
+          subscription,
+          entry,
+          concepts: relevance.concepts.length ? relevance.concepts : [subscription.title],
+          now: nowIso,
+          relevanceScore: relevance.score
+        });
+
+        if (!candidate) {
+          continue;
+        }
+
+        const record = {
+          id: candidate.id,
+          candidate,
+          status: shouldQueue ? "queued" : "pending",
+          intakeKind: "subscription",
+          createdAt: nowIso,
+          updatedAt: nowIso,
+          notes: subscription.title
+        };
+
+        knownUrlKeys.add(urlKey);
+        candidateRecords.push(record);
+
+        if (shouldQueue) {
+          queuedForSource += 1;
+          importJobs.push(createSubscriptionImportJob(subscription, candidate, nowIso, contentLanguage));
+        }
+      }
+
+      subscriptionUpdates.push({
+        ...subscription,
+        title: parsedFeed.title || subscription.title,
+        siteUrl: subscription.siteUrl ?? parsedFeed.siteUrl,
+        lastPolledAt: nowIso,
+        lastItemPublishedAt: maxPublishedAt,
+        lastError: undefined
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Subscription poll failed.";
+
+      errors.push(`${subscription.title}: ${message}`);
+      subscriptionUpdates.push({
+        ...subscription,
+        lastPolledAt: nowIso,
+        lastError: message
+      });
+    }
+  }
+
+  if (candidateRecords.length) {
+    workingSnapshot = persistenceStore.saveSourceCandidateRecords(candidateRecords, nowIso);
+  }
+
+  let queuedCount = 0;
+  let discardedJobIds = [];
+
+  if (importJobs.length) {
+    const rawPlan = createSingleJobPlan(importJobs, nowIso);
+    const budgetResult = applyDailyAutoJobBudget({
+      plan: rawPlan,
+      budget: getDailyAutoJobBudgetRecord(workingSnapshot, nowIso),
+      limit: getDailyAutoJobBudgetLimit(process.env),
+      now: nowIso
+    });
+    const records = curationStore.enqueuePlan(budgetResult.plan, nowIso);
+    const acceptedIds = new Set(budgetResult.plan.acceptedSourceCandidateIds);
+
+    queuedCount = records.length;
+    discardedJobIds = budgetResult.discardedJobIds;
+    persistenceStore.saveDailyAutoJobBudgetRecords([budgetResult.budget], nowIso);
+    workingSnapshot = persistenceStore.saveCurationJobRecords(records, nowIso);
+
+    const downgradedRecords = candidateRecords
+      .filter((record) => record.status === "queued" && !acceptedIds.has(record.candidate.id))
+      .map((record) => ({
+        ...record,
+        status: "pending",
+        updatedAt: nowIso
+      }));
+
+    if (downgradedRecords.length) {
+      workingSnapshot = persistenceStore.saveSourceCandidateRecords(downgradedRecords, nowIso);
+    }
+  }
+
+  if (subscriptionUpdates.length) {
+    workingSnapshot = persistenceStore.saveSubscriptions(subscriptionUpdates, nowIso);
+  }
+
+  return {
+    checked: dueSubscriptions.length,
+    skipped: Math.max(0, snapshot.subscriptions.length - dueSubscriptions.length),
+    queued: queuedCount,
+    pending: Math.max(0, candidateRecords.length - queuedCount),
+    discardedJobIds,
+    errors,
+    snapshotSummary: summarizeSnapshot(workingSnapshot)
+  };
+}
+
+function normalizeSubscriptionTitle(inputTitle, feedTitle, feedUrl) {
+  if (typeof inputTitle === "string" && inputTitle.trim()) {
+    return inputTitle.trim();
+  }
+
+  if (typeof feedTitle === "string" && feedTitle.trim()) {
+    return feedTitle.trim();
+  }
+
+  try {
+    return new URL(feedUrl).hostname;
+  } catch {
+    return "Subscription";
+  }
+}
+
+function normalizeSubscriptionFilterModeForApi(value, fallback = "relevant", required = false) {
+  if (value === "all" || value === "relevant" || value === "listOnly") {
+    return value;
+  }
+
+  if (required) {
+    throw new HttpError(400, "filterMode must be all, relevant, or listOnly.");
+  }
+
+  return fallback;
+}
+
+function selectDueSubscriptions(subscriptions, nowValue, limit) {
+  const now = new Date(nowValue);
+  const pollIntervalMs = 6 * 60 * 60 * 1000;
+
+  return subscriptions
+    .filter((subscription) => {
+      if (!subscription.lastPolledAt) {
+        return true;
+      }
+
+      const lastPolledAt = new Date(subscription.lastPolledAt);
+
+      return Number.isNaN(lastPolledAt.getTime()) || now.getTime() - lastPolledAt.getTime() >= pollIntervalMs;
+    })
+    .sort((left, right) => {
+      const leftTime = left.lastPolledAt ? new Date(left.lastPolledAt).getTime() : 0;
+      const rightTime = right.lastPolledAt ? new Date(right.lastPolledAt).getTime() : 0;
+
+      if (leftTime !== rightTime) {
+        return leftTime - rightTime;
+      }
+
+      return left.createdAt.localeCompare(right.createdAt);
+    })
+    .slice(0, limit);
+}
+
+function selectNewSubscriptionEntries(entries, subscription, knownUrlKeys) {
+  const lastItemTime = subscription.lastItemPublishedAt
+    ? new Date(subscription.lastItemPublishedAt).getTime()
+    : Number.NEGATIVE_INFINITY;
+
+  return entries
+    .filter((entry) => entry.link && !knownUrlKeys.has(normalizeUrlKey(entry.link)))
+    .filter((entry) => {
+      if (!entry.publishedAt) {
+        return true;
+      }
+
+      const publishedTime = new Date(entry.publishedAt).getTime();
+
+      return Number.isNaN(publishedTime) || publishedTime > lastItemTime;
+    })
+    .sort((left, right) => {
+      const leftTime = left.publishedAt ? new Date(left.publishedAt).getTime() : 0;
+      const rightTime = right.publishedAt ? new Date(right.publishedAt).getTime() : 0;
+
+      return rightTime - leftTime;
+    });
+}
+
+function maxIsoDate(values) {
+  const dates = values
+    .filter((value) => typeof value === "string" && value)
+    .map((value) => new Date(value))
+    .filter((date) => !Number.isNaN(date.getTime()))
+    .sort((left, right) => right.getTime() - left.getTime());
+
+  return dates[0]?.toISOString();
+}
+
+function scoreSubscriptionEntryRelevance(entry, confirmedConcepts) {
+  if (!confirmedConcepts.length) {
+    return { passed: false, score: 0, concepts: [] };
+  }
+
+  const text = `${entry.title} ${entry.summary ?? ""}`.toLowerCase();
+  const textTokens = tokenizeText(text);
+  const scoredConcepts = confirmedConcepts
+    .map((concept) => {
+      const conceptKey = normalizeConceptKey(concept);
+      const conceptTokens = Array.from(tokenizeText(conceptKey));
+
+      if (!conceptKey || conceptTokens.length === 0) {
+        return { concept, score: 0 };
+      }
+
+      if (text.includes(conceptKey)) {
+        return { concept, score: 1 };
+      }
+
+      const overlap = conceptTokens.filter((token) => textTokens.has(token)).length;
+
+      return {
+        concept,
+        score: overlap / conceptTokens.length
+      };
+    })
+    .filter((item) => item.score >= 0.5)
+    .sort((left, right) => right.score - left.score);
+  const score = scoredConcepts[0]?.score ?? 0;
+
+  return {
+    passed: score >= 0.5,
+    score: roundScore(score),
+    concepts: scoredConcepts.slice(0, 4).map((item) => item.concept)
+  };
+}
+
+function createSubscriptionSourceCandidate({ subscription, entry, concepts, now, relevanceScore }) {
+  let parsedUrl;
+
+  try {
+    parsedUrl = parseHttpUrl(entry.link);
+  } catch {
+    return null;
+  }
+
+  const type = entry.kind === "youtube" ? "youtube" : "article";
+  const source = {
+    id: buildSourceId(type, parsedUrl),
+    title: entry.title || subscription.title,
+    url: parsedUrl.toString(),
+    type,
+    publishedAt: entry.publishedAt
+  };
+  const conceptIds = normalizeStringArray(concepts);
+  const topicId = conceptIds[0] ?? subscription.title;
+
+  return {
+    id: `subscription-${subscription.id}-${hashText(source.url)}`,
+    source,
+    topicId,
+    conceptIds,
+    relevanceScore: Math.max(0.52, relevanceScore || 0.52),
+    noveltyScore: 0.66,
+    qualityScore: 0.72,
+    reason: entry.summary
+      ? `Subscription "${subscription.title}" published this item: ${entry.summary.slice(0, 180)}`
+      : `Subscription "${subscription.title}" published this item.`,
+    discoveredAt: now
+  };
+}
+
+function createSubscriptionImportJob(subscription, candidate, now, contentLanguage) {
+  return {
+    id: `subscription-import-${hashText(`${subscription.id}|${candidate.id}`)}`,
+    kind: "import_source",
+    topicId: candidate.topicId ?? subscription.title,
+    conceptIds: candidate.conceptIds,
+    priority: subscription.filterMode === "all" ? 0.7 : 0.64,
+    reason:
+      contentLanguage === "en"
+        ? `Subscription "${subscription.title}" produced a new source: ${candidate.reason}`
+        : `订阅「${subscription.title}」出现了新来源:${candidate.reason}`,
+    createdAt: now,
+    runAfter: now,
+    sourceCandidate: candidate
+  };
+}
+
+function normalizeUrlKey(value) {
+  try {
+    const url = new URL(value);
+
+    url.hash = "";
+    url.hostname = url.hostname.toLowerCase();
+
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return typeof value === "string" ? value.trim() : "";
+  }
 }
 
 function getSettingsResponse(persistenceStore, env, snapshot = persistenceStore.getSnapshot()) {
@@ -1576,11 +2055,13 @@ function createResearchIdeaJob(turnRecord, question, concepts, contentLanguage, 
 }
 
 function createSingleJobPlan(job, generatedAt) {
+  const jobs = Array.isArray(job) ? job : [job];
+
   return {
     generatedAt,
-    jobs: [job],
+    jobs,
     suppressions: [],
-    acceptedSourceCandidateIds: [],
+    acceptedSourceCandidateIds: jobs.flatMap((item) => item.sourceCandidate?.id ?? []),
     cooledTopicIds: [],
     expansionPlan: {
       generatedAt,
@@ -2412,11 +2893,17 @@ async function discoverSourcesForJob(job, searchProvider, persistenceStore, cont
 }
 
 function getConfirmedDiscoveryConcepts(snapshot, proposedConcepts) {
+  const confirmed = new Set(collectConfirmedDiscoveryConcepts(snapshot).map(normalizeConceptKey));
+
+  return toTrimmedStrings(proposedConcepts).filter((concept) => confirmed.has(normalizeConceptKey(concept)));
+}
+
+function collectConfirmedDiscoveryConcepts(snapshot) {
   const confirmed = new Set();
 
   for (const record of snapshot.topicStates) {
     if (record.topicId) {
-      confirmed.add(normalizeConceptKey(record.topicId));
+      confirmed.add(record.topicId.trim());
     }
   }
 
@@ -2429,7 +2916,9 @@ function getConfirmedDiscoveryConcepts(snapshot, proposedConcepts) {
     }
 
     for (const concept of [signal.topicId, ...(signal.conceptIds ?? [])]) {
-      confirmed.add(normalizeConceptKey(concept));
+      if (typeof concept === "string" && concept.trim()) {
+        confirmed.add(concept.trim());
+      }
     }
   }
 
@@ -2440,11 +2929,13 @@ function getConfirmedDiscoveryConcepts(snapshot, proposedConcepts) {
       ...(memoryRecord.memory.knowledge.savedConcepts ?? []),
       ...(memoryRecord.memory.knowledge.weakConcepts ?? [])
     ]) {
-      confirmed.add(normalizeConceptKey(concept));
+      if (typeof concept === "string" && concept.trim()) {
+        confirmed.add(concept.trim());
+      }
     }
   }
 
-  return toTrimmedStrings(proposedConcepts).filter((concept) => confirmed.has(normalizeConceptKey(concept)));
+  return Array.from(confirmed);
 }
 
 function persistDiscoveredCandidates(persistenceStore, candidates, now) {
@@ -3370,7 +3861,8 @@ function summarizeSnapshot(snapshot) {
     mergedSources: snapshot.mergedSources.length,
     autoJobBudget: snapshot.autoJobBudget,
     conceptBriefs: snapshot.conceptBriefs.length,
-    weeklyRecaps: snapshot.weeklyRecaps.length
+    weeklyRecaps: snapshot.weeklyRecaps.length,
+    subscriptions: snapshot.subscriptions.length
   };
 }
 
@@ -3677,7 +4169,13 @@ function isSourceCandidateStatus(value) {
 }
 
 function isSourceCandidateIntakeKind(value) {
-  return value === "user_paste" || value === "browser_share" || value === "agent_discovery" || value === "manual";
+  return (
+    value === "user_paste" ||
+    value === "browser_share" ||
+    value === "agent_discovery" ||
+    value === "manual" ||
+    value === "subscription"
+  );
 }
 
 function sendJson(response, status, payload) {
@@ -3753,8 +4251,56 @@ function sendHtml(response, html) {
   response.end(html);
 }
 
+function sendXml(response, xml) {
+  response.writeHead(200, { "content-type": "application/rss+xml" });
+  response.end(xml);
+}
+
 function getRequestOrigin(request) {
   return `http://${request.headers.host ?? "127.0.0.1"}`;
+}
+
+function fixtureSubscriptionFeedXml(variant) {
+  const safeVariant = sanitizeSlug(variant);
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>AITimeline Subscription Fixture ${safeVariant}</title>
+    <link>https://fixtures.local/subscription/${safeVariant}</link>
+    <description>Local subscription fixture for RSS polling smoke checks.</description>
+    <item>
+      <title><![CDATA[RAG retrieval architecture ${safeVariant} 4]]></title>
+      <link>https://fixtures.local/subscription/${safeVariant}/rag-4</link>
+      <pubDate>Tue, 07 Jul 2026 04:00:00 GMT</pubDate>
+      <description><![CDATA[<p>RAG retrieval architecture and grounded evaluation notes.</p>]]></description>
+    </item>
+    <item>
+      <title>RAG retrieval architecture ${safeVariant} 3</title>
+      <link>https://fixtures.local/subscription/${safeVariant}/rag-3</link>
+      <pubDate>Tue, 07 Jul 2026 03:00:00 GMT</pubDate>
+      <description>RAG retrieval quality improves with grounded evaluation.</description>
+    </item>
+    <item>
+      <title>RAG retrieval architecture ${safeVariant} 2</title>
+      <link>https://fixtures.local/subscription/${safeVariant}/rag-2</link>
+      <pubDate>Tue, 07 Jul 2026 02:00:00 GMT</pubDate>
+      <description>RAG system design and indexing trade-offs.</description>
+    </item>
+    <item>
+      <title>RAG retrieval architecture ${safeVariant} 1</title>
+      <link>https://fixtures.local/subscription/${safeVariant}/rag-1</link>
+      <pubDate>Tue, 07 Jul 2026 01:00:00 GMT</pubDate>
+      <description>RAG notes beyond the single-source import cap.</description>
+    </item>
+    <item>
+      <title>Gardening calendar ${safeVariant}</title>
+      <link>https://fixtures.local/subscription/${safeVariant}/garden</link>
+      <pubDate>Tue, 07 Jul 2026 00:00:00 GMT</pubDate>
+      <description>Tomato watering schedule with no relevant AI concepts.</description>
+    </item>
+  </channel>
+</rss>`;
 }
 
 function fixtureArticleHtml(title) {
