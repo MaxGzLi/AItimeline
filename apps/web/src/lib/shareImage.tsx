@@ -1,3 +1,5 @@
+import type { WeeklyConceptTrend } from "@aitimeline/core";
+
 export interface RenderPngOptions {
   fileName?: string;
   height: number;
@@ -5,7 +7,7 @@ export interface RenderPngOptions {
   width: number;
 }
 
-export type RenderPngPayload = ShareCardPngPayload | GraphComparisonPngPayload;
+export type RenderPngPayload = ShareCardPngPayload | GraphComparisonPngPayload | WeeklyRecapPngPayload;
 
 export interface ShareCardPngPayload {
   claim: string;
@@ -28,6 +30,17 @@ export interface GraphComparisonPngPayload {
   startImageUrl: string;
   startLabel: string;
   summary: string;
+}
+
+export interface WeeklyRecapPngPayload {
+  claim: string;
+  kind: "weekly-recap";
+  narrativeLines: string[];
+  productName?: string;
+  stats: Array<{ label: string; value: string }>;
+  title: string;
+  trend: WeeklyConceptTrend;
+  weekRange: string;
 }
 
 type TextVariant = "math" | "normal";
@@ -77,6 +90,12 @@ interface GraphComparisonLayout {
   width: number;
 }
 
+interface WeeklyRecapLayout {
+  height: number;
+  narrativeLines: WrappedLine[];
+  width: number;
+}
+
 const FONT_FAMILY = "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
 const MONO_FONT_FAMILY = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 const PRODUCT_NAME = "AITimeline";
@@ -99,6 +118,13 @@ const COMPARE = {
   mark: { height: 58, radius: 8, width: 210 },
   minImageHeight: 440,
   padding: 42
+};
+
+const WEEKLY = {
+  chart: { height: 250, width: 1056, x: 72, y: 252 },
+  mark: { height: 58, radius: 8, width: 230 },
+  padding: 72,
+  statsY: 530
 };
 
 const fallbackPalettes: Record<"dark" | "light", Omit<ExportPalette, "theme">> = {
@@ -134,11 +160,35 @@ export async function renderElementToPng(payload: RenderPngPayload, options: Ren
     return canvas.toDataURL("image/png");
   }
 
+  if (payload.kind === "weekly-recap") {
+    const layout = layoutWeeklyRecap(measurementContext, payload, options);
+    const { canvas, context } = createExportCanvas(layout.width, layout.height, options.pixelRatio ?? 2);
+
+    drawWeeklyRecap(context, payload, layout, palette);
+    return canvas.toDataURL("image/png");
+  }
+
   const layout = layoutGraphComparison(measurementContext, payload, options);
   const { canvas, context } = createExportCanvas(layout.width, layout.height, options.pixelRatio ?? 2);
 
   await drawGraphComparison(context, payload, layout, palette);
   return canvas.toDataURL("image/png");
+}
+
+function layoutWeeklyRecap(
+  context: CanvasRenderingContext2D,
+  payload: WeeklyRecapPngPayload,
+  options: RenderPngOptions
+): WeeklyRecapLayout {
+  const narrativeLines = payload.narrativeLines.flatMap((line) =>
+    wrapText(context, line, options.width - WEEKLY.padding * 2, getFonts(28, 500, "normal", 600))
+  );
+
+  return {
+    height: options.height,
+    narrativeLines,
+    width: options.width
+  };
 }
 
 export function downloadDataUrl(dataUrl: string, fileName: string): void {
@@ -305,6 +355,196 @@ async function drawGraphComparison(
 
   drawComparisonFrame(context, startImage, startX, layout.gridY, frameWidth, imageHeight, payload.startLabel, palette);
   drawComparisonFrame(context, endImage, endX, layout.gridY, frameWidth, imageHeight, payload.endLabel, palette);
+}
+
+function drawWeeklyRecap(
+  context: CanvasRenderingContext2D,
+  payload: WeeklyRecapPngPayload,
+  layout: WeeklyRecapLayout,
+  palette: ExportPalette
+): void {
+  drawShareBackground(context, layout.width, layout.height, palette);
+
+  context.textBaseline = "top";
+  context.fillStyle = palette.muted;
+  context.font = getFont(20, 800);
+  context.fillText(payload.weekRange, WEEKLY.padding, 58);
+
+  context.fillStyle = palette.ink;
+  context.font = getFont(58, 900);
+  context.fillText(payload.title, WEEKLY.padding, 88);
+
+  drawLines(context, layout.narrativeLines.slice(0, 3), WEEKLY.padding, 168, 36, palette.ink, getFonts(28, 500, "normal", 600));
+  drawWeeklyTrend(context, payload.trend, WEEKLY.chart.x, WEEKLY.chart.y, WEEKLY.chart.width, WEEKLY.chart.height, palette);
+  drawWeeklyStats(context, payload.stats, WEEKLY.padding, WEEKLY.statsY, layout.width - WEEKLY.padding * 2, palette);
+  drawProductMark(
+    context,
+    payload.productName ?? PRODUCT_NAME,
+    payload.claim,
+    layout.width - WEEKLY.padding - WEEKLY.mark.width,
+    layout.height - 50 - WEEKLY.mark.height,
+    WEEKLY.mark.width,
+    WEEKLY.mark.height,
+    palette,
+    false
+  );
+}
+
+function drawWeeklyTrend(
+  context: CanvasRenderingContext2D,
+  trend: WeeklyConceptTrend,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  palette: ExportPalette
+): void {
+  roundedRectPath(context, x, y, width, height, 8);
+  context.fillStyle = palette.module;
+  context.fill();
+  context.strokeStyle = palette.line;
+  context.lineWidth = 1;
+  roundedRectPath(context, x + 0.5, y + 0.5, width - 1, height - 1, 8);
+  context.stroke();
+
+  const points = trend.points;
+  const plot = {
+    left: x + 34,
+    right: x + width - 30,
+    top: y + 30,
+    bottom: y + height - 44
+  };
+  const maxValue = Math.max(1, ...points.map((point) => point.totalConcepts));
+
+  context.strokeStyle = palette.line;
+  context.lineWidth = 1;
+  for (let index = 0; index < 3; index += 1) {
+    const gridY = plot.top + ((plot.bottom - plot.top) * index) / 2;
+    context.beginPath();
+    context.moveTo(plot.left, gridY + 0.5);
+    context.lineTo(plot.right, gridY + 0.5);
+    context.stroke();
+  }
+
+  if (points.length > 0) {
+    drawTrendSegment(context, points, plot, maxValue, 0, Math.max(0, trend.weekStartIndex), palette.muted);
+    drawTrendSegment(context, points, plot, maxValue, Math.max(0, trend.weekStartIndex), points.length - 1, palette.blue);
+  }
+
+  context.textBaseline = "top";
+  context.font = getFont(14, 800);
+  context.fillStyle = palette.muted;
+  let lastLabelX = -Infinity;
+
+  points.forEach((point, index) => {
+    if (!isMondayDate(point.date)) {
+      return;
+    }
+
+    const labelX = trendPointX(index, points.length, plot);
+
+    if (labelX - lastLabelX < 94) {
+      return;
+    }
+
+    context.fillText(formatTrendDateLabel(point.date), labelX - 18, plot.bottom + 14);
+    lastLabelX = labelX;
+  });
+}
+
+function drawTrendSegment(
+  context: CanvasRenderingContext2D,
+  points: WeeklyConceptTrend["points"],
+  plot: { bottom: number; left: number; right: number; top: number },
+  maxValue: number,
+  startIndex: number,
+  endIndex: number,
+  color: string
+): void {
+  if (points.length === 0 || endIndex <= startIndex) {
+    return;
+  }
+
+  context.beginPath();
+  context.strokeStyle = color;
+  context.lineWidth = 4;
+  context.lineCap = "round";
+  context.lineJoin = "round";
+
+  for (let index = startIndex; index <= endIndex; index += 1) {
+    const x = trendPointX(index, points.length, plot);
+    const y = trendPointY(points[index].totalConcepts, maxValue, plot);
+
+    if (index === startIndex) {
+      context.moveTo(x, y);
+    } else {
+      context.lineTo(x, y);
+    }
+  }
+
+  context.stroke();
+}
+
+function drawWeeklyStats(
+  context: CanvasRenderingContext2D,
+  stats: Array<{ label: string; value: string }>,
+  x: number,
+  y: number,
+  width: number,
+  palette: ExportPalette
+): void {
+  const cellWidth = width / Math.max(1, stats.length);
+
+  stats.forEach((stat, index) => {
+    const cellX = x + cellWidth * index;
+
+    if (index > 0) {
+      context.strokeStyle = palette.line;
+      context.lineWidth = 1;
+      context.beginPath();
+      context.moveTo(cellX, y + 4);
+      context.lineTo(cellX, y + 70);
+      context.stroke();
+    }
+
+    context.fillStyle = palette.ink;
+    context.font = getFont(34, 900);
+    context.textBaseline = "top";
+    context.fillText(stat.value, cellX + 20, y);
+    context.fillStyle = palette.muted;
+    context.font = getFont(15, 800);
+    context.fillText(stat.label, cellX + 20, y + 43);
+  });
+}
+
+function trendPointX(
+  index: number,
+  count: number,
+  plot: { bottom: number; left: number; right: number; top: number }
+): number {
+  if (count <= 1) {
+    return (plot.left + plot.right) / 2;
+  }
+
+  return plot.left + ((plot.right - plot.left) * index) / (count - 1);
+}
+
+function trendPointY(
+  value: number,
+  maxValue: number,
+  plot: { bottom: number; left: number; right: number; top: number }
+): number {
+  return plot.bottom - ((plot.bottom - plot.top) * value) / maxValue;
+}
+
+function isMondayDate(date: string): boolean {
+  return new Date(`${date}T00:00:00.000Z`).getUTCDay() === 1;
+}
+
+function formatTrendDateLabel(date: string): string {
+  const parsed = new Date(`${date}T00:00:00.000Z`);
+
+  return `${parsed.getUTCMonth() + 1}/${parsed.getUTCDate()}`;
 }
 
 function drawShareBackground(

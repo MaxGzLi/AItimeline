@@ -26,7 +26,8 @@ import {
   type ReviewItem,
   type SourceAsset,
   type SourceImport,
-  type TopicState
+  type TopicState,
+  type WeeklyRecapRecord
 } from "@aitimeline/core";
 import {
   ArrowLeft,
@@ -55,6 +56,7 @@ import { ConceptDigestPanel } from "./components/ConceptDigestPanel";
 import { ContextRail } from "./components/ContextRail";
 import { PostDetailView } from "./components/PostDetailView";
 import { PostView } from "./components/PostView";
+import { WeeklyRecapCard } from "./components/WeeklyRecapCard";
 import { buildWikilinkAutocompleteCandidates } from "./components/WikilinkAutocomplete";
 import { DiscoverView } from "./views/DiscoverView";
 import { AgentView } from "./views/AgentView";
@@ -100,6 +102,8 @@ import type {
   ApiSnapshot,
   ApiStatus,
   ApiTimelineResponse,
+  ApiWeeklyRecapResponse,
+  ApiWeeklyRecapSeenResponse,
   AskApiResult,
   ConceptBrief,
   DailyAutoJobBudgetRecord,
@@ -156,6 +160,7 @@ export function App() {
   const [pendingCards, setPendingCards] = useState<KnowledgeCard[]>([]);
   // Server due-review data is the single review source for the feed and rail.
   const [reviewDueItems, setReviewDueItems] = useState<ReviewDueItem[]>([]);
+  const [weeklyRecap, setWeeklyRecap] = useState<WeeklyRecapRecord | null>(null);
   const [sourceAssets, setSourceAssets] = useState<SourceAsset[]>([]);
   const [sourceChunks, setSourceChunks] = useState<KnowledgeChunk[]>([]);
   const [sourceCandidates, setSourceCandidates] = useState<SourceCandidateRecord[]>([]);
@@ -237,6 +242,7 @@ export function App() {
   // Best-effort impression reporting, capped to one event per card per session.
   const impressionReportedIds = useRef<Set<string>>(new Set());
   const impressionQueue = useRef<Map<string, KnowledgeCard>>(new Map());
+  const weeklyRecapSeenIds = useRef<Set<string>>(new Set());
   // Locally hidden cards remain hidden while async buffered refreshes finish.
   const locallyRemovedIdsRef = useRef<Set<string>>(new Set());
   const [locallyRemovedIds, setLocallyRemovedIds] = useState<ReadonlySet<string>>(() => new Set());
@@ -326,6 +332,20 @@ export function App() {
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (!weeklyRecap || apiStatus !== "connected" || weeklyRecapSeenIds.current.has(weeklyRecap.id)) {
+      return;
+    }
+
+    weeklyRecapSeenIds.current.add(weeklyRecap.id);
+    void apiRequest<ApiWeeklyRecapSeenResponse>("/api/recap/weekly/seen", {
+      method: "POST",
+      body: { id: weeklyRecap.id }
+    }).catch(() => {
+      weeklyRecapSeenIds.current.delete(weeklyRecap.id);
+    });
+  }, [apiStatus, weeklyRecap]);
 
   const importedSignals = useMemo(
     () =>
@@ -1025,7 +1045,7 @@ export function App() {
     const now = new Date().toISOString();
 
     try {
-      const [timeline, snapshot, queuedJobs, reviewDue, dismissed, notificationsResult] = await Promise.all([
+      const [timeline, snapshot, queuedJobs, reviewDue, dismissed, notificationsResult, weeklyRecapResult] = await Promise.all([
         apiRequest<ApiTimelineResponse>(
           `/api/timeline?userId=local-user&now=${encodeURIComponent(now)}`
         ),
@@ -1033,7 +1053,8 @@ export function App() {
         apiRequest<ApiCurationJobsResponse>("/api/curation/jobs?status=queued"),
         apiRequest<ApiReviewDueResponse>(`/api/review/due?now=${encodeURIComponent(now)}`),
         apiRequest<ApiDismissedPostsResponse>(`/api/dismissed?now=${encodeURIComponent(now)}`),
-        apiRequest<ApiNotificationsResponse>("/api/notifications")
+        apiRequest<ApiNotificationsResponse>("/api/notifications"),
+        apiRequest<ApiWeeklyRecapResponse>(`/api/recap/weekly?now=${encodeURIComponent(now)}`)
       ]);
 
       // A newer refresh started while this one was in flight; drop the stale result.
@@ -1078,6 +1099,7 @@ export function App() {
       setAgentTurns(snapshot.agentTurns);
       setNotifications(notificationsResult.records);
       setReviewDueItems(reviewDue.due);
+      setWeeklyRecap(weeklyRecapResult.recap && !weeklyRecapResult.recap.dismissedAt ? weeklyRecapResult.recap : null);
       setAutoJobBudget(snapshot.autoJobBudget?.find((record) => record.date === now.slice(0, 10)) ?? null);
       setQueuedJobCount(queuedJobs.jobs.length);
       productionPeakRef.current =
@@ -1563,6 +1585,16 @@ export function App() {
         // Leave the current list unchanged on repeated API failure.
       });
     }
+  }
+
+  function dismissWeeklyRecap(recap: WeeklyRecapRecord) {
+    setWeeklyRecap((current) => (current?.id === recap.id ? null : current));
+    void apiRequest<ApiWeeklyRecapSeenResponse>("/api/recap/weekly/seen", {
+      method: "POST",
+      body: { dismissed: true, id: recap.id }
+    }).catch(() => {
+      setWeeklyRecap((current) => current ?? recap);
+    });
   }
 
   function handleSkip(card: RankedKnowledgeCard) {
@@ -2072,6 +2104,8 @@ export function App() {
                   : t("feed.productionPaused", { count: queuedJobCount })}
               </div>
             ) : null}
+
+            {weeklyRecap ? <WeeklyRecapCard onDismiss={dismissWeeklyRecap} recap={weeklyRecap} theme={theme} /> : null}
 
             <section className="x-feedlist" aria-label={t("feed.label")}>
               {visibleCards.length === 0 ? (

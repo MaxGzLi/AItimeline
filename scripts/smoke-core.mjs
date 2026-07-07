@@ -65,6 +65,7 @@ const { createOpenAICompatibleModelClient, createOpenAICompatibleModelClientFrom
   "../packages/core/dist/model/openaiCompatibleClient.js"
 );
 const { createSourcePostReleasePlan } = await import("../packages/core/dist/ranking/postReleasePlan.js");
+const { buildWeeklyRecap, buildWeeklyRecapId } = await import("../packages/core/dist/recap/weeklyRecap.js");
 const {
   countSeenReadSignalsByPostId,
   filterTimelineLifecycle,
@@ -194,6 +195,123 @@ function makeSourceQualityInput(fixture, sourceId, url, concepts, title = fixtur
     createdAt: "2026-06-10T00:00:00.000Z"
   };
 }
+
+const weeklyRecapWeekStart = "2026-06-29T00:00:00.000Z";
+const weeklyRecap = buildWeeklyRecap(
+  {
+    contentLanguage: "en",
+    posts: [
+      makeSmokePost({
+        id: "weekly-old-rag",
+        title: "Old RAG card",
+        concepts: ["RAG", "Evaluation"],
+        createdAt: "2026-06-23T09:00:00.000Z"
+      }),
+      makeSmokePost({
+        id: "weekly-new-rag",
+        title: "Weekly RAG card",
+        concepts: ["RAG", "Retrieval"],
+        createdAt: "2026-06-29T09:00:00.000Z"
+      }),
+      makeSmokePost({
+        id: "weekly-new-agent",
+        title: "Weekly Agent card",
+        concepts: ["Agent Memory"],
+        createdAt: "2026-07-02T09:00:00.000Z"
+      }),
+      makeSmokePost({
+        id: "weekly-future-card",
+        title: "Future card",
+        concepts: ["Future Concept"],
+        createdAt: "2026-07-06T09:00:00.000Z"
+      })
+    ],
+    reviewStates: [
+      {
+        postId: "weekly-old-rag",
+        intervalDays: 3,
+        dueAt: "2026-07-03T00:00:00.000Z",
+        lastReviewedAt: "2026-07-04T00:00:00.000Z"
+      },
+      {
+        postId: "weekly-new-rag",
+        intervalDays: 1,
+        dueAt: "2026-07-05T00:00:00.000Z"
+      }
+    ],
+    interactionSignals: [
+      {
+        postId: "weekly-new-rag",
+        topicId: "RAG",
+        conceptIds: ["RAG", "Retrieval"],
+        impression: true,
+        dwellTimeMs: 18000,
+        openedThread: true,
+        liked: true,
+        saved: false,
+        askedQuestion: true,
+        reviewed: false,
+        skippedQuickly: false,
+        createdAt: "2026-07-01T00:00:00.000Z"
+      },
+      {
+        postId: "weekly-new-agent",
+        topicId: "Agent Memory",
+        conceptIds: ["Agent Memory"],
+        impression: true,
+        dwellTimeMs: 8000,
+        openedThread: false,
+        liked: false,
+        saved: true,
+        askedQuestion: false,
+        reviewed: true,
+        skippedQuickly: false,
+        createdAt: "2026-07-02T00:00:00.000Z"
+      }
+    ],
+    topicStates: []
+  },
+  weeklyRecapWeekStart
+);
+
+assert.ok(weeklyRecap, "weekly recap should build for a completed cross-week fixture");
+assert.equal(weeklyRecap.id, buildWeeklyRecapId(weeklyRecapWeekStart), "weekly recap id should be ISO-week stable");
+assert.equal(weeklyRecap.stats.newCardCount, 2, "weekly recap should count cards created in the target week");
+assert.equal(weeklyRecap.stats.newConceptCount, 2, "weekly recap should count concepts first seen in the target week");
+assert.equal(weeklyRecap.stats.reviewCompletedCount, 2, "weekly recap should count completed reviews in the target week");
+assert.equal(weeklyRecap.stats.reviewDueCount, 3, "weekly recap should count due plus completed review posts");
+assert.equal(weeklyRecap.stats.topConcepts[0]?.concept, "RAG", "weekly recap should rank the most active concept");
+assert.ok(
+  weeklyRecap.conceptTrend.points.every(
+    (point, index, points) => index === 0 || point.totalConcepts >= points[index - 1].totalConcepts
+  ),
+  "weekly recap concept trend should be monotonic"
+);
+assert.equal(
+  weeklyRecap.conceptTrend.points[weeklyRecap.conceptTrend.weekStartIndex]?.date,
+  "2026-06-29",
+  "weekly recap weekStartIndex should point at the target Monday"
+);
+assert.ok(weeklyRecap.narrative.en.length >= 2, "weekly recap should include English narrative lines");
+
+const insufficientWeeklyRecap = buildWeeklyRecap(
+  {
+    posts: [
+      makeSmokePost({
+        id: "weekly-too-new",
+        title: "Too new",
+        concepts: ["Fresh"],
+        createdAt: "2026-07-02T00:00:00.000Z"
+      })
+    ],
+    reviewStates: [],
+    interactionSignals: [],
+    topicStates: []
+  },
+  weeklyRecapWeekStart
+);
+
+assert.equal(insufficientWeeklyRecap, null, "weekly recap should not build when the library is younger than a full week");
 
 const seoGateVerdict = evaluateSourceQualityDeterministic(
   makeSourceQualityInput(seoWaterSourceFixture, "seo-water-source", "https://example.com/grok-advanced-guide", [

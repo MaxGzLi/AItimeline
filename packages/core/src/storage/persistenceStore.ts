@@ -22,6 +22,7 @@ import type {
 } from "../types.js";
 import type { UserMemoryEditEvent } from "../memory/userMemoryControls.js";
 import { parseContentLanguage, type ContentLanguage } from "../harness/contentLanguage.js";
+import type { WeeklyRecapRecord } from "../recap/weeklyRecap.js";
 
 export interface PersistenceStorageAdapter {
   read(): string | null | undefined;
@@ -160,6 +161,7 @@ export interface AITimelinePersistenceSnapshot {
   mergedSources: MergedSourceRecord[];
   autoJobBudget: DailyAutoJobBudgetRecord[];
   conceptBriefs: ConceptBrief[];
+  weeklyRecaps: WeeklyRecapRecord[];
 }
 
 export interface AITimelinePersistenceStore {
@@ -179,6 +181,7 @@ export interface AITimelinePersistenceStore {
     savedAt?: string | Date
   ): AITimelinePersistenceSnapshot;
   saveConceptBriefs(records: ConceptBrief[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
+  saveWeeklyRecaps(records: WeeklyRecapRecord[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
   saveInteractionSignalRecords(
     records: InteractionSignalRecord[],
     savedAt?: string | Date
@@ -320,6 +323,16 @@ export function createAITimelinePersistenceStore(
         ...snapshot,
         updatedAt: normalizeDate(savedAt).toISOString(),
         conceptBriefs: upsertConceptBriefs(snapshot.conceptBriefs, records)
+      };
+      persist(storage, snapshot);
+
+      return cloneSnapshot(snapshot);
+    },
+    saveWeeklyRecaps(records, savedAt = new Date()) {
+      snapshot = {
+        ...snapshot,
+        updatedAt: normalizeDate(savedAt).toISOString(),
+        weeklyRecaps: upsertWeeklyRecaps(snapshot.weeklyRecaps, records)
       };
       persist(storage, snapshot);
 
@@ -489,7 +502,8 @@ function createSnapshot(input: AITimelinePersistenceSnapshotInput = {}): AITimel
     sourceQualityVerdicts: normalizeSourceQualityVerdicts(input.sourceQualityVerdicts ?? []),
     mergedSources: normalizeMergedSourceRecords(input.mergedSources ?? []),
     autoJobBudget: normalizeDailyAutoJobBudgetRecords(input.autoJobBudget ?? []),
-    conceptBriefs: normalizeConceptBriefs(input.conceptBriefs ?? [])
+    conceptBriefs: normalizeConceptBriefs(input.conceptBriefs ?? []),
+    weeklyRecaps: normalizeWeeklyRecaps(input.weeklyRecaps ?? [])
   };
 }
 
@@ -864,6 +878,123 @@ function normalizeConceptBriefs(value: unknown): ConceptBrief[] {
   });
 }
 
+function normalizeWeeklyRecaps(value: unknown): WeeklyRecapRecord[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const byId = new Map<string, WeeklyRecapRecord>();
+
+  for (const record of value) {
+    if (
+      !isRecord(record) ||
+      typeof record.id !== "string" ||
+      typeof record.weekStart !== "string" ||
+      typeof record.weekEnd !== "string" ||
+      !isRecord(record.stats) ||
+      !isRecord(record.conceptTrend) ||
+      !isRecord(record.narrative)
+    ) {
+      continue;
+    }
+
+    const stats = normalizeWeeklyRecapStats(record.stats);
+    const conceptTrend = normalizeWeeklyConceptTrend(record.conceptTrend);
+    const narrative = normalizeWeeklyRecapNarrative(record.narrative);
+
+    if (!stats || !conceptTrend || !narrative) {
+      continue;
+    }
+
+    byId.set(record.id, {
+      id: record.id,
+      weekStart: record.weekStart,
+      weekEnd: record.weekEnd,
+      stats,
+      conceptTrend,
+      narrative,
+      seenAt: typeof record.seenAt === "string" ? record.seenAt : undefined,
+      dismissedAt: typeof record.dismissedAt === "string" ? record.dismissedAt : undefined
+    });
+  }
+
+  return Array.from(byId.values()).sort((left, right) => left.weekStart.localeCompare(right.weekStart));
+}
+
+function normalizeWeeklyRecapStats(value: Record<string, unknown>): WeeklyRecapRecord["stats"] | null {
+  if (!Array.isArray(value.topConcepts)) {
+    return null;
+  }
+
+  return {
+    newCardCount: normalizeNonNegativeInteger(value.newCardCount),
+    newConceptCount: normalizeNonNegativeInteger(value.newConceptCount),
+    reviewCompletedCount: normalizeNonNegativeInteger(value.reviewCompletedCount),
+    reviewDueCount: normalizeNonNegativeInteger(value.reviewDueCount),
+    topConcepts: value.topConcepts.flatMap((item): WeeklyRecapRecord["stats"]["topConcepts"] => {
+      if (!isRecord(item) || typeof item.concept !== "string") {
+        return [];
+      }
+
+      return [
+        {
+          concept: item.concept,
+          count: normalizeNonNegativeInteger(item.count),
+          score: typeof item.score === "number" && Number.isFinite(item.score) ? item.score : 0
+        }
+      ];
+    })
+  };
+}
+
+function normalizeWeeklyConceptTrend(value: Record<string, unknown>): WeeklyRecapRecord["conceptTrend"] | null {
+  if (!Array.isArray(value.points)) {
+    return null;
+  }
+
+  const points = value.points.flatMap((point): WeeklyRecapRecord["conceptTrend"]["points"] => {
+    if (!isRecord(point) || typeof point.date !== "string") {
+      return [];
+    }
+
+    return [
+      {
+        date: point.date,
+        totalConcepts: normalizeNonNegativeInteger(point.totalConcepts)
+      }
+    ];
+  });
+
+  return {
+    points,
+    weekStartIndex: normalizeNonNegativeInteger(value.weekStartIndex)
+  };
+}
+
+function normalizeWeeklyRecapNarrative(value: Record<string, unknown>): WeeklyRecapRecord["narrative"] | null {
+  const zh = normalizeStringArray(value.zh);
+  const en = normalizeStringArray(value.en);
+  const language = parseContentLanguage(value.language) ?? "zh";
+  const sentences = normalizeStringArray(value.sentences);
+
+  if (!zh.length || !en.length) {
+    return null;
+  }
+
+  return {
+    en,
+    language,
+    sentences: sentences.length ? sentences : language === "en" ? en : zh,
+    zh
+  };
+}
+
+function normalizeStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    : [];
+}
+
 interface PreparedSourceImportForPersistence {
   postsToSave: KnowledgePost[];
   mergedSources: MergedSourceRecord[];
@@ -1085,6 +1216,10 @@ function upsertConceptBriefs(items: ConceptBrief[], nextItems: ConceptBrief[]): 
   }
 
   return Array.from(byConcept.values()).sort((left, right) => left.concept.localeCompare(right.concept));
+}
+
+function upsertWeeklyRecaps(items: WeeklyRecapRecord[], nextItems: WeeklyRecapRecord[]): WeeklyRecapRecord[] {
+  return upsertManyById(items, nextItems).sort((left, right) => left.weekStart.localeCompare(right.weekStart));
 }
 
 function upsertUserMemory(items: UserMemoryRecord[], item: UserMemoryRecord): UserMemoryRecord[] {
