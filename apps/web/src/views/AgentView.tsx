@@ -63,6 +63,9 @@ export function AgentView({
   sourceImports: SourceImport[];
   sourceUrl: string;
 }) {
+  const rejectedSourceCandidates = sourceCandidates.filter((record) => record.status === "rejected_source");
+  const activeSourceCandidates = sourceCandidates.filter((record) => record.status !== "rejected_source");
+
   return (
     <>
       <section className="x-mr" aria-label={t("mr.sourceImport")}>
@@ -104,8 +107,27 @@ export function AgentView({
           onSubmit={onSaveCandidate}
           onUrlChange={onCandidateUrlChange}
           queuedJobCount={queuedJobCount}
-          records={sourceCandidates}
+          records={activeSourceCandidates}
         />
+        {rejectedSourceCandidates.length ? (
+          <div style={{ padding: "12px 16px 0" }}>
+            <h3 className="x-mrnote" style={{ margin: "0 0 8px" }}>
+              {t("mr.rejectedSources")}
+            </h3>
+            <div style={{ display: "grid", gap: 8 }}>
+              {rejectedSourceCandidates.slice(0, 5).map((record) => {
+                const reasons = record.rejectionReasons ?? record.qualityGate?.reasons ?? [];
+
+                return (
+                  <article className="x-import-row" key={record.id}>
+                    <strong>{record.candidate.source.title}</strong>
+                    <p>{reasons.slice(0, 2).join(" · ") || t("mr.rejectedSources.noReason")}</p>
+                  </article>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
       </section>
 
       <section className="x-mr" aria-label={t("mr.imports")}>
@@ -140,7 +162,7 @@ export function AgentView({
             <p className="x-lab">{t("mr.usage.jobs")}</p>
           </div>
           <div>
-            <p className="x-num">{sourceCandidates.length}</p>
+            <p className="x-num">{activeSourceCandidates.length}</p>
             <p className="x-lab">{t("mr.usage.candidates")}</p>
           </div>
         </div>

@@ -43,6 +43,10 @@ export type SourceAssetKind = "transcript" | "text" | "metadata" | "image";
 
 export type TransformationStatus = "queued" | "extracting" | "transforming" | "ready" | "failed";
 
+export type SourceQualityVerdictStatus = "accept" | "reject";
+
+export type SourceQualityGateRunnerKind = "deterministic" | "model";
+
 export type SourceSnapshotKind = SourceAssetKind;
 
 export type KnowledgeDifficulty = "beginner" | "intermediate" | "advanced";
@@ -536,6 +540,36 @@ export interface SourceImport {
   status: TransformationStatus;
   createdAt: string;
   errorMessage?: string;
+}
+
+export interface SourceQualityVerdict {
+  url: string;
+  sourceId: string;
+  sourceTitle: string;
+  score: number;
+  verdict: SourceQualityVerdictStatus;
+  reasons: string[];
+  runnerKind: SourceQualityGateRunnerKind;
+  evaluatedAt: string;
+}
+
+export interface MergedSourceRecord {
+  id: string;
+  sourceImportId: string;
+  sourcePostId: string;
+  mergedIntoPostId: string;
+  sourceIds: string[];
+  similarity: number;
+  createdAt: string;
+  reason: string;
+}
+
+export interface DailyAutoJobBudgetRecord {
+  date: string;
+  used: number;
+  limit: number;
+  discarded: number;
+  updatedAt: string;
 }
 
 export interface UserMemory {

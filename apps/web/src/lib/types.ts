@@ -3,16 +3,21 @@ import type {
   BackgroundSourceCandidate,
   ConceptAliasRecord,
   ConceptMergeSuggestion,
+  DailyAutoJobBudgetRecord,
   InteractionSignal,
   KnowledgeCard,
   KnowledgeChunk,
   LearningFeedback,
+  MergedSourceRecord,
   RankedKnowledgeCard,
   SourceAsset,
   SourceImport,
   SourceRegistry,
+  SourceQualityVerdict,
   TopicState
 } from "@aitimeline/core";
+
+export type { DailyAutoJobBudgetRecord };
 
 export type AiMessage = {
   id: string;
@@ -25,7 +30,7 @@ export type AiThreads = Record<string, AiMessage[]>;
 export type InteractionSignals = Record<string, InteractionSignal>;
 export type LearningFeedbackByPost = Record<string, LearningFeedback>;
 export type ApiStatus = "checking" | "connected" | "offline";
-export type SourceCandidateStatus = "pending" | "queued" | "imported" | "dismissed";
+export type SourceCandidateStatus = "pending" | "queued" | "imported" | "dismissed" | "rejected_source";
 export type GroundingStatus = "passed" | "warning" | "failed";
 export type DismissedPostMode = "soft" | "hard";
 export type AgentTurnStatus = "answered" | "pending_confirmation" | "researching" | "closed";
@@ -114,6 +119,9 @@ export type ApiSnapshot = {
   agentTurns: AgentTurnSummary[];
   notifications: AgentNotification[];
   userSettings?: ApiSettings["userSettings"];
+  sourceQualityVerdicts?: SourceQualityVerdict[];
+  mergedSources?: MergedSourceRecord[];
+  autoJobBudget?: DailyAutoJobBudgetRecord[];
 };
 
 export type ApiSettings = {
@@ -243,6 +251,9 @@ export type SourceCandidateRecord = {
   intakeKind: "user_paste" | "browser_share" | "agent_discovery" | "manual";
   createdAt: string;
   updatedAt: string;
+  qualityGate?: SourceQualityVerdict;
+  rejectionReasons?: string[];
+  rejectedAt?: string;
 };
 
 export type AskCitation = {

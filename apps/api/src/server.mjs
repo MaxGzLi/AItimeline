@@ -11,6 +11,7 @@ import {
   createAutomaticConceptAliases,
   countSeenReadSignalsByPostId,
   createAITimelinePersistenceStore,
+  applyDailyAutoJobBudget,
   createBackgroundCurationPlan,
   createConceptMergeSuggestion,
   createConnectionNoteForImport,
@@ -91,7 +92,11 @@ export function createApiServer(options = {}) {
       }
 
       if (enableFixtures && request.method === "GET" && url.pathname === "/fixtures/article-background") {
-        sendHtml(response, fixtureArticleHtml("Background curation can prepare related sources"));
+        const query = url.searchParams.get("query");
+        sendHtml(
+          response,
+          fixtureArticleHtml(query ? `Background source for ${query}` : "Background curation can prepare related sources")
+        );
         return;
       }
 
@@ -518,7 +523,7 @@ export function createApiServer(options = {}) {
           feedback,
           generatedAt
         );
-        const plan = createBackgroundCurationPlan({
+        const rawPlan = createBackgroundCurationPlan({
           signals: [body.signal],
           feedback: [feedback],
           topicStates: [topicState],
@@ -529,6 +534,13 @@ export function createApiServer(options = {}) {
           contentLanguage,
           generatedAt
         });
+        const budgetResult = applyDailyAutoJobBudget({
+          plan: rawPlan,
+          budget: getDailyAutoJobBudgetRecord(currentSnapshot, generatedAt),
+          limit: getDailyAutoJobBudgetLimit(process.env),
+          now: generatedAt
+        });
+        const plan = budgetResult.plan;
         const records = curationStore.enqueuePlan(plan);
         const signalRecord = {
           id: buildInteractionSignalRecordId(body.signal),
@@ -538,6 +550,7 @@ export function createApiServer(options = {}) {
         };
         persistenceStore.saveInteractionSignalRecords([signalRecord], generatedAt);
         persistenceStore.saveTopicStateRecords([topicState], generatedAt);
+        persistenceStore.saveDailyAutoJobBudgetRecords([budgetResult.budget], generatedAt);
         let snapshot = persistenceStore.saveCurationJobRecords(records, generatedAt);
         const initialReviewState = maybeCreateInitialReviewState(snapshot, body.signal, generatedAt);
 
@@ -583,6 +596,8 @@ export function createApiServer(options = {}) {
             ingestSourceCandidate: (candidate) => ingestSourceCandidate(candidate),
             discoverSources: (job) => discoverSourcesForJob(job, searchProvider, persistenceStore, contentLanguage),
             loadSeedPost: (job) => persistenceStore.getSnapshot().posts.find((post) => post.id === job.postId),
+            loadSourceQualityVerdicts: () => persistenceStore.getSnapshot().sourceQualityVerdicts,
+            loadSourceQualityUserContext: () => buildSourceQualityUserContext(persistenceStore.getSnapshot()),
             researchQuestion: (job) =>
               handleResearchQuestionJob(
                 job,
@@ -640,28 +655,28 @@ export function createApiServer(options = {}) {
 
           if (record.result?.sourceImport) {
             const completedAt = record.completedAt ?? filteredBatch.completedAt;
-            persistenceStore.saveSourceImportResult(record.result.sourceImport, completedAt);
-            curationImportedPosts.push(...record.result.sourceImport.posts);
-            snapshot = persistenceStore.saveReleasePlan(
-              createSourcePostReleasePlan({ posts: record.result.sourceImport.posts }),
-              completedAt
-            );
+            const sourceImport = record.result.sourceImport;
+
+            persistenceStore.saveSourceImportResult(sourceImport, completedAt);
 
             if (record.job.sourceCandidate) {
-              const candidateRecord = snapshot.sourceCandidates.find(
-                (item) => item.candidate.id === record.job.sourceCandidate.id
+              snapshot = updateSourceCandidateAfterImport(
+                persistenceStore,
+                persistenceStore.getSnapshot(),
+                record.job.sourceCandidate.id,
+                sourceImport,
+                completedAt
               );
+            } else {
+              snapshot = persistenceStore.getSnapshot();
+            }
 
-              if (candidateRecord) {
-                snapshot = persistenceStore.saveSourceCandidateRecords([
-                  {
-                    ...candidateRecord,
-                    status: "imported",
-                    updatedAt: record.completedAt ?? filteredBatch.completedAt,
-                    importedAt: record.completedAt ?? filteredBatch.completedAt
-                  }
-                ]);
-              }
+            if (sourceImport.posts.length) {
+              curationImportedPosts.push(...sourceImport.posts);
+              snapshot = persistenceStore.saveReleasePlan(
+                createSourcePostReleasePlan({ posts: sourceImport.posts }),
+                completedAt
+              );
             }
           }
         }
@@ -1140,13 +1155,27 @@ async function handleResearchQuestionJob(
         sourceRegistry: ingested.sourceRegistry,
         createdAt: now,
         contentLanguage,
-        recommendedBecause: researchRecommendedBecause(candidateWithOrigin, contentLanguage)
+        recommendedBecause: researchRecommendedBecause(candidateWithOrigin, contentLanguage),
+        userContext: buildSourceQualityUserContext(persistenceStore.getSnapshot(), payload.userId),
+        qualityGateConceptHints: candidateWithOrigin.conceptIds,
+        sourceQualityVerdicts: persistenceStore.getSnapshot().sourceQualityVerdicts
       });
 
-      persistenceStore.saveSourceImportResult(sourceImport, now);
+      const savedSnapshot = persistenceStore.saveSourceImportResult(sourceImport, now);
 
-      if (sourceImport.importRecord.status === "failed" || sourceImport.posts.length === 0) {
+      if (sourceImport.importRecord.status === "failed") {
         importFailures.push(sourceImport.errorMessage ?? "Source import worker failed.");
+        continue;
+      }
+
+      if (sourceImport.posts.length === 0) {
+        const mergedPosts = resolveMergedImportPosts(sourceImport, savedSnapshot);
+
+        if (mergedPosts.length) {
+          importedResults.push({ ...sourceImport, posts: mergedPosts });
+        } else {
+          importFailures.push(sourceImport.errorMessage ?? "Source import worker failed.");
+        }
         continue;
       }
 
@@ -1512,6 +1541,16 @@ function withCandidateOrigin(candidate, origin) {
   };
 }
 
+function resolveMergedImportPosts(sourceImport, savedSnapshot) {
+  const mergedIds = new Set(
+    savedSnapshot.mergedSources
+      .filter((record) => record.sourceImportId === sourceImport.importRecord.id)
+      .map((record) => record.mergedIntoPostId)
+  );
+
+  return savedSnapshot.posts.filter((post) => mergedIds.has(post.id));
+}
+
 function researchRecommendedBecause(candidate, contentLanguage) {
   if (contentLanguage === "en") {
     return `You asked the agent to research this question, so this source was imported: ${candidate.reason}`;
@@ -1588,13 +1627,27 @@ async function researchIdeaSide({
         sourceRegistry: ingested.sourceRegistry,
         createdAt: now,
         contentLanguage,
-        recommendedBecause: ideaResearchRecommendedBecause(candidateWithOrigin, side, contentLanguage)
+        recommendedBecause: ideaResearchRecommendedBecause(candidateWithOrigin, side, contentLanguage),
+        userContext: buildSourceQualityUserContext(persistenceStore.getSnapshot(), payload.userId),
+        qualityGateConceptHints: candidateWithOrigin.conceptIds,
+        sourceQualityVerdicts: persistenceStore.getSnapshot().sourceQualityVerdicts
       });
 
-      persistenceStore.saveSourceImportResult(sourceImport, now);
+      const savedSnapshot = persistenceStore.saveSourceImportResult(sourceImport, now);
 
-      if (sourceImport.importRecord.status === "failed" || sourceImport.posts.length === 0) {
+      if (sourceImport.importRecord.status === "failed") {
         errors.push(sourceImport.errorMessage ?? "Source import worker failed.");
+        continue;
+      }
+
+      if (sourceImport.posts.length === 0) {
+        const mergedPosts = resolveMergedImportPosts(sourceImport, savedSnapshot);
+
+        if (mergedPosts.length) {
+          importedResults.push({ ...sourceImport, posts: mergedPosts });
+        } else {
+          errors.push(sourceImport.errorMessage ?? "Source import worker failed.");
+        }
         continue;
       }
 
@@ -2187,9 +2240,15 @@ async function discoverSourcesForJob(job, searchProvider, persistenceStore, cont
   }
 
   const snapshot = persistenceStore.getSnapshot();
+  const concepts = getConfirmedDiscoveryConcepts(snapshot, job.conceptIds);
+
+  if (!concepts.length) {
+    return [];
+  }
+
   const discovery = await runSourceDiscovery({
     provider: searchProvider,
-    concepts: job.conceptIds,
+    concepts,
     topicId: job.topicId,
     nextAction: job.nextAction,
     existingUrls: collectKnownSourceUrls(snapshot),
@@ -2198,6 +2257,42 @@ async function discoverSourcesForJob(job, searchProvider, persistenceStore, cont
   });
 
   return discovery.candidates;
+}
+
+function getConfirmedDiscoveryConcepts(snapshot, proposedConcepts) {
+  const confirmed = new Set();
+
+  for (const record of snapshot.topicStates) {
+    if (record.topicId) {
+      confirmed.add(normalizeConceptKey(record.topicId));
+    }
+  }
+
+  for (const record of snapshot.interactionSignals) {
+    const signal = record.signal;
+    const confirmedByInteraction = signal.liked || signal.saved || signal.askedQuestion || signal.reviewed;
+
+    if (!confirmedByInteraction) {
+      continue;
+    }
+
+    for (const concept of [signal.topicId, ...(signal.conceptIds ?? [])]) {
+      confirmed.add(normalizeConceptKey(concept));
+    }
+  }
+
+  for (const memoryRecord of snapshot.userMemories) {
+    for (const concept of [
+      ...(memoryRecord.memory.profile.interests ?? []),
+      ...(memoryRecord.memory.knowledge.knownConcepts ?? []),
+      ...(memoryRecord.memory.knowledge.savedConcepts ?? []),
+      ...(memoryRecord.memory.knowledge.weakConcepts ?? [])
+    ]) {
+      confirmed.add(normalizeConceptKey(concept));
+    }
+  }
+
+  return toTrimmedStrings(proposedConcepts).filter((concept) => confirmed.has(normalizeConceptKey(concept)));
 }
 
 function persistDiscoveredCandidates(persistenceStore, candidates, now) {
@@ -2215,6 +2310,44 @@ function persistDiscoveredCandidates(persistenceStore, candidates, now) {
     }));
 
   return newRecords.length ? persistenceStore.saveSourceCandidateRecords(newRecords, now) : snapshot;
+}
+
+function updateSourceCandidateAfterImport(persistenceStore, snapshot, candidateId, sourceImport, now) {
+  const candidateRecord = snapshot.sourceCandidates.find((item) => item.candidate.id === candidateId);
+
+  if (!candidateRecord) {
+    return snapshot;
+  }
+
+  const importedDifferentSource =
+    sourceImport.source.id !== candidateRecord.candidate.source.id &&
+    sourceImport.source.url !== candidateRecord.candidate.source.url;
+
+  if (sourceImport.qualityGate?.verdict === "reject" || importedDifferentSource) {
+    const rejectionReasons =
+      sourceImport.qualityGate?.reasons ??
+      (importedDifferentSource ? ["Candidate did not produce a qualified source; same-source fallback was used."] : []);
+
+    return persistenceStore.saveSourceCandidateRecords([
+      {
+        ...candidateRecord,
+        status: "rejected_source",
+        updatedAt: now,
+        rejectedAt: now,
+        qualityGate: sourceImport.qualityGate,
+        rejectionReasons
+      }
+    ]);
+  }
+
+  return persistenceStore.saveSourceCandidateRecords([
+    {
+      ...candidateRecord,
+      status: "imported",
+      updatedAt: now,
+      importedAt: now
+    }
+  ]);
 }
 
 function collectKnownSourceUrls(snapshot) {
@@ -2312,6 +2445,30 @@ function createEmptyCurationPlan(generatedAt) {
       suppressions: [],
       cooledTopicIds: []
     }
+  };
+}
+
+function getDailyAutoJobBudgetLimit(env) {
+  const parsed = Number.parseInt(env.AITIMELINE_DAILY_AUTO_JOB_BUDGET ?? "20", 10);
+
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 20;
+}
+
+function getDailyAutoJobBudgetRecord(snapshot, nowValue) {
+  const date = new Date(nowValue).toISOString().slice(0, 10);
+
+  return snapshot.autoJobBudget.find((record) => record.date === date);
+}
+
+function buildSourceQualityUserContext(snapshot, userId = "local-user") {
+  const memory =
+    snapshot.userMemories.find((record) => record.userId === userId)?.memory ??
+    snapshot.userMemories[0]?.memory;
+
+  return {
+    memory,
+    topicStates: snapshot.topicStates,
+    recentSignals: snapshot.interactionSignals.map((record) => record.signal).slice(-20)
   };
 }
 
@@ -2889,7 +3046,10 @@ function summarizeSnapshot(snapshot) {
     agentTurns: snapshot.agentTurns.length,
     notifications: snapshot.notifications.length,
     conceptAliases: snapshot.conceptAliases.length,
-    conceptMergeSuggestions: snapshot.conceptMergeSuggestions.length
+    conceptMergeSuggestions: snapshot.conceptMergeSuggestions.length,
+    sourceQualityVerdicts: snapshot.sourceQualityVerdicts.length,
+    mergedSources: snapshot.mergedSources.length,
+    autoJobBudget: snapshot.autoJobBudget
   };
 }
 
@@ -3134,6 +3294,10 @@ function normalizeStringArray(value) {
     : [];
 }
 
+function normalizeConceptKey(value) {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
 function normalizeIsoDate(value) {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 }
@@ -3188,7 +3352,7 @@ function isSourceType(value) {
 }
 
 function isSourceCandidateStatus(value) {
-  return value === "pending" || value === "queued" || value === "imported" || value === "dismissed";
+  return value === "pending" || value === "queued" || value === "imported" || value === "dismissed" || value === "rejected_source";
 }
 
 function isSourceCandidateIntakeKind(value) {
@@ -3282,8 +3446,11 @@ function fixtureArticleHtml(title) {
       </head>
       <body>
         <article>
-          <p>An AI Agent can turn source material into durable knowledge when it keeps citations, extracts concepts, and creates a learning surface that users can revisit.</p>
-          <p>A Knowledge Graph helps Memory become useful because saved concepts, weak concepts, and Recommendation signals can point the user toward review at the right time.</p>
+          <p>${title} describes how an AI Agent can turn source material into durable knowledge when it keeps citations, extracts concepts, and creates a learning surface that users can revisit.</p>
+          <p>For ${title}, the Knowledge Graph keeps Memory useful because saved concepts, weak concepts, and Recommendation signals point the user toward review at the right time.</p>
+          <p>In the ${title} smoke architecture, each imported paragraph becomes a registered chunk, every generated card must cite a chunk id, and the evidence ledger rejects unsupported numeric claims before the card reaches the timeline.</p>
+          <p>The ${title} background worker uses interaction signals to choose between three actions: import a matching source, discover a new source, or create a same-source follow-up when no better source is available.</p>
+          <p>The operational trade-off in ${title} is budget control. A daily counter caps automatic discover, import, and follow-up jobs so passive reading cannot create an unbounded queue of model and search calls.</p>
         </article>
       </body>
     </html>

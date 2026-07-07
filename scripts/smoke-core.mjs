@@ -3,7 +3,7 @@ import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const { createBackgroundCurationPlan } = await import("../packages/core/dist/agents/backgroundCuration.js");
+const { applyDailyAutoJobBudget, createBackgroundCurationPlan } = await import("../packages/core/dist/agents/backgroundCuration.js");
 const { runConversationTurn } = await import("../packages/core/dist/agents/conversationAgent.js");
 const { runIdeaObservation } = await import("../packages/core/dist/agents/ideaFlow.js");
 const { createStaticSearchProvider } = await import("../packages/core/dist/discovery/searchProvider.js");
@@ -76,6 +76,7 @@ const { advanceReviewState, createInitialReviewState, getRestingReviewStates } =
 const { createOpenAICompatibleSourceImportWorker, createSourceImportWorker } = await import(
   "../packages/core/dist/source/sourceImportWorker.js"
 );
+const { evaluateSourceQualityDeterministic } = await import("../packages/core/dist/source/sourceQualityGate.js");
 const { createAITimelinePersistenceStore } = await import("../packages/core/dist/storage/persistenceStore.js");
 const { fetchArticle, parseArxivAtom, transformArticleUrl } = await import(
   "../packages/core/dist/transform/articleImport.js"
@@ -84,6 +85,7 @@ const { transformUserNote } = await import("../packages/core/dist/transform/note
 const { parseArxivHtmlDecomposition } = await import("../packages/core/dist/transform/arxivHtmlImport.js");
 const { transformMockYouTubeUrl } = await import("../packages/core/dist/transform/mockYoutubeImport.js");
 const { transformYouTubeUrl } = await import("../packages/core/dist/transform/youtubeImport.js");
+const { seoWaterSourceFixture, technicalSourceFixture } = await import("../packages/core/dist/fixtures.js");
 
 const followupInstructionPattern =
   /Seed grounding|User signal reason|must cite this chunk|Deeper angle|Broader angle|Simpler angle|Review angle/i;
@@ -162,6 +164,169 @@ function makeSmokePost({
     harnessVersion: "smoke"
   };
 }
+
+function makeSourceQualityInput(fixture, sourceId, url, concepts) {
+  return {
+    source: {
+      id: sourceId,
+      title: fixture.title,
+      url,
+      type: "article"
+    },
+    chunks: [
+      {
+        id: `${sourceId}-chunk-1`,
+        sourceId,
+        content: fixture.body,
+        conceptHints: concepts
+      }
+    ],
+    userContext: {
+      topicStates: concepts.map((topicId) => ({
+        topicId,
+        interestScore: 0.8,
+        fatigueScore: 0.1,
+        comprehensionScore: 0.7
+      }))
+    },
+    createdAt: "2026-06-10T00:00:00.000Z"
+  };
+}
+
+const seoGateVerdict = evaluateSourceQualityDeterministic(
+  makeSourceQualityInput(seoWaterSourceFixture, "seo-water-source", "https://example.com/grok-advanced-guide", [
+    "Speculative Decoding",
+    "RAG Evaluation"
+  ])
+);
+const technicalGateVerdict = evaluateSourceQualityDeterministic(
+  makeSourceQualityInput(
+    technicalSourceFixture,
+    "technical-source",
+    "https://example.com/speculative-decoding-latency",
+    ["Speculative Decoding", "LLM serving"]
+  )
+);
+
+assert.equal(seoGateVerdict.verdict, "reject", "deterministic source gate should reject SEO water");
+assert.ok(seoGateVerdict.reasons.length > 0, "rejected sources should include reasons");
+assert.equal(technicalGateVerdict.verdict, "accept", "deterministic source gate should accept a normal technical article");
+
+function makeDuplicateImport({ importId, sourceId, postId, url, title }) {
+  const source = {
+    id: sourceId,
+    title,
+    url,
+    type: "article"
+  };
+  const post = {
+    ...makeSmokePost({
+      id: postId,
+      title: "Speculative decoding cuts serving latency",
+      concepts: ["Speculative Decoding", "LLM serving"]
+    }),
+    summary: "Speculative decoding uses a small draft model and a target model verification pass to reduce LLM serving latency.",
+    keyTakeaway: "A draft model can cut serving latency when token acceptance stays high.",
+    sources: [source],
+    citations: [{ sourceId, url }]
+  };
+
+  return {
+    importRecord: {
+      id: importId,
+      source,
+      status: "ready",
+      createdAt: "2026-06-10T00:00:00.000Z"
+    },
+    source,
+    assets: [],
+    chunks: [],
+    sourceRegistry: {
+      sources: [source],
+      assets: [],
+      snapshots: [],
+      chunks: [],
+      chunkVersions: []
+    },
+    posts: [post],
+    validation: []
+  };
+}
+
+let duplicateSnapshotJson = "";
+const duplicatePersistence = createAITimelinePersistenceStore({
+  read: () => duplicateSnapshotJson,
+  write: (serialized) => {
+    duplicateSnapshotJson = serialized;
+  }
+});
+duplicatePersistence.saveSourceImportResult(
+  makeDuplicateImport({
+    importId: "duplicate-import-1",
+    sourceId: "duplicate-source-1",
+    postId: "duplicate-post-1",
+    url: "https://example.com/speculative-decoding-a",
+    title: "Speculative decoding source A"
+  }),
+  "2026-06-10T00:00:00.000Z"
+);
+duplicatePersistence.saveSourceImportResult(
+  makeDuplicateImport({
+    importId: "duplicate-import-2",
+    sourceId: "duplicate-source-2",
+    postId: "duplicate-post-2",
+    url: "https://example.com/speculative-decoding-b",
+    title: "Speculative decoding source B"
+  }),
+  "2026-06-10T00:01:00.000Z"
+);
+const duplicateSnapshot = duplicatePersistence.getSnapshot();
+
+assert.equal(duplicateSnapshot.posts.length, 1, "near-duplicate imports should persist only one card");
+assert.equal(duplicateSnapshot.posts[0].sources.length, 2, "near-duplicate source should be merged into the existing card");
+assert.equal(duplicateSnapshot.mergedSources.length, 1, "near-duplicate merge should be recorded for inspection");
+
+const budgetPlan = {
+  generatedAt: "2026-06-10T00:00:00.000Z",
+  jobs: [
+    {
+      id: "budget-discover-1",
+      kind: "discover_sources",
+      topicId: "budget-topic",
+      conceptIds: ["Budget"],
+      priority: 0.9,
+      reason: "budget smoke",
+      createdAt: "2026-06-10T00:00:00.000Z"
+    },
+    {
+      id: "budget-import-2",
+      kind: "import_source",
+      topicId: "budget-topic",
+      conceptIds: ["Budget"],
+      priority: 0.8,
+      reason: "budget smoke",
+      createdAt: "2026-06-10T00:00:00.000Z"
+    }
+  ],
+  suppressions: [],
+  acceptedSourceCandidateIds: [],
+  cooledTopicIds: [],
+  expansionPlan: {
+    generatedAt: "2026-06-10T00:00:00.000Z",
+    jobs: [],
+    suppressions: [],
+    cooledTopicIds: []
+  }
+};
+const budgetResult = applyDailyAutoJobBudget({
+  plan: budgetPlan,
+  limit: 1,
+  now: "2026-06-10T00:00:00.000Z"
+});
+
+assert.equal(budgetResult.plan.jobs.length, 1, "daily auto job budget should keep only the first metered job");
+assert.equal(budgetResult.budget.used, 1, "daily auto job budget should count accepted automatic jobs");
+assert.equal(budgetResult.budget.discarded, 1, "daily auto job budget should count discarded automatic jobs");
 
 const result = transformMockYouTubeUrl(
   "https://www.youtube.com/watch?v=aitimeline-demo",
@@ -1410,6 +1575,51 @@ assert.equal(deterministicImport.posts.length, 4, "deterministic import should c
 assert.equal(deterministicImport.sourceRegistry.assets.length, 1, "deterministic import should preserve assets");
 assert.equal(deterministicImport.harnessRun?.runnerKind, "deterministic");
 
+const seoImportInput = {
+  source: {
+    id: "seo-water-import-source",
+    title: seoWaterSourceFixture.title,
+    url: "https://example.com/grok-advanced-guide?utm_source=smoke#intro",
+    type: "article"
+  },
+  assets: [],
+  chunks: [
+    {
+      id: "seo-water-import-chunk-1",
+      sourceId: "seo-water-import-source",
+      content: seoWaterSourceFixture.body,
+      conceptHints: ["Speculative Decoding", "RAG Evaluation"]
+    }
+  ],
+  createdAt: "2026-06-10T00:00:00.000Z",
+  recommendedBecause: "Smoke test quality gate pipeline integration."
+};
+const gateRejectedImport = await deterministicWorker.run(seoImportInput);
+
+assert.equal(gateRejectedImport.qualityGate?.verdict, "reject", "import pipeline should reject SEO water at the quality gate");
+assert.equal(gateRejectedImport.importRecord.status, "failed", "gate-rejected imports should be recorded as failed");
+assert.equal(gateRejectedImport.posts.length, 0, "gate-rejected imports should not generate posts");
+assert.ok(gateRejectedImport.errorMessage?.includes("quality gate"), "gate-rejected imports should explain the rejection");
+
+const gateCachedImport = await deterministicWorker.run({
+  ...seoImportInput,
+  source: { ...seoImportInput.source, url: "https://EXAMPLE.com/grok-advanced-guide/" },
+  createdAt: "2026-06-11T00:00:00.000Z",
+  sourceQualityVerdicts: [gateRejectedImport.qualityGate]
+});
+
+assert.equal(gateCachedImport.qualityGate?.verdict, "reject", "normalized URL variants should reuse the cached verdict");
+assert.equal(
+  gateCachedImport.qualityGate?.evaluatedAt,
+  gateRejectedImport.qualityGate?.evaluatedAt,
+  "cached verdicts should be reused without re-evaluation"
+);
+
+const gateBypassedImport = await deterministicWorker.run({ ...seoImportInput, skipQualityGate: true });
+
+assert.equal(gateBypassedImport.qualityGate, undefined, "skipQualityGate should bypass the gate entirely");
+assert.equal(gateBypassedImport.importRecord.status, "ready", "gate-bypassed imports should proceed to generation");
+
 const modelWorker = createOpenAICompatibleSourceImportWorker(
   {
     AITIMELINE_MODEL_NAME: "test-model",
@@ -1702,6 +1912,129 @@ assert.deepEqual(
   ["candidate-knowledge-graph-memory"],
   "background curation should track accepted external sources"
 );
+const deepDiveSignal = {
+  ...interestSignal,
+  postId: result.cards[0].id,
+  topicId: "ai-agent-memory",
+  conceptIds: ["AI Agent", "Memory"],
+  liked: false,
+  openedThread: true,
+  dwellTimeMs: 18000,
+  createdAt: "2026-06-10T00:02:00.000Z"
+};
+const deepDiveTopicState = {
+  topicId: "ai-agent-memory",
+  interestScore: 0.8,
+  fatigueScore: 0.08,
+  comprehensionScore: 0.42
+};
+const deepDivePlan = createBackgroundCurationPlan({
+  signals: [deepDiveSignal],
+  feedback: [evaluateInteraction(deepDiveSignal, deepDiveTopicState)],
+  topicStates: [deepDiveTopicState],
+  generatedAt: "2026-06-10T00:02:00.000Z"
+});
+const deepDiveDiscoverJob = deepDivePlan.jobs.find((job) => job.kind === "discover_sources");
+
+assert.ok(deepDiveDiscoverJob, "continue_deeper should queue source discovery instead of same-source follow-up");
+assert.equal(
+  deepDivePlan.jobs.some((job) => job.kind === "generate_followup"),
+  false,
+  "continue_deeper should not immediately queue a same-source follow-up job"
+);
+
+const deepDiveFallbackStore = createInMemoryBackgroundCurationJobStore();
+enqueueSingleJob(deepDiveFallbackStore, deepDiveDiscoverJob);
+
+const deepDiveFallbackBatch = await runDueBackgroundCurationJobs(
+  deepDiveFallbackStore,
+  {
+    sourceImportWorker: deterministicWorker,
+    loadSeedPost: (job) => result.cards.find((card) => card.id === job.postId),
+    discoverSources: () => []
+  },
+  {
+    now: "2026-06-10T00:22:00.000Z",
+    kinds: ["discover_sources"]
+  }
+);
+const deepDiveFallbackRecord = deepDiveFallbackBatch.records[0];
+
+assert.equal(deepDiveFallbackRecord.status, "succeeded", "deep-dive discovery should fall back cleanly with no candidates");
+assert.ok(
+  deepDiveFallbackRecord.result?.sourceImport?.posts.length,
+  "deep-dive fallback should generate a same-source follow-up card"
+);
+assert.ok(
+  deepDiveFallbackRecord.result?.followupProtocol,
+  "deep-dive fallback should retain the follow-up protocol for inspection"
+);
+
+const deepDiveImportStore = createInMemoryBackgroundCurationJobStore();
+enqueueSingleJob(deepDiveImportStore, deepDiveDiscoverJob);
+
+const deepDiveCandidate = {
+  id: "deep-dive-candidate-1",
+  source: {
+    id: "deep-dive-source-1",
+    title: technicalSourceFixture.title,
+    url: "https://arxiv.org/abs/2401.00001",
+    type: "paper"
+  },
+  conceptIds: ["Speculative Decoding"],
+  relevanceScore: 0.9,
+  noveltyScore: 0.7,
+  qualityScore: 0.8,
+  reason: "Deep-dive smoke candidate.",
+  discoveredAt: "2026-06-10T00:20:00.000Z"
+};
+const deepDiveImportBatch = await runDueBackgroundCurationJobs(
+  deepDiveImportStore,
+  {
+    sourceImportWorker: deterministicWorker,
+    loadSeedPost: (job) => result.cards.find((card) => card.id === job.postId),
+    discoverSources: () => [deepDiveCandidate],
+    ingestSourceCandidate: (candidate) => ({
+      assets: [
+        {
+          id: `${candidate.source.id}-text`,
+          sourceId: candidate.source.id,
+          kind: "text",
+          content: technicalSourceFixture.body,
+          createdAt: "2026-06-10T00:20:00.000Z"
+        }
+      ],
+      chunks: [
+        {
+          id: `${candidate.source.id}-chunk-1`,
+          sourceId: candidate.source.id,
+          content: technicalSourceFixture.body,
+          conceptHints: ["Speculative Decoding"]
+        }
+      ]
+    })
+  },
+  {
+    now: "2026-06-10T00:22:00.000Z",
+    kinds: ["discover_sources"]
+  }
+);
+const deepDiveImportRecord = deepDiveImportBatch.records[0];
+const deepDiveImport = deepDiveImportRecord.result?.sourceImport;
+
+assert.equal(deepDiveImportRecord.status, "succeeded", "deep-dive discovery with a qualified candidate should succeed");
+assert.equal(deepDiveImport?.qualityGate?.verdict, "accept", "deep-dive candidates should pass the quality gate before import");
+assert.ok(deepDiveImport?.posts.length, "deep-dive should import the new source into posts");
+assert.equal(deepDiveImport?.source.id, "deep-dive-source-1", "deep-dive should import the discovered source, not the seed source");
+assert.ok(
+  deepDiveImport?.posts.every((post) => post.hook.includes("你已经知道")),
+  "deep-dive posts should bridge from a known concept in the hook"
+);
+assert.ok(
+  deepDiveImport?.posts.every((post) => post.recommendedBecause.includes("点了深入")),
+  "deep-dive posts should explain the go-deeper trigger"
+);
+
 const followupJob = backgroundPlan.jobs.find((job) => job.kind === "generate_followup");
 const followupSeedPost = result.cards.find((card) => card.id === interestSignal.postId);
 
@@ -2154,8 +2487,11 @@ const importBatch = await runDueBackgroundCurationJobs(
           id: `${candidate.source.id}-text`,
           sourceId: candidate.source.id,
           kind: "text",
-          content:
-            "Knowledge graphs can connect concepts to memory. Memory systems use those links to support recommendation and review.",
+          content: [
+            "Knowledge graph memory systems store entities as concept nodes and learning events as typed edges, then use edge weights to select review prompts and recommendations.",
+            "In a 120-card evaluation set, graph-aware retrieval improved cited-card recall from 0.54 to 0.71 because the retriever could follow Memory -> Recommendation and Memory -> Review edges instead of relying only on title overlap.",
+            "The implementation trade-off is maintenance cost: every imported card needs durable edge evidence, stale aliases must be merged, and low-confidence edges should be excluded from scheduling decisions."
+          ].join(" "),
           createdAt: "2026-06-10T00:00:00.000Z"
         }
       ],
@@ -2163,8 +2499,11 @@ const importBatch = await runDueBackgroundCurationJobs(
         {
           id: `${candidate.source.id}-chunk-1`,
           sourceId: candidate.source.id,
-          content:
-            "Knowledge graphs can connect concepts to memory. Memory systems use those links to support recommendation and review.",
+          content: [
+            "Knowledge graph memory systems store entities as concept nodes and learning events as typed edges, then use edge weights to select review prompts and recommendations.",
+            "In a 120-card evaluation set, graph-aware retrieval improved cited-card recall from 0.54 to 0.71 because the retriever could follow Memory -> Recommendation and Memory -> Review edges instead of relying only on title overlap.",
+            "The implementation trade-off is maintenance cost: every imported card needs durable edge evidence, stale aliases must be merged, and low-confidence edges should be excluded from scheduling decisions."
+          ].join(" "),
           conceptHints: ["Knowledge Graph", "Memory", "Recommendation"]
         }
       ]

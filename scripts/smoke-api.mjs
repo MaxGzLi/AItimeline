@@ -558,6 +558,82 @@ try {
     "pure exposure should not change topic state"
   );
 
+  const previousBudget = process.env.AITIMELINE_DAILY_AUTO_JOB_BUDGET;
+  const budgetDataPath = join(tempDir, "budget-aitimeline.json");
+  const budgetCurationPath = join(tempDir, "budget-curation-jobs.json");
+  process.env.AITIMELINE_DAILY_AUTO_JOB_BUDGET = "1";
+  const budgetServer = createApiServer({
+    dataPath: budgetDataPath,
+    curationDataPath: budgetCurationPath,
+    mediaRootDir,
+    enableFixtures: true,
+    searchProvider: fakeSearchProvider
+  });
+
+  try {
+    const budgetSignal = {
+      postId: "budget-post",
+      topicId: "Budget Concept",
+      conceptIds: ["Budget Concept"],
+      impression: true,
+      dwellTimeMs: 18000,
+      openedThread: true,
+      liked: true,
+      saved: false,
+      askedQuestion: false,
+      reviewed: false,
+      skippedQuickly: false,
+      createdAt: "2026-06-10T03:00:00.000Z"
+    };
+    const firstBudgetSignal = await requestJsonFromServer(budgetServer, "/api/signals", {
+      method: "POST",
+      body: {
+        generatedAt: "2026-06-10T03:00:00.000Z",
+        topicState: {
+          topicId: "Budget Concept",
+          interestScore: 0.8,
+          fatigueScore: 0.1,
+          comprehensionScore: 0.8
+        },
+        signal: budgetSignal
+      }
+    });
+    const secondBudgetSignal = await requestJsonFromServer(budgetServer, "/api/signals", {
+      method: "POST",
+      body: {
+        generatedAt: "2026-06-10T03:01:00.000Z",
+        topicState: {
+          topicId: "Budget Concept",
+          interestScore: 0.82,
+          fatigueScore: 0.1,
+          comprehensionScore: 0.8
+        },
+        signal: {
+          ...budgetSignal,
+          postId: "budget-post-2",
+          createdAt: "2026-06-10T03:01:00.000Z"
+        }
+      }
+    });
+    const budgetJobs = await requestJsonFromServer(budgetServer, "/api/curation/jobs?status=queued");
+    const budgetSnapshot = await requestJsonFromServer(budgetServer, "/api/snapshot");
+    const budgetRecord = budgetSnapshot.autoJobBudget.find((record) => record.date === "2026-06-10");
+
+    assert.equal(firstBudgetSignal.records.length, 1, "budget limit should allow the first automatic job");
+    assert.equal(secondBudgetSignal.records.length, 0, "budget limit should discard later automatic jobs");
+    assert.equal(budgetJobs.jobs.length, 1, "discarded automatic jobs should not accumulate in the queue");
+    assert.equal(budgetRecord?.used, 1, "budget snapshot should count the accepted automatic job");
+    assert.ok((budgetRecord?.discarded ?? 0) >= 1, "budget snapshot should count discarded automatic jobs");
+  } finally {
+    if (previousBudget === undefined) {
+      delete process.env.AITIMELINE_DAILY_AUTO_JOB_BUDGET;
+    } else {
+      process.env.AITIMELINE_DAILY_AUTO_JOB_BUDGET = previousBudget;
+    }
+
+    await closeServer(budgetServer);
+  }
+
   const dueReview = await requestJson(`/api/review/due?now=${encodeURIComponent(firstReviewState.dueAt)}`);
 
   assert.deepEqual(

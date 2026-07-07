@@ -20,9 +20,16 @@ import type {
   SourceAsset,
   SourceImport,
   SourceRegistry,
+  SourceQualityVerdict,
   TransformationStatus
 } from "../types.js";
 import { createSourceRegistry } from "./sourceRegistry.js";
+import {
+  createModelSourceQualityGate,
+  deterministicSourceQualityGate,
+  findCachedSourceQualityVerdict,
+  type SourceQualityGateRunner
+} from "./sourceQualityGate.js";
 
 export interface SourceImportWorkerInput {
   id?: string;
@@ -36,6 +43,9 @@ export interface SourceImportWorkerInput {
   recommendedBecause?: string;
   config?: AgentHarnessConfig;
   userContext?: AgentHarnessUserContext;
+  sourceQualityVerdicts?: SourceQualityVerdict[];
+  qualityGateConceptHints?: string[];
+  skipQualityGate?: boolean;
 }
 
 export interface SourceImportWorkerResult {
@@ -47,6 +57,7 @@ export interface SourceImportWorkerResult {
   posts: KnowledgePost[];
   validation: HarnessValidationResult[];
   harnessRun?: AgentHarnessRun;
+  qualityGate?: SourceQualityVerdict;
   errorMessage?: string;
 }
 
@@ -58,26 +69,30 @@ export interface SourceImportWorker {
 export interface CreateSourceImportWorkerOptions {
   runner?: KnowledgePostAgentRunner;
   contentLanguage?: ContentLanguage;
+  qualityGate?: SourceQualityGateRunner | false;
 }
 
 export interface CreateModelSourceImportWorkerOptions
   extends Omit<CreateModelKnowledgePostRunnerOptions, "client"> {
   client: CreateModelKnowledgePostRunnerOptions["client"];
+  qualityGate?: SourceQualityGateRunner | false;
 }
 
 export interface CreateOpenAICompatibleSourceImportWorkerOptions {
   modelClient?: Partial<OpenAICompatibleModelClientOptions>;
   modelRunner?: Omit<CreateModelKnowledgePostRunnerOptions, "client">;
+  qualityGate?: SourceQualityGateRunner | false;
 }
 
 export function createSourceImportWorker(
   options: CreateSourceImportWorkerOptions = {}
 ): SourceImportWorker {
   const runner = options.runner ?? deterministicKnowledgePostRunner;
+  const qualityGate = options.qualityGate === false ? undefined : options.qualityGate ?? deterministicSourceQualityGate;
 
   return {
     runner,
-    run: (input) => runSourceImport(input, runner, options.contentLanguage)
+    run: (input) => runSourceImport(input, runner, options.contentLanguage, qualityGate)
   };
 }
 
@@ -85,7 +100,11 @@ export function createModelSourceImportWorker(
   options: CreateModelSourceImportWorkerOptions
 ): SourceImportWorker {
   return createSourceImportWorker({
-    runner: createModelKnowledgePostRunner(options)
+    runner: createModelKnowledgePostRunner(options),
+    qualityGate:
+      options.qualityGate === false
+        ? false
+        : options.qualityGate ?? createModelSourceQualityGate({ client: options.client })
   });
 }
 
@@ -97,14 +116,16 @@ export function createOpenAICompatibleSourceImportWorker(
 
   return createModelSourceImportWorker({
     ...(options.modelRunner ?? {}),
-    client
+    client,
+    qualityGate: options.qualityGate
   });
 }
 
 export async function runSourceImport(
   input: SourceImportWorkerInput,
   runner: KnowledgePostAgentRunner = deterministicKnowledgePostRunner,
-  defaultContentLanguage?: ContentLanguage
+  defaultContentLanguage?: ContentLanguage,
+  qualityGate?: SourceQualityGateRunner
 ): Promise<SourceImportWorkerResult> {
   const createdAt = input.createdAt ?? new Date().toISOString();
   const contentLanguage = input.contentLanguage ?? defaultContentLanguage;
@@ -117,6 +138,33 @@ export async function runSourceImport(
       chunks: input.chunks,
       createdAt
     });
+  const qualityGateVerdict =
+    input.skipQualityGate || !qualityGate
+      ? undefined
+      : findCachedSourceQualityVerdict(input.source, input.sourceQualityVerdicts) ??
+        (await qualityGate.evaluate({
+          source: input.source,
+          chunks: input.chunks,
+          userContext: input.userContext,
+          conceptHints: input.qualityGateConceptHints,
+          createdAt
+        }));
+
+  if (qualityGateVerdict?.verdict === "reject") {
+    const errorMessage = `Source quality gate rejected this source: ${qualityGateVerdict.reasons.join("; ")}`;
+
+    return {
+      importRecord: createImportRecord(input, createdAt, "failed", errorMessage),
+      source: input.source,
+      assets,
+      chunks: input.chunks,
+      sourceRegistry,
+      posts: [],
+      validation: [],
+      qualityGate: qualityGateVerdict,
+      errorMessage
+    };
+  }
 
   try {
     const harnessResult = await runner.run({
@@ -143,6 +191,7 @@ export async function runSourceImport(
       posts: harnessResult.posts,
       validation: harnessResult.validation,
       harnessRun: harnessResult.run,
+      qualityGate: qualityGateVerdict,
       errorMessage
     };
   } catch (error) {
@@ -156,6 +205,7 @@ export async function runSourceImport(
       sourceRegistry,
       posts: [],
       validation: [],
+      qualityGate: qualityGateVerdict,
       errorMessage
     };
   }
