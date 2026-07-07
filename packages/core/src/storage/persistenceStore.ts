@@ -4,6 +4,7 @@ import type { SourcePostReleasePlan } from "../ranking/postReleasePlan.js";
 import type { SourceImportWorkerResult } from "../source/sourceImportWorker.js";
 import type {
   AgentHarnessRun,
+  ConceptBrief,
   ConceptAliasRecord,
   ConceptMergeSuggestion,
   DailyAutoJobBudgetRecord,
@@ -158,6 +159,7 @@ export interface AITimelinePersistenceSnapshot {
   sourceQualityVerdicts: SourceQualityVerdict[];
   mergedSources: MergedSourceRecord[];
   autoJobBudget: DailyAutoJobBudgetRecord[];
+  conceptBriefs: ConceptBrief[];
 }
 
 export interface AITimelinePersistenceStore {
@@ -176,6 +178,7 @@ export interface AITimelinePersistenceStore {
     records: DailyAutoJobBudgetRecord[],
     savedAt?: string | Date
   ): AITimelinePersistenceSnapshot;
+  saveConceptBriefs(records: ConceptBrief[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
   saveInteractionSignalRecords(
     records: InteractionSignalRecord[],
     savedAt?: string | Date
@@ -307,6 +310,16 @@ export function createAITimelinePersistenceStore(
         ...snapshot,
         updatedAt: normalizeDate(savedAt).toISOString(),
         autoJobBudget: upsertDailyAutoJobBudgetRecords(snapshot.autoJobBudget, records)
+      };
+      persist(storage, snapshot);
+
+      return cloneSnapshot(snapshot);
+    },
+    saveConceptBriefs(records, savedAt = new Date()) {
+      snapshot = {
+        ...snapshot,
+        updatedAt: normalizeDate(savedAt).toISOString(),
+        conceptBriefs: upsertConceptBriefs(snapshot.conceptBriefs, records)
       };
       persist(storage, snapshot);
 
@@ -475,7 +488,8 @@ function createSnapshot(input: AITimelinePersistenceSnapshotInput = {}): AITimel
     conceptMergeSuggestions: normalizeConceptMergeSuggestions(input.conceptMergeSuggestions ?? []),
     sourceQualityVerdicts: normalizeSourceQualityVerdicts(input.sourceQualityVerdicts ?? []),
     mergedSources: normalizeMergedSourceRecords(input.mergedSources ?? []),
-    autoJobBudget: normalizeDailyAutoJobBudgetRecords(input.autoJobBudget ?? [])
+    autoJobBudget: normalizeDailyAutoJobBudgetRecords(input.autoJobBudget ?? []),
+    conceptBriefs: normalizeConceptBriefs(input.conceptBriefs ?? [])
   };
 }
 
@@ -770,6 +784,86 @@ function normalizeDailyAutoJobBudgetRecords(value: unknown): DailyAutoJobBudgetR
   });
 }
 
+function normalizeConceptBriefs(value: unknown): ConceptBrief[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((record): ConceptBrief[] => {
+    if (
+      !isRecord(record) ||
+      typeof record.id !== "string" ||
+      typeof record.concept !== "string" ||
+      record.version !== "concept-brief-v0" ||
+      (record.runnerKind !== "deterministic" && record.runnerKind !== "model") ||
+      typeof record.generatedAt !== "string" ||
+      !Array.isArray(record.sentences)
+    ) {
+      return [];
+    }
+
+    const sentences = record.sentences.flatMap((sentence, index) => {
+      if (
+        !isRecord(sentence) ||
+        typeof sentence.text !== "string" ||
+        typeof sentence.cardId !== "string" ||
+        !sentence.text.trim() ||
+        !sentence.cardId.trim()
+      ) {
+        return [];
+      }
+
+      return [
+        {
+          id: typeof sentence.id === "string" && sentence.id ? sentence.id : `${record.id}-sentence-${index + 1}`,
+          text: sentence.text,
+          cardId: sentence.cardId
+        }
+      ];
+    });
+
+    if (!sentences.length) {
+      return [];
+    }
+
+    return [
+      {
+        id: record.id,
+        concept: normalizeConceptText(record.concept),
+        version: "concept-brief-v0",
+        runnerKind: record.runnerKind,
+        generatedAt: record.generatedAt,
+        cardCount: normalizeNonNegativeInteger(record.cardCount),
+        reviewCount: normalizeNonNegativeInteger(record.reviewCount),
+        sourceCardIds: Array.isArray(record.sourceCardIds)
+          ? record.sourceCardIds.filter((cardId): cardId is string => typeof cardId === "string" && cardId.trim().length > 0)
+          : [],
+        adjacentConcepts: Array.isArray(record.adjacentConcepts)
+          ? record.adjacentConcepts.flatMap((item) => {
+              if (
+                !isRecord(item) ||
+                typeof item.concept !== "string" ||
+                typeof item.cardId !== "string" ||
+                !isKnowledgeEdgeRelation(item.relation)
+              ) {
+                return [];
+              }
+
+              return [
+                {
+                  concept: item.concept,
+                  relation: item.relation,
+                  cardId: item.cardId
+                }
+              ];
+            })
+          : [],
+        sentences
+      }
+    ];
+  });
+}
+
 interface PreparedSourceImportForPersistence {
   postsToSave: KnowledgePost[];
   mergedSources: MergedSourceRecord[];
@@ -902,6 +996,17 @@ function isConceptMergeSuggestionStatus(value: unknown): value is ConceptMergeSu
   return value === "pending" || value === "merged" || value === "separate";
 }
 
+function isKnowledgeEdgeRelation(value: unknown): value is ConceptBrief["adjacentConcepts"][number]["relation"] {
+  return (
+    value === "requires" ||
+    value === "extends" ||
+    value === "contrasts" ||
+    value === "applies" ||
+    value === "evaluates" ||
+    value === "summarizes"
+  );
+}
+
 function normalizeConceptText(value: string): string {
   return value.trim();
 }
@@ -970,6 +1075,16 @@ function upsertDailyAutoJobBudgetRecords(
   }
 
   return Array.from(byDate.values()).sort((left, right) => left.date.localeCompare(right.date));
+}
+
+function upsertConceptBriefs(items: ConceptBrief[], nextItems: ConceptBrief[]): ConceptBrief[] {
+  const byConcept = new Map(items.map((item) => [normalizeConceptKey(item.concept), item]));
+
+  for (const item of nextItems) {
+    byConcept.set(normalizeConceptKey(item.concept), item);
+  }
+
+  return Array.from(byConcept.values()).sort((left, right) => left.concept.localeCompare(right.concept));
 }
 
 function upsertUserMemory(items: UserMemoryRecord[], item: UserMemoryRecord): UserMemoryRecord[] {

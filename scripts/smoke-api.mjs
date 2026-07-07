@@ -94,6 +94,10 @@ try {
     "en",
     "settings API should persist content language into the snapshot"
   );
+  assert.ok(
+    Array.isArray(settingsSnapshot.conceptBriefs),
+    "old snapshots should expose conceptBriefs as an empty compatible field"
+  );
 
   const settingsReloadedServer = createApiServer({
     dataPath,
@@ -304,6 +308,42 @@ try {
   const dismissedPost = timeline.posts.find((post) => post.id !== firstPost.id);
 
   assert.ok(dismissedPost, "article smoke should have a second post for dismiss lifecycle coverage");
+
+  const firstConcept = firstPost.concepts[0];
+  const briefOpen = await requestJson(`/api/concepts/${encodeURIComponent(firstConcept)}/brief`, {
+    method: "POST",
+    body: {
+      now: "2026-06-10T00:05:00.000Z"
+    }
+  });
+
+  assert.equal(briefOpen.brief.concept, firstConcept, "concept brief endpoint should return a fallback brief for the concept");
+  assert.equal(briefOpen.queued, true, "concept brief endpoint should lazily enqueue a metered job");
+  assert.ok(
+    briefOpen.brief.sentences.every((sentence) => sentence.cardId),
+    "concept brief fallback should keep every sentence traceable to a card"
+  );
+
+  const briefBatch = await requestJson("/api/curation/run", {
+    method: "POST",
+    body: {
+      now: "2026-06-10T00:06:00.000Z",
+      limit: 2,
+      kinds: ["concept_brief"]
+    }
+  });
+  const briefSnapshot = await requestJson("/api/snapshot");
+  const persistedBrief = briefSnapshot.conceptBriefs.find((brief) => brief.concept === firstConcept);
+
+  assert.ok(
+    briefBatch.records.some((record) => record.job.kind === "concept_brief"),
+    "curation run should execute queued concept_brief jobs"
+  );
+  assert.ok(persistedBrief, "concept_brief curation job should persist the generated brief");
+  assert.ok(
+    persistedBrief.sentences.every((sentence) => persistedBrief.sourceCardIds.includes(sentence.cardId)),
+    "persisted concept brief should keep every sentence sourced to a card id"
+  );
 
   const dismissResult = await requestJson(`/api/posts/${encodeURIComponent(dismissedPost.id)}/dismiss`, {
     method: "POST"

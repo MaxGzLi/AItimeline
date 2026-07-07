@@ -59,6 +59,7 @@ export function runDeterministicAgentHarness(input: AgentHarnessRunInput): Agent
   const createdAt = input.createdAt ?? new Date().toISOString();
   const config = input.config ?? defaultAgentHarnessConfig;
   const chunks = selectAgentHarnessInputChunks(input, config);
+  const postChunks = input.paperDigest ? chunks : chunks.slice(0, config.maxPostsPerRun);
   const sourceRegistry =
     input.sourceRegistry ??
     createSourceRegistry({
@@ -70,7 +71,7 @@ export function runDeterministicAgentHarness(input: AgentHarnessRunInput): Agent
     input.recommendedBecause ?? getDefaultRecommendedBecause(input.contentLanguage);
   const posts = input.paperDigest
     ? createDeterministicPaperDigestPosts(input, createdAt, recommendedBecause)
-    : chunks.map((chunk, index) =>
+    : postChunks.map((chunk, index) =>
         createKnowledgePost({
           source: input.source,
           chunk,
@@ -130,7 +131,7 @@ export function selectAgentHarnessInputChunks(
   config: AgentHarnessConfig = defaultAgentHarnessConfig
 ): KnowledgeChunk[] {
   if (!input.paperDigest) {
-    return input.chunks.slice(0, config.maxPostsPerRun);
+    return sampleRegularSourceChunks(input);
   }
 
   const chunkById = new Map(input.chunks.map((chunk) => [chunk.id, chunk]));
@@ -191,6 +192,97 @@ export function selectAgentHarnessInputChunks(
   }
 
   return selectedChunks;
+}
+
+function sampleRegularSourceChunks(input: AgentHarnessRunInput): KnowledgeChunk[] {
+  const maxTotalChunks = 16;
+
+  if (input.chunks.length <= maxTotalChunks) {
+    return input.chunks;
+  }
+
+  const contextConcepts = collectUserContextConcepts(input.userContext);
+  const chunksWithIndex = input.chunks.map((chunk, index) => ({
+    chunk,
+    index,
+    score: scoreChunkRelevance(chunk, contextConcepts)
+  }));
+  const bucketSize = Math.ceil(chunksWithIndex.length / 3);
+  const buckets = [
+    chunksWithIndex.slice(0, bucketSize),
+    chunksWithIndex.slice(bucketSize, bucketSize * 2),
+    chunksWithIndex.slice(bucketSize * 2)
+  ]
+    .filter((bucket) => bucket.length > 0)
+    .map((bucket) => ({
+      cursor: 0,
+      chunks: [...bucket].sort((left, right) => right.score - left.score || left.index - right.index)
+    }));
+  const selected = new Map<string, { chunk: KnowledgeChunk; index: number }>();
+
+  while (selected.size < maxTotalChunks) {
+    let added = false;
+
+    for (const bucket of buckets) {
+      while (bucket.cursor < bucket.chunks.length) {
+        const item = bucket.chunks[bucket.cursor];
+        bucket.cursor += 1;
+
+        if (selected.has(item.chunk.id)) {
+          continue;
+        }
+
+        selected.set(item.chunk.id, { chunk: item.chunk, index: item.index });
+        added = true;
+        break;
+      }
+
+      if (selected.size >= maxTotalChunks) {
+        break;
+      }
+    }
+
+    if (!added) {
+      break;
+    }
+  }
+
+  return Array.from(selected.values())
+    .sort((left, right) => left.index - right.index)
+    .map((item) => item.chunk);
+}
+
+function collectUserContextConcepts(context: AgentHarnessRunInput["userContext"]): string[] {
+  if (!context) {
+    return [];
+  }
+
+  return Array.from(
+    new Set(
+      [
+        ...(context.knownConcepts ?? []),
+        ...(context.savedConcepts ?? []),
+        ...(context.weakConcepts ?? []),
+        ...(context.memory?.profile.interests ?? []),
+        ...(context.memory?.knowledge.knownConcepts ?? []),
+        ...(context.memory?.knowledge.savedConcepts ?? []),
+        ...(context.memory?.knowledge.weakConcepts ?? []),
+        ...(context.topicStates?.map((state) => state.topicId) ?? []),
+        ...(context.recentSignals?.flatMap((signal) => [signal.topicId, ...(signal.conceptIds ?? [])]) ?? [])
+      ]
+        .map((concept) => concept.trim().toLowerCase())
+        .filter(Boolean)
+    )
+  );
+}
+
+function scoreChunkRelevance(chunk: KnowledgeChunk, contextConcepts: string[]): number {
+  const content = chunk.content.toLowerCase();
+  const hints = chunk.conceptHints?.map((hint) => hint.trim().toLowerCase()).filter(Boolean) ?? [];
+  const hintMatches = hints.filter((hint) => contextConcepts.includes(hint)).length;
+  const contentMatches = contextConcepts.filter((concept) => concept && content.includes(concept)).length;
+
+  return hintMatches * 3 + contentMatches + hints.length * 0.2;
 }
 
 export function validateHarnessPosts(

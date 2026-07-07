@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const { applyDailyAutoJobBudget, createBackgroundCurationPlan } = await import("../packages/core/dist/agents/backgroundCuration.js");
+const { createDeterministicConceptBrief } = await import("../packages/core/dist/agents/conceptBrief.js");
 const { runConversationTurn } = await import("../packages/core/dist/agents/conversationAgent.js");
 const { runIdeaObservation } = await import("../packages/core/dist/agents/ideaFlow.js");
 const { createStaticSearchProvider } = await import("../packages/core/dist/discovery/searchProvider.js");
@@ -28,7 +29,7 @@ const {
 } = await import("../packages/core/dist/harness/contentLanguage.js");
 const { validateGrounding } = await import("../packages/core/dist/harness/groundingGate.js");
 const { validateKnowledgePost } = await import("../packages/core/dist/harness/schema.js");
-const { createAgentHarnessConfig, defaultAgentHarnessConfig, validateHarnessPosts } = await import(
+const { createAgentHarnessConfig, defaultAgentHarnessConfig, runDeterministicAgentHarness, selectAgentHarnessInputChunks, validateHarnessPosts } = await import(
   "../packages/core/dist/harness/runner.js"
 );
 const { createModelKnowledgePostRunner } = await import("../packages/core/dist/harness/modelRunner.js");
@@ -78,6 +79,7 @@ const { createOpenAICompatibleSourceImportWorker, createSourceImportWorker } = a
 );
 const { evaluateSourceQualityDeterministic } = await import("../packages/core/dist/source/sourceQualityGate.js");
 const { createAITimelinePersistenceStore } = await import("../packages/core/dist/storage/persistenceStore.js");
+const { normalizeMathDelimiters } = await import("../packages/core/dist/text/mathDelimiters.js");
 const { fetchArticle, parseArxivAtom, transformArticleUrl } = await import(
   "../packages/core/dist/transform/articleImport.js"
 );
@@ -404,6 +406,129 @@ assert.equal(result.cards.length, 4, "mock import should produce four cards");
 assert.equal(result.sourceRegistry.snapshots.length, 1, "transcript asset should produce one source snapshot");
 assert.equal(result.sourceRegistry.chunks.length, 4, "mock transcript should produce four registered chunks");
 
+const requiredKnowledgeBlocks = ["explain", "example", "contrast", "extension", "quiz"];
+const fallbackKnowledgeBlocks = result.cards[0].thread.filter((block) => requiredKnowledgeBlocks.includes(block.kind));
+
+assert.deepEqual(
+  fallbackKnowledgeBlocks.map((block) => block.kind),
+  requiredKnowledgeBlocks,
+  "deterministic fallback should produce all five required knowledge blocks"
+);
+assert.ok(
+  fallbackKnowledgeBlocks.every((block) => block.body.replace(/\s+/g, "").length >= 80),
+  "deterministic fallback Chinese knowledge blocks should meet the depth guideline"
+);
+assert.ok(
+  validateKnowledgePost(result.cards[0]).issues.every(
+    (issue) => issue.severity !== "warning" || !/thinner than the content-depth/.test(issue.message)
+  ),
+  "deterministic fallback knowledge blocks should not trigger thin-block warnings"
+);
+
+const articleSamplingSource = {
+  id: "sampling-article",
+  title: "Sampling fixture",
+  url: "https://example.com/sampling",
+  type: "article"
+};
+const articleSamplingChunks = Array.from({ length: 18 }, (_, index) => ({
+  id: `sampling-article-chunk-${index + 1}`,
+  sourceId: articleSamplingSource.id,
+  content: `Sampling paragraph ${index + 1} explains durable context selection for Article Sampling and Known Concept with enough distinct words to form a registered chunk.`,
+  conceptHints: index === 12 ? ["Known Concept"] : ["Article Sampling"]
+}));
+const articleSamplingUserContext = {
+  knownConcepts: ["Known Concept"],
+  weakConcepts: ["Weak Concept"],
+  topicStates: [
+    {
+      topicId: "Known Concept",
+      interestScore: 0.8,
+      fatigueScore: 0.1,
+      comprehensionScore: 0.7
+    }
+  ]
+};
+const sampledArticleChunks = selectAgentHarnessInputChunks(
+  {
+    source: articleSamplingSource,
+    chunks: articleSamplingChunks,
+    userContext: articleSamplingUserContext
+  },
+  createAgentHarnessConfig()
+);
+
+assert.ok(sampledArticleChunks.length > 4, "ordinary article sampling should include more than four chunks");
+assert.ok(sampledArticleChunks.length <= 16, "ordinary article sampling should cap model context at sixteen chunks");
+assert.ok(
+  sampledArticleChunks.some((chunk) => chunk.id === "sampling-article-chunk-13"),
+  "ordinary article sampling should prioritize chunks that match userContext concepts"
+);
+
+const deterministicSamplingResult = runDeterministicAgentHarness({
+  source: articleSamplingSource,
+  chunks: articleSamplingChunks,
+  userContext: articleSamplingUserContext,
+  createdAt: "2026-06-10T00:00:00.000Z"
+});
+let capturedModelMessages = [];
+const samplingModelRunner = createModelKnowledgePostRunner({
+  client: {
+    async complete(request) {
+      capturedModelMessages = request.messages;
+      return {
+        content: JSON.stringify({ posts: [deterministicSamplingResult.posts[0]] })
+      };
+    }
+  },
+  maxRepairAttempts: 0
+});
+
+await samplingModelRunner.run({
+  source: articleSamplingSource,
+  chunks: articleSamplingChunks,
+  userContext: articleSamplingUserContext,
+  createdAt: "2026-06-10T00:00:00.000Z"
+});
+
+const capturedPrompt = capturedModelMessages.map((message) => message.content).join("\n");
+
+assert.ok(
+  capturedPrompt.includes("sampling-article-chunk-13") && capturedPrompt.includes("sampling-article-chunk-16"),
+  "model input for ordinary article import should contain sampled chunks beyond the first four"
+);
+assert.ok(
+  capturedPrompt.includes("Known Concept") && capturedPrompt.includes("Weak Concept"),
+  "model input should include fixture userContext concepts"
+);
+
+const conceptBrief = createDeterministicConceptBrief({
+  concept: "Sampling Concept",
+  cards: deterministicSamplingResult.posts.slice(0, 3).map((post) => ({
+    id: post.id,
+    title: post.title,
+    keyTakeaway: post.keyTakeaway,
+    concepts: post.concepts,
+    createdAt: post.createdAt,
+    graphEdges: post.graphEdges
+  })),
+  reviewCount: 1,
+  contentLanguage: "zh",
+  createdAt: "2026-06-10T00:00:00.000Z"
+});
+const conceptBriefCardIds = new Set(conceptBrief.sourceCardIds);
+
+assert.ok(conceptBrief.sentences.length >= 3, "concept_brief fallback should produce a multi-sentence brief");
+assert.ok(
+  conceptBrief.sentences.every((sentence) => conceptBriefCardIds.has(sentence.cardId)),
+  "concept_brief fallback should make every sentence traceable to a source card id"
+);
+assert.equal(
+  normalizeMathDelimiters("Inline \\(a+b\\) and display \\[c=d\\]"),
+  "Inline $a+b$ and display $$c=d$$",
+  "math delimiter normalization should convert \\(...\\) and \\[...\\] before rendering"
+);
+
 // Cross-card connections turn fragments into a web: a card links to OTHER cards that share its concepts/edges.
 const cardConnections = buildCardConnections(result.cards[0], result.cards);
 assert.ok(Array.isArray(cardConnections), "card connections should be an array");
@@ -440,15 +565,42 @@ assert.ok(
   conceptDigest.entries.every((entry) => digestRoles.includes(entry.role) && entry.keyTakeaway.length > 0),
   "every entry should carry a valid role and a non-empty takeaway"
 );
-const roleRank = Object.fromEntries(digestRoles.map((role, index) => [role, index]));
-const orderedByRole = conceptDigest.entries.every(
-  (entry, index) => index === 0 || roleRank[conceptDigest.entries[index - 1].role] <= roleRank[entry.role]
-);
-assert.ok(orderedByRole, "digest entries should read foundations -> builds -> applies -> contrasts");
 assert.equal(
   buildConceptDigest("a-concept-no-card-mentions", result.cards).cardCount,
   0,
   "an unknown concept should produce an empty digest"
+);
+
+const requiresDigestCards = [
+  makeSmokePost({
+    id: "requires-dependent",
+    title: "Dependent before prerequisite",
+    concepts: ["Advanced Topic"],
+    createdAt: "2026-06-01T00:00:00.000Z",
+    graphEdges: [
+      {
+        id: "requires-edge",
+        sourceConcept: "Advanced Topic",
+        relation: "requires",
+        targetConcept: "Foundation Topic",
+        evidence: "Advanced Topic requires Foundation Topic.",
+        weight: 0.88
+      }
+    ]
+  }),
+  makeSmokePost({
+    id: "requires-prerequisite",
+    title: "Prerequisite created later",
+    concepts: ["Foundation Topic"],
+    createdAt: "2026-06-03T00:00:00.000Z"
+  })
+];
+const requiresDigest = buildConceptDigest("Foundation Topic", requiresDigestCards);
+
+assert.deepEqual(
+  requiresDigest.entries.map((entry) => entry.cardId),
+  ["requires-prerequisite", "requires-dependent"],
+  "concept digest entries should follow requires topology before createdAt"
 );
 
 // Non-ASCII (Chinese) concepts must slug to distinct, non-empty keys instead of collapsing to "".

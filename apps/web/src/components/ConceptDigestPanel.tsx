@@ -1,4 +1,4 @@
-import type { Backlink, ConceptAliasRecord, ConceptDigest } from "@aitimeline/core";
+import type { Backlink, ConceptAliasRecord, ConceptBrief, ConceptDigest } from "@aitimeline/core";
 import { Layers, Link2, XCircle } from "lucide-react";
 import { formatConceptRole, formatDueDate } from "../lib/format";
 import { t } from "../lib/i18n";
@@ -6,6 +6,8 @@ import { t } from "../lib/i18n";
 export function ConceptDigestPanel({
   backlinks,
   conceptAliases,
+  brief,
+  briefQueued,
   digest,
   onClose,
   onOpenCardId,
@@ -13,6 +15,8 @@ export function ConceptDigestPanel({
 }: {
   backlinks: Backlink[];
   conceptAliases: ConceptAliasRecord[];
+  brief?: ConceptBrief | null;
+  briefQueued?: boolean;
   digest: ConceptDigest;
   onClose: () => void;
   onOpenCardId: (cardId: string) => void;
@@ -70,6 +74,29 @@ export function ConceptDigestPanel({
               ))}
             </div>
           </div>
+        ) : null}
+
+        {brief?.sentences.length ? (
+          <section className="x-concept-brief">
+            <div className="x-concept-brief-head">
+              <p className="x-label">{t("concept.brief")}</p>
+              {briefQueued ? <span>{t("concept.briefQueued")}</span> : null}
+            </div>
+            <div className="x-concept-brief-body">
+              {brief.sentences.map((sentence) => {
+                const sourceEntry = digest.entries.find((entry) => entry.cardId === sentence.cardId);
+
+                return (
+                  <p key={sentence.id}>
+                    {sentence.text}
+                    <button onClick={() => onOpenCardId(sentence.cardId)} type="button">
+                      {sourceEntry?.title ?? sentence.cardId}
+                    </button>
+                  </p>
+                );
+              })}
+            </div>
+          </section>
         ) : null}
 
         <ol className="x-concept-list">

@@ -1,6 +1,7 @@
 export * from "./agents/researchAgent.js";
 export * from "./agents/backgroundCuration.js";
 export * from "./agents/backgroundCurationQueue.js";
+export * from "./agents/conceptBrief.js";
 export * from "./agents/conversationAgent.js";
 export * from "./agents/ideaFlow.js";
 export * from "./discovery/searchProvider.js";
@@ -35,6 +36,7 @@ export * from "./source/sourceImportWorker.js";
 export * from "./source/sourceQualityGate.js";
 export * from "./source/sourceRegistry.js";
 export * from "./storage/persistenceStore.js";
+export * from "./text/mathDelimiters.js";
 export * from "./transform/arxivHtmlImport.js";
 export * from "./transform/articleImport.js";
 export * from "./transform/mockYoutubeImport.js";

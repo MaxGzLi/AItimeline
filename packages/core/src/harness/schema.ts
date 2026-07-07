@@ -55,6 +55,7 @@ const nextActionPolicies = [
   "schedule_review",
   "ask_clarifying_question"
 ] as const satisfies readonly NextActionPolicy[];
+const knowledgeThreadKinds = ["explain", "example", "contrast", "extension", "quiz"] as const satisfies readonly ThreadBlockKind[];
 
 export const knowledgePostJsonSchema = {
   type: "object",
@@ -305,7 +306,34 @@ function validateThread(value: unknown, issues: HarnessValidationIssue[]): void 
     requireEnum(block, "kind", threadKinds, issues, `$.thread[${index}]`);
     requireString(block, "title", issues, `$.thread[${index}]`);
     requireString(block, "body", issues, `$.thread[${index}]`);
+    warnIfThinKnowledgeBlock(block, index, issues);
   });
+}
+
+function warnIfThinKnowledgeBlock(
+  block: Record<string, unknown>,
+  index: number,
+  issues: HarnessValidationIssue[]
+): void {
+  if (!knowledgeThreadKinds.some((kind) => kind === block.kind) || typeof block.body !== "string") {
+    return;
+  }
+
+  const body = block.body.trim();
+  const cjkCharacters = body.match(/\p{Script=Han}|\p{Script=Hiragana}|\p{Script=Katakana}|\p{Script=Hangul}/gu) ?? [];
+  const latinWords = body.match(/\p{Script=Latin}+/gu) ?? [];
+  const isCjkPrimary = cjkCharacters.length >= latinWords.length;
+  const passesMinimum = isCjkPrimary
+    ? body.replace(/\s+/g, "").length >= 80
+    : body.split(/\s+/).filter(Boolean).length >= 60;
+
+  if (!passesMinimum) {
+    issues.push({
+      path: `$.thread[${index}].body`,
+      message: "knowledge thread block is thinner than the content-depth guideline.",
+      severity: "warning"
+    });
+  }
 }
 
 function validateGraphEdges(value: unknown, issues: HarnessValidationIssue[]): void {

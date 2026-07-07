@@ -145,37 +145,73 @@ function buildKeyTakeaway(text: string, thesis: string): string {
 function buildThread(chunk: KnowledgeChunk, concepts: string[], language: ContentLanguage): KnowledgeThreadBlock[] {
   const primaryConcept = concepts[0] ?? defaultImportedConcept(language);
   const secondaryConcept = concepts[1] ?? "Memory";
+  const shortBody = buildShortBody(chunk.content);
+
+  if (language === "zh") {
+    return [
+      {
+        id: `${chunk.id}-thread-explain`,
+        kind: "explain",
+        title: "这是什么意思",
+        body: `这张卡不是把来源再压缩一遍,而是把 ${primaryConcept} 变成一个可操作的判断:${shortBody}。它的运作方式是先从来源里抓住一个稳定主张,再把主张放进时间线、引用、复习和图谱关系里。这样设计的原因是,用户之后需要的不是一段孤立摘要,而是能被追问、复习、连接和重新推荐的知识单元。`
+      },
+      {
+        id: `${chunk.id}-thread-example`,
+        kind: "example",
+        title: "例子",
+        body: `[超出来源] 假设你导入一段很长的材料,系统先拿到一个来源片段作为输入,再抽出 ${primaryConcept} 这个核心概念,把它变成标题、要点、引用、复习题和图谱边。输出不是一份大而全的总结,而是一张能在时间线里被再次打开的卡:你可以读判断、看证据、回答小测,再决定要深入还是换个角度。`
+      },
+      {
+        id: `${chunk.id}-thread-contrast`,
+        kind: "contrast",
+        title: "对比",
+        body: `${primaryConcept} 和 ${secondaryConcept} 的区别在于,前者更像这张卡正在讲的具体抓手,后者更像系统长期保存和调度这些抓手的容器。要判断什么时候用哪个:当你要解释这条来源片段本身,先用 ${primaryConcept};当你要决定它未来如何复习、推荐或连接其他卡片,再把它放进 ${secondaryConcept} 的视角。`
+      },
+      {
+        id: `${chunk.id}-thread-extension`,
+        kind: "extension",
+        title: "下一步",
+        body: `[超出来源] 真正的工程权衡在于,卡片越短越容易进入时间线,但越短也越可能丢掉来源里的限制条件;卡片越厚越有学习价值,又会增加生成、校验和阅读成本。更稳的做法是保留来源内的核心判断,把补充解释显式标成超出来源,并让用户通过继续追问来决定要不要为这个点引入新来源。`
+      },
+      {
+        id: `${chunk.id}-thread-quiz`,
+        kind: "quiz",
+        title: "快速检查",
+        body: `如果你现在要把这条来源材料放进自己的学习流,你会把它当作一次性摘要,还是当作之后会回到时间线的知识卡?请用一个场景回答:什么时候只需要读完即走,什么时候必须保留引用、图谱关系和复习提示。能说清这个选择,才算真正理解了 ${primaryConcept} 的用途。`
+      }
+    ];
+  }
 
   return [
     {
       id: `${chunk.id}-thread-explain`,
       kind: "explain",
-      title: language === "zh" ? "这是什么意思" : "What this means",
-      body: `This post turns ${primaryConcept} into one teachable claim: ${buildShortBody(chunk.content)}`
+      title: "What this means",
+      body: `This card does not merely compress the source. It turns ${primaryConcept} into one teachable judgment: ${shortBody}. The mechanism is to isolate a stable claim from the cited chunk, then place that claim inside a timeline object with citations, review prompts, and graph edges. The design choice matters because a learner needs a unit that can be questioned, reviewed, connected, and recommended later, not a paragraph that disappears after the import.`
     },
     {
       id: `${chunk.id}-thread-example`,
       kind: "example",
-      title: language === "zh" ? "例子" : "Example",
-      body: `If a user imports a long video, the agent should create a small post, a source citation, a review prompt, and graph links instead of one giant summary.`
+      title: "Example",
+      body: `[beyond source] Imagine a user imports a long source. The input is one grounded chunk, the transformation extracts ${primaryConcept}, and the output is a compact card with a title, takeaway, citation, review question, and graph relation. The useful result is not a giant summary. It is a card the user can reopen, challenge with a follow-up question, and connect to nearby ideas before deciding whether to go deeper or broader.`
     },
     {
       id: `${chunk.id}-thread-contrast`,
       kind: "contrast",
-      title: language === "zh" ? "对比" : "Contrast",
-      body: `A normal summarizer compresses content once. A learning feed turns the idea into something that can be recommended, questioned, reviewed, and connected.`
+      title: "Contrast",
+      body: `${primaryConcept} is the concrete handle this card asks the user to understand, while ${secondaryConcept} is the longer-term container that decides how the handle returns. Use ${primaryConcept} when explaining what this source chunk is saying. Use ${secondaryConcept} when deciding how the idea should be resurfaced, reviewed, or connected to other cards. That distinction keeps the card from becoming either a loose tag or an isolated summary.`
     },
     {
       id: `${chunk.id}-thread-extension`,
       kind: "extension",
-      title: language === "zh" ? "下一步" : "Where to go next",
-      body: `Connect ${primaryConcept} to ${secondaryConcept}, then decide whether the user needs a deeper explanation, a broader adjacent concept, or a simpler reframe.`
+      title: "Where to go next",
+      body: `[beyond source] The engineering trade-off is depth versus controllability. A shorter card fits the feed and is easier to validate, but it can lose important constraints from the source. A richer card teaches more, but it costs more generation, grounding, and reading attention. The practical move is to keep the source-backed judgment visible, mark extra interpretation honestly, and let explicit follow-up questions decide when a new source is worth pulling in.`
     },
     {
       id: `${chunk.id}-thread-quiz`,
       kind: "quiz",
-      title: language === "zh" ? "快速检查" : "Quick check",
-      body: `In one sentence, explain why this idea should return in the timeline later instead of staying buried in the source.`
+      title: "Quick check",
+      body: `Suppose you are deciding whether this imported idea should stay as a one-time summary or become a card that returns in the timeline. What evidence would make you keep citations, graph links, and a review prompt? Answer with a concrete scenario, not a definition of ${primaryConcept}. If you can justify that decision, you have understood what the card is for.`
     }
   ];
 }

@@ -405,6 +405,9 @@ export interface AgentHarnessConfig {
 
 export interface AgentHarnessUserContext {
   memory?: UserMemory;
+  knownConcepts?: string[];
+  savedConcepts?: string[];
+  weakConcepts?: string[];
   recentSignals?: InteractionSignal[];
   topicStates?: TopicState[];
 }
@@ -497,6 +500,33 @@ export interface KnowledgePostAgentRunner {
   id: string;
   kind: AgentHarnessRunnerKind;
   run(input: AgentHarnessRunInput): AgentHarnessRunResult | Promise<AgentHarnessRunResult>;
+}
+
+export type ConceptBriefRunnerKind = "deterministic" | "model";
+
+export interface ConceptBriefSentence {
+  id: string;
+  text: string;
+  cardId: string;
+}
+
+export interface ConceptBriefAdjacentConcept {
+  concept: string;
+  relation: KnowledgeEdgeRelation;
+  cardId: string;
+}
+
+export interface ConceptBrief {
+  id: string;
+  concept: string;
+  version: "concept-brief-v0";
+  runnerKind: ConceptBriefRunnerKind;
+  generatedAt: string;
+  cardCount: number;
+  reviewCount: number;
+  sourceCardIds: string[];
+  adjacentConcepts: ConceptBriefAdjacentConcept[];
+  sentences: ConceptBriefSentence[];
 }
 
 export interface ConceptNode {

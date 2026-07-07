@@ -1,6 +1,7 @@
 import type {
   AgentTurnRecord,
   BackgroundSourceCandidate,
+  ConceptBrief,
   ConceptAliasRecord,
   ConceptMergeSuggestion,
   DailyAutoJobBudgetRecord,
@@ -18,6 +19,7 @@ import type {
 } from "@aitimeline/core";
 
 export type { DailyAutoJobBudgetRecord };
+export type { ConceptBrief };
 
 export type AiMessage = {
   id: string;
@@ -122,6 +124,13 @@ export type ApiSnapshot = {
   sourceQualityVerdicts?: SourceQualityVerdict[];
   mergedSources?: MergedSourceRecord[];
   autoJobBudget?: DailyAutoJobBudgetRecord[];
+  conceptBriefs?: ConceptBrief[];
+};
+
+export type ApiConceptBriefResponse = {
+  brief: ConceptBrief;
+  queued: boolean;
+  records: Array<{ id: string; status: string }>;
 };
 
 export type ApiSettings = {

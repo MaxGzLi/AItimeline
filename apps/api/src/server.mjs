@@ -7,12 +7,15 @@ import {
   askGrounded,
   advanceReviewState,
   addConceptAliasDecision,
+  buildConceptDigest,
   buildDiscoveryConfirmationQuestions,
   createAutomaticConceptAliases,
+  createConceptBriefInputFromCards,
   countSeenReadSignalsByPostId,
   createAITimelinePersistenceStore,
   applyDailyAutoJobBudget,
   createBackgroundCurationPlan,
+  createDeterministicConceptBrief,
   createConceptMergeSuggestion,
   createConnectionNoteForImport,
   createEmptyUserMemory,
@@ -39,7 +42,9 @@ import {
   rankPersonalizedTimeline,
   runConversationTurn,
   runDueBackgroundCurationJobs,
+  generateConceptBrief,
   runIdeaObservation,
+  shouldRefreshConceptBrief,
   runSourceDiscovery,
   transformArticleUrl,
   transformUserNote,
@@ -389,6 +394,23 @@ export function createApiServer(options = {}) {
         return;
       }
 
+      if (request.method === "POST" && /^\/api\/concepts\/[^/]+\/brief$/.test(url.pathname)) {
+        const concept = decodeURIComponent(
+          url.pathname.replace(/^\/api\/concepts\//, "").replace(/\/brief$/, "")
+        );
+        const body = await readJsonBody(request);
+        const result = handleConceptBriefRequest(
+          concept,
+          body,
+          persistenceStore,
+          curationStore,
+          resolveContentLanguage(persistenceStore, process.env)
+        );
+
+        sendJson(response, 200, result);
+        return;
+      }
+
       if (request.method === "GET" && url.pathname === "/api/source-candidates") {
         const status = url.searchParams.get("status") ?? undefined;
         const records = persistenceStore
@@ -447,7 +469,13 @@ export function createApiServer(options = {}) {
       if (request.method === "POST" && url.pathname === "/api/import/article") {
         const body = await readJsonBody(request);
         const contentLanguage = resolveContentLanguage(persistenceStore, process.env);
-        const importResult = await importArticle(body, importRunner, mediaRootDir, contentLanguage);
+        const importResult = await importArticle(
+          body,
+          importRunner,
+          mediaRootDir,
+          contentLanguage,
+          buildSourceQualityUserContext(persistenceStore.getSnapshot())
+        );
         const { snapshot, releasePlan } = persistImportAndReleasePlan(persistenceStore, importResult, {
           contentLanguage
         });
@@ -463,7 +491,12 @@ export function createApiServer(options = {}) {
       if (request.method === "POST" && url.pathname === "/api/import/youtube") {
         const body = await readJsonBody(request);
         const contentLanguage = resolveContentLanguage(persistenceStore, process.env);
-        const importResult = await importYouTube(body, importRunner, contentLanguage);
+        const importResult = await importYouTube(
+          body,
+          importRunner,
+          contentLanguage,
+          buildSourceQualityUserContext(persistenceStore.getSnapshot())
+        );
         const { snapshot, releasePlan } = persistImportAndReleasePlan(persistenceStore, importResult, {
           contentLanguage
         });
@@ -617,6 +650,14 @@ export function createApiServer(options = {}) {
                 contentLanguage,
                 runNow
               ),
+            conceptBrief: (job) =>
+              handleConceptBriefJob(
+                job,
+                persistenceStore,
+                askModelClient,
+                contentLanguage,
+                runNow
+              ),
             cooldownTopic: (job) => ({
               kind: job.kind,
               message: "Topic cooldown recorded by API worker."
@@ -678,6 +719,11 @@ export function createApiServer(options = {}) {
                 completedAt
               );
             }
+          }
+
+          if (record.result?.conceptBrief) {
+            const completedAt = record.completedAt ?? filteredBatch.completedAt;
+            snapshot = persistenceStore.saveConceptBriefs([record.result.conceptBrief], completedAt);
           }
         }
 
@@ -2464,12 +2510,46 @@ function buildSourceQualityUserContext(snapshot, userId = "local-user") {
   const memory =
     snapshot.userMemories.find((record) => record.userId === userId)?.memory ??
     snapshot.userMemories[0]?.memory;
+  const confirmedConcepts = new Set();
+
+  for (const record of snapshot.interactionSignals) {
+    const signal = record.signal;
+
+    if (!signal.liked && !signal.saved && !signal.askedQuestion && !signal.reviewed) {
+      continue;
+    }
+
+    for (const concept of [signal.topicId, ...(signal.conceptIds ?? [])]) {
+      if (concept) {
+        confirmedConcepts.add(concept);
+      }
+    }
+  }
+
+  const weakConcepts = new Set(memory?.knowledge.weakConcepts ?? []);
+
+  for (const state of snapshot.topicStates) {
+    if (state.comprehensionScore < 0.5) {
+      weakConcepts.add(state.topicId);
+    }
+  }
 
   return {
     memory,
+    knownConcepts: uniqueStrings([
+      ...(memory?.profile.interests ?? []),
+      ...(memory?.knowledge.knownConcepts ?? []),
+      ...confirmedConcepts
+    ]),
+    savedConcepts: uniqueStrings(memory?.knowledge.savedConcepts ?? []),
+    weakConcepts: uniqueStrings(Array.from(weakConcepts)),
     topicStates: snapshot.topicStates,
     recentSignals: snapshot.interactionSignals.map((record) => record.signal).slice(-20)
   };
+}
+
+function uniqueStrings(values) {
+  return Array.from(new Set(values.map((value) => `${value}`.trim()).filter(Boolean)));
 }
 
 function toUserSignals(interactionSignalRecords) {
@@ -2542,26 +2622,155 @@ async function handleAsk(body, persistenceStore, client, contentLanguage) {
   return askGrounded({ post, registry, question: body.question }, { client, contentLanguage });
 }
 
-async function importArticle(body, runner, mediaRootDir, contentLanguage) {
+function handleConceptBriefRequest(concept, body, persistenceStore, curationStore, contentLanguage) {
+  requireString(concept, "concept");
+  const now = typeof body.now === "string" ? body.now : new Date().toISOString();
+  const snapshot = persistenceStore.getSnapshot();
+  const input = buildConceptBriefInput(snapshot, concept, contentLanguage, now);
+
+  if (input.cards.length === 0) {
+    throw new HttpError(404, "Concept has no cards.");
+  }
+
+  const existingBrief = findConceptBrief(snapshot, input.concept);
+  const needsRefresh = shouldRefreshConceptBrief(existingBrief, input.cards.length);
+  const brief = needsRefresh ? createDeterministicConceptBrief(input) : existingBrief;
+
+  if (!needsRefresh && brief) {
+    return {
+      brief,
+      queued: false,
+      records: [],
+      snapshotSummary: summarizeSnapshot(snapshot)
+    };
+  }
+
+  const activeJob = curationStore.list().find(
+    (record) =>
+      (record.status === "queued" || record.status === "running") &&
+      record.job.kind === "concept_brief" &&
+      normalizeConceptKey(record.job.topicId) === normalizeConceptKey(input.concept)
+  );
+
+  if (activeJob) {
+    return {
+      brief,
+      queued: true,
+      records: [activeJob],
+      snapshotSummary: summarizeSnapshot(snapshot)
+    };
+  }
+
+  const rawPlan = createSingleJobPlan(createConceptBriefJob(input.concept, input.cards.length, now), now);
+  const budgetResult = applyDailyAutoJobBudget({
+    plan: rawPlan,
+    budget: getDailyAutoJobBudgetRecord(snapshot, now),
+    limit: getDailyAutoJobBudgetLimit(process.env),
+    now
+  });
+  const records = curationStore.enqueuePlan(budgetResult.plan, now);
+  persistenceStore.saveDailyAutoJobBudgetRecords([budgetResult.budget], now);
+  const nextSnapshot = persistenceStore.saveCurationJobRecords(records, now);
+
+  return {
+    brief,
+    queued: records.length > 0,
+    records,
+    budget: budgetResult.budget,
+    discardedJobIds: budgetResult.discardedJobIds,
+    snapshotSummary: summarizeSnapshot(nextSnapshot)
+  };
+}
+
+async function handleConceptBriefJob(job, persistenceStore, client, contentLanguage, now) {
+  const concept = job.conceptIds[0] ?? job.topicId;
+  const snapshot = persistenceStore.getSnapshot();
+  const input = buildConceptBriefInput(snapshot, concept, contentLanguage, now);
+
+  if (input.cards.length === 0) {
+    return {
+      kind: job.kind,
+      message: "Skipped: concept brief job has no matching cards."
+    };
+  }
+
+  const brief = await generateConceptBrief(input, { client });
+
+  return {
+    kind: job.kind,
+    conceptBrief: brief,
+    message: `Generated concept brief for ${input.concept}.`
+  };
+}
+
+function buildConceptBriefInput(snapshot, concept, contentLanguage, now) {
+  const digest = buildConceptDigest(concept, snapshot.posts, { conceptAliases: snapshot.conceptAliases });
+  const cardIds = new Set(digest.entries.map((entry) => entry.cardId));
+  const cards = snapshot.posts.filter((post) => cardIds.has(post.id) && post.kind !== "connection_note");
+
+  return createConceptBriefInputFromCards({
+    concept: digest.concept || concept,
+    cards,
+    reviewCount: countConceptReviews(snapshot, cardIds),
+    contentLanguage,
+    createdAt: now
+  });
+}
+
+function createConceptBriefJob(concept, cardCount, now) {
+  return {
+    id: `concept-brief-${hashText(`${normalizeConceptKey(concept)}|${cardCount}|${now.slice(0, 10)}`)}`,
+    kind: "concept_brief",
+    topicId: concept,
+    conceptIds: [concept],
+    priority: 0.64,
+    reason: `Generate a sourced concept brief for ${concept}.`,
+    createdAt: now,
+    runAfter: now
+  };
+}
+
+function findConceptBrief(snapshot, concept) {
+  const conceptKey = normalizeConceptKey(concept);
+
+  return snapshot.conceptBriefs
+    .filter((brief) => normalizeConceptKey(brief.concept) === conceptKey)
+    .sort((left, right) => right.generatedAt.localeCompare(left.generatedAt))[0];
+}
+
+function countConceptReviews(snapshot, cardIds) {
+  const reviewedSignals = snapshot.interactionSignals.filter(
+    (record) => cardIds.has(record.signal.postId) && record.signal.reviewed
+  ).length;
+  const reviewedStates = snapshot.reviewStates.filter(
+    (state) => cardIds.has(state.postId) && state.lastReviewedAt
+  ).length;
+
+  return reviewedSignals + reviewedStates;
+}
+
+async function importArticle(body, runner, mediaRootDir, contentLanguage, userContext) {
   requireString(body.url, "url");
   const result = await transformArticleUrl(body.url, {
     createdAt: body.createdAt,
     recommendedBecause: body.recommendedBecause,
     runner,
     mediaRootDir,
-    contentLanguage
+    contentLanguage,
+    userContext
   });
 
   return toSourceImportWorkerResult(result);
 }
 
-async function importYouTube(body, runner, contentLanguage) {
+async function importYouTube(body, runner, contentLanguage, userContext) {
   requireString(body.url, "url");
   const result = await transformYouTubeUrl(body.url, {
     createdAt: body.createdAt,
     recommendedBecause: body.recommendedBecause,
     runner,
-    contentLanguage
+    contentLanguage,
+    userContext
   });
 
   return toSourceImportWorkerResult(result);
@@ -3049,7 +3258,8 @@ function summarizeSnapshot(snapshot) {
     conceptMergeSuggestions: snapshot.conceptMergeSuggestions.length,
     sourceQualityVerdicts: snapshot.sourceQualityVerdicts.length,
     mergedSources: snapshot.mergedSources.length,
-    autoJobBudget: snapshot.autoJobBudget
+    autoJobBudget: snapshot.autoJobBudget,
+    conceptBriefs: snapshot.conceptBriefs.length
   };
 }
 

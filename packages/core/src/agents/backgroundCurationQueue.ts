@@ -9,6 +9,7 @@ import type { ContentLanguage } from "../harness/contentLanguage.js";
 import type { SourceImportWorker, SourceImportWorkerResult } from "../source/sourceImportWorker.js";
 import type {
   AgentHarnessUserContext,
+  ConceptBrief,
   KnowledgeChunk,
   KnowledgePost,
   SourceAsset,
@@ -28,6 +29,7 @@ export interface BackgroundCurationJobResult {
     challenge: string[];
   };
   followupProtocol?: FollowupGenerationProtocol;
+  conceptBrief?: ConceptBrief;
 }
 
 export interface BackgroundCurationJobRecord {
@@ -87,6 +89,7 @@ export interface BackgroundCurationExecutionHandlers {
   cooldownTopic?: (job: BackgroundCurationJob) => Promise<BackgroundCurationJobResult> | BackgroundCurationJobResult;
   researchQuestion?: (job: BackgroundCurationJob) => Promise<BackgroundCurationJobResult> | BackgroundCurationJobResult;
   researchIdea?: (job: BackgroundCurationJob) => Promise<BackgroundCurationJobResult> | BackgroundCurationJobResult;
+  conceptBrief?: (job: BackgroundCurationJob) => Promise<BackgroundCurationJobResult> | BackgroundCurationJobResult;
 }
 
 export interface RunBackgroundCurationJobsOptions {
@@ -290,6 +293,12 @@ async function runJob(
 
   if (job.kind === "generate_followup") {
     return handlers.generateFollowup ? handlers.generateFollowup(job) : runGenerateFollowupJob(job, handlers, now);
+  }
+
+  if (job.kind === "concept_brief") {
+    return handlers.conceptBrief
+      ? handlers.conceptBrief(job)
+      : skippedResult(job, "concept brief handler is not configured.");
   }
 
   if (job.kind === "schedule_review") {

@@ -1,6 +1,9 @@
+import { normalizeMathDelimiters } from "@aitimeline/core";
 import katex from "katex";
 import type { ReactNode } from "react";
 import "katex/dist/katex.min.css";
+
+export { normalizeMathDelimiters };
 
 export type MathTextSegment =
   | { kind: "text"; text: string }
@@ -23,19 +26,20 @@ const STRUCTURAL_LATEX_COMMAND =
 const splitCache = new Map<string, MathTextSegment[]>();
 
 export function splitMathText(text: string): MathTextSegment[] {
-  const cached = splitCache.get(text);
+  const normalizedText = normalizeMathDelimiters(text);
+  const cached = splitCache.get(normalizedText);
 
   if (cached) {
     return cached;
   }
 
-  const segments = splitBareLatexSegments(splitDisplaystyleSegments(splitDollarSegments([{ kind: "text", text }])));
+  const segments = splitBareLatexSegments(splitDisplaystyleSegments(splitDollarSegments([{ kind: "text", text: normalizedText }])));
 
   if (splitCache.size >= 1000) {
     splitCache.clear();
   }
 
-  splitCache.set(text, segments);
+  splitCache.set(normalizedText, segments);
   return segments;
 }
 
