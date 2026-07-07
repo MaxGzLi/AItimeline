@@ -90,6 +90,7 @@ import type {
   AiThreads,
   ApiCurationJobsResponse,
   ApiCurationRunResponse,
+  ApiConceptBriefResponse,
   ApiDismissedPostsResponse,
   ApiEvidenceResponse,
   ApiImportResponse,
@@ -100,6 +101,7 @@ import type {
   ApiStatus,
   ApiTimelineResponse,
   AskApiResult,
+  ConceptBrief,
   DailyAutoJobBudgetRecord,
   DismissedPostSummary,
   EvidenceLedger,
@@ -159,6 +161,8 @@ export function App() {
   const [sourceCandidates, setSourceCandidates] = useState<SourceCandidateRecord[]>([]);
   const [conceptAliases, setConceptAliases] = useState<ConceptAliasRecord[]>([]);
   const [conceptMergeSuggestions, setConceptMergeSuggestions] = useState<ConceptMergeSuggestion[]>([]);
+  const [conceptBriefs, setConceptBriefs] = useState<ConceptBrief[]>([]);
+  const [conceptBriefQueuedByKey, setConceptBriefQueuedByKey] = useState<Record<string, boolean>>({});
   const [dismissedPosts, setDismissedPosts] = useState<DismissedPostSummary[]>([]);
   const [agentTurns, setAgentTurns] = useState<AgentTurnSummary[]>([]);
   const [notifications, setNotifications] = useState<AgentNotification[]>([]);
@@ -427,6 +431,22 @@ export function App() {
     () => (conceptView ? buildConceptDigest(conceptView, allCards, { conceptAliases }) : null),
     [conceptView, allCards, conceptAliases]
   );
+  const selectedConceptBrief = useMemo(
+    () => {
+      const concept = conceptDigest?.concept ?? conceptView;
+
+      if (!concept) {
+        return null;
+      }
+
+      return findConceptBrief(conceptBriefs, concept) ?? null;
+    },
+    [conceptBriefs, conceptDigest?.concept, conceptView]
+  );
+  const selectedConceptBriefQueued =
+    conceptView !== null
+      ? conceptBriefQueuedByKey[slugConcept(conceptDigest?.concept ?? conceptView)] ?? false
+      : false;
   const cardsById = useMemo(() => {
     const byId: Record<string, RankedKnowledgeCard> = {};
 
@@ -840,6 +860,48 @@ export function App() {
   }, [apiStatus, evidenceLedgers, selectedCard]);
 
   useEffect(() => {
+    if (!conceptDigest || conceptDigest.cardCount === 0 || apiStatus !== "connected") {
+      return;
+    }
+
+    let isStale = false;
+    const concept = conceptDigest.concept;
+    const conceptKey = slugConcept(concept);
+
+    void apiRequest<ApiConceptBriefResponse>(`/api/concepts/${encodeURIComponent(concept)}/brief`, {
+      method: "POST",
+      body: { now: new Date().toISOString() }
+    })
+      .then((result) => {
+        if (isStale) {
+          return;
+        }
+
+        setConceptBriefs((briefs) => upsertConceptBriefs(briefs, [result.brief]));
+        setConceptBriefQueuedByKey((queued) => ({
+          ...queued,
+          [conceptKey]: result.queued
+        }));
+      })
+      .catch(() => {
+        if (isStale) {
+          return;
+        }
+
+        setConceptBriefQueuedByKey((queued) => ({
+          ...queued,
+          [conceptKey]: false
+        }));
+      });
+
+    return () => {
+      isStale = true;
+    };
+    // Depend on the concept identity and card count, not the digest object:
+    // the digest re-memos on every timeline poll and would re-POST /brief each time.
+  }, [apiStatus, conceptDigest?.concept, conceptDigest?.cardCount]);
+
+  useEffect(() => {
     if (!hasHydrated || !autoScoutEnabled || apiStatus !== "connected") {
       return;
     }
@@ -1011,6 +1073,7 @@ export function App() {
       setSourceCandidates(snapshot.sourceCandidates);
       setConceptAliases(snapshot.conceptAliases ?? []);
       setConceptMergeSuggestions(snapshot.conceptMergeSuggestions ?? []);
+      setConceptBriefs(snapshot.conceptBriefs ?? []);
       setDismissedPosts(dismissed.records);
       setAgentTurns(snapshot.agentTurns);
       setNotifications(notificationsResult.records);
@@ -1259,6 +1322,7 @@ export function App() {
             "research_question",
             "research_idea",
             "generate_followup",
+            "concept_brief",
             "schedule_review",
             "cooldown_topic"
           ]
@@ -1342,6 +1406,13 @@ export function App() {
       ...threads,
       [card.id]: [...(threads[card.id] ?? []), assistantMessage]
     }));
+  }
+
+  function handleAskThreadBlock(text: string) {
+    setAiPrompt(text.replace(/^\[(?:超出来源|beyond source)\]\s*/i, ""));
+    requestAnimationFrame(() =>
+      document.querySelector<HTMLInputElement>(".x-detail-ask input")?.focus()
+    );
   }
 
   function showDetail(cardId: string) {
@@ -1933,6 +2004,7 @@ export function App() {
             graph={linkedGraph}
             messages={selectedThread}
             onAsk={handleAskAi}
+            onAskThreadBlock={handleAskThreadBlock}
             onLike={handleLike}
             onOpenCardId={handleOpenCardId}
             onOpenConcept={handleOpenConcept}
@@ -2165,6 +2237,8 @@ export function App() {
         <ConceptDigestPanel
           conceptAliases={conceptAliases}
           backlinks={conceptBacklinks}
+          brief={selectedConceptBrief}
+          briefQueued={selectedConceptBriefQueued}
           digest={conceptDigest}
           onClose={() => setConceptView(null)}
           onUnmergeAlias={unmergeConceptAlias}
@@ -2260,4 +2334,22 @@ export function App() {
       ) : null}
     </div>
   );
+}
+
+function findConceptBrief(briefs: ConceptBrief[], concept: string): ConceptBrief | undefined {
+  const key = slugConcept(concept);
+
+  return briefs
+    .filter((brief) => slugConcept(brief.concept) === key)
+    .sort((left, right) => right.generatedAt.localeCompare(left.generatedAt))[0];
+}
+
+function upsertConceptBriefs(briefs: ConceptBrief[], nextBriefs: ConceptBrief[]): ConceptBrief[] {
+  const byConcept = new Map(briefs.map((brief) => [slugConcept(brief.concept), brief]));
+
+  for (const brief of nextBriefs) {
+    byConcept.set(slugConcept(brief.concept), brief);
+  }
+
+  return Array.from(byConcept.values());
 }

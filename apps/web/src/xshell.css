@@ -1286,6 +1286,46 @@ body:has(.x-frame) {
 .x-concept-body { display: grid; gap: 3px; min-width: 0; }
 .x-concept-body strong { color: var(--x-ink); font-size: 15px; font-weight: 700; }
 .x-concept-take { color: var(--x-muted); font-size: 13px; line-height: 1.45; }
+.x-concept-brief {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 14px;
+  padding: 12px 0;
+  border-top: 1px solid var(--x-line);
+  border-bottom: 1px solid var(--x-line);
+}
+.x-concept-brief-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.x-concept-brief-head span {
+  color: var(--x-muted);
+  font-size: 12px;
+}
+.x-concept-brief-body {
+  display: grid;
+  gap: 8px;
+}
+.x-concept-brief-body p {
+  margin: 0;
+  color: var(--x-ink);
+  font-size: 14px;
+  line-height: 1.5;
+}
+.x-concept-brief-body button {
+  margin-left: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--x-blue);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.x-concept-brief-body button:hover { text-decoration: underline; }
 
 /* ---------- 主栏帖子详情 ---------- */
 .x-detail-head {
@@ -1468,12 +1508,57 @@ body:has(.x-frame) {
   border-top: 1px solid var(--x-line);
 }
 .x-detail-block:first-child { border-top: none; padding-top: 0; }
-.x-detail-block > span {
+.x-detail-blocktop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.x-detail-blocktop > span {
   font-size: 12px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.02em;
   color: var(--x-blue);
+}
+.x-grounding-badge,
+.x-thread-ask,
+.x-expand-chunks {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 1px solid var(--x-line);
+  border-radius: 999px;
+  background: none;
+  color: var(--x-muted);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.x-grounding-badge {
+  padding: 2px 8px;
+}
+.x-grounding-badge.passed {
+  color: var(--x-repost);
+  border-color: var(--x-repost);
+}
+.x-grounding-badge.warning {
+  color: var(--x-warn);
+  border-color: var(--x-warn);
+}
+.x-thread-ask {
+  justify-self: start;
+  margin-top: 4px;
+  padding: 5px 10px;
+  color: var(--x-blue);
+  border-color: var(--x-blue);
+}
+.x-grounding-badge:hover,
+.x-thread-ask:hover,
+.x-expand-chunks:hover {
+  background: var(--x-hover);
 }
 .x-detail-block h4 { margin: 0; font-size: 15px; font-weight: 700; }
 .x-detail-block-body,
@@ -1503,6 +1588,10 @@ body:has(.x-frame) {
   margin: 0;
   font-size: 14px;
   white-space: pre-line;
+}
+.x-expand-chunks {
+  justify-self: start;
+  padding: 6px 12px;
 }
 .x-detail-edge strong { font-size: 14px; }
 .x-detail-edge span { font-size: 12px; font-weight: 700; text-transform: uppercase; color: var(--x-blue); }

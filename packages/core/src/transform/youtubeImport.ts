@@ -1,5 +1,6 @@
 import type {
   AgentHarnessRun,
+  AgentHarnessUserContext,
   KnowledgePostAgentRunner,
   Source,
   SourceAsset,
@@ -40,6 +41,7 @@ export interface YouTubeTransformOptions extends YouTubeTranscriptFetchOptions {
   recommendedBecause?: string;
   runner?: KnowledgePostAgentRunner;
   contentLanguage?: ContentLanguage;
+  userContext?: AgentHarnessUserContext;
 }
 
 export interface YouTubeTransformResult extends Omit<TranscriptTransformResult, "harnessRun"> {
@@ -162,7 +164,8 @@ export async function transformYouTubeUrl(
         options.recommendedBecause ??
         (options.contentLanguage === "en"
           ? "You imported this YouTube video, so transcript highlights were turned into timeline cards."
-          : "你导入了这个 YouTube 视频,所以把字幕里的要点转成了时间线卡片。")
+          : "你导入了这个 YouTube 视频,所以把字幕里的要点转成了时间线卡片。"),
+      userContext: options.userContext
     },
     options.runner
   );

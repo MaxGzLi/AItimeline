@@ -68,6 +68,7 @@ export function PostDetailView({
   graph,
   messages,
   onAsk,
+  onAskThreadBlock,
   onLike,
   onOpenCardId,
   onOpenConcept,
@@ -90,6 +91,7 @@ export function PostDetailView({
   graph?: LinkedKnowledgeGraph;
   messages: AiMessage[];
   onAsk: (event: FormEvent<HTMLFormElement>) => void;
+  onAskThreadBlock: (text: string) => void;
   onLike: (card: RankedKnowledgeCard) => void;
   onOpenCardId: (cardId: string) => void;
   onOpenConcept: (concept: string) => void;
@@ -102,6 +104,7 @@ export function PostDetailView({
   wikilinkCandidates: WikilinkAutocompleteCandidate[];
 }) {
   const [shareOpen, setShareOpen] = useState(false);
+  const [showAllChunks, setShowAllChunks] = useState(false);
   const handlers = { onOpenConcept, onOpenCardId };
   const citation = card.citations?.[0];
   const source = card.sources[0];
@@ -109,9 +112,9 @@ export function PostDetailView({
   const isUserNote = source?.type === "user_note";
   const commentCount =
     card.thread?.filter((block) => block.kind === "user_comment" || block.kind === "agent_reply").length ?? 0;
-  const knowledgeBlocks = (card.thread ?? []).filter(
-    (block) => block.kind !== "user_comment" && block.kind !== "agent_reply"
-  );
+  const knowledgeBlocks = (card.thread ?? [])
+    .map((block, index) => ({ block, index }))
+    .filter(({ block }) => block.kind !== "user_comment" && block.kind !== "agent_reply");
   const sourceQuote = quoteText ?? chunks[0]?.content ?? asset?.content;
   const cardMedia = getCardMedia(card);
   const topConnection = connections[0];
@@ -180,7 +183,7 @@ export function PostDetailView({
               <span className="x-name">{t("detail.sourceQuote")}</span>
               <span className="x-meta">· {source?.title ?? t("format.unknownSource")}</span>
             </div>
-            {citation?.startTimeSeconds !== undefined ? (
+            {source?.type === "youtube" && citation?.startTimeSeconds !== undefined ? (
               <a className="x-detail-time" href={buildTimestampUrl(source?.url, citation.startTimeSeconds)}>
                 {formatTimestamp(citation.startTimeSeconds)}-
                 {formatTimestamp(citation.endTimeSeconds ?? citation.startTimeSeconds)}
@@ -311,13 +314,40 @@ export function PostDetailView({
             <h3>{t("detail.threadBlocks")}</h3>
           </div>
           <div className="x-detail-blocks">
-            {knowledgeBlocks.map((block) => (
-              <div className="x-detail-block" key={block.id}>
-                <span>{formatThreadKind(block.kind)}</span>
-                <h4>{block.title}</h4>
-                <div className="x-detail-block-body">{renderWithWikilinks(block.body, cards, handlers)}</div>
-              </div>
-            ))}
+            {knowledgeBlocks.map(({ block, index }) => {
+              const claim = evidenceLedger?.claims.find((item) => item.fieldPath === `$.thread[${index}].body`);
+              const badgeStatus = claim?.status === "passed" ? "passed" : claim ? "warning" : undefined;
+
+              return (
+                <div className="x-detail-block" key={block.id}>
+                  <div className="x-detail-blocktop">
+                    <span>{formatThreadKind(block.kind)}</span>
+                    {badgeStatus ? (
+                      <button
+                        className={`x-grounding-badge ${badgeStatus}`}
+                        onClick={() => {
+                          document.getElementById(`evidence-${claim?.id}`)?.scrollIntoView({
+                            block: "center",
+                            behavior: "smooth"
+                          });
+                        }}
+                        type="button"
+                      >
+                        {badgeStatus === "passed" ? t("detail.sourceGrounded") : t("detail.beyondSource")}
+                      </button>
+                    ) : null}
+                  </div>
+                  <h4>{block.title}</h4>
+                  <div className="x-detail-block-body">{renderWithWikilinks(block.body, cards, handlers)}</div>
+                  {block.kind === "extension" ? (
+                    <button className="x-thread-ask" onClick={() => onAskThreadBlock(block.body)} type="button">
+                      <Send size={14} />
+                      {t("detail.askThisPoint")}
+                    </button>
+                  ) : null}
+                </div>
+              );
+            })}
           </div>
         </section>
       ) : null}
@@ -329,9 +359,9 @@ export function PostDetailView({
         </div>
         <div className="x-detail-chunks">
           {chunks.length > 0 ? (
-            chunks.map((chunk) => (
+            (showAllChunks ? chunks : chunks.slice(0, 2)).map((chunk, index) => (
               <div className="x-detail-chunk" key={chunk.id}>
-                <span>{formatTimestamp(chunk.startTimeSeconds ?? 0)}</span>
+                <span>{formatSourceChunkLabel(chunk, index, source?.type)}</span>
                 <div className="x-detail-chunk-body">{renderMathInText(chunk.content)}</div>
               </div>
             ))
@@ -340,6 +370,11 @@ export function PostDetailView({
               {renderMathInText(asset?.content ?? t("detail.noTranscript"))}
             </div>
           )}
+          {chunks.length > 2 && !showAllChunks ? (
+            <button className="x-expand-chunks" onClick={() => setShowAllChunks(true)} type="button">
+              {t("detail.expandChunks", { count: chunks.length })}
+            </button>
+          ) : null}
         </div>
       </section>
 
@@ -474,6 +509,14 @@ export function PostDetailView({
   );
 }
 
+function formatSourceChunkLabel(chunk: KnowledgeChunk, index: number, sourceType: string | undefined): string {
+  if (sourceType === "youtube" && chunk.startTimeSeconds !== undefined) {
+    return `${formatTimestamp(chunk.startTimeSeconds)}-${formatTimestamp(chunk.endTimeSeconds ?? chunk.startTimeSeconds)}`;
+  }
+
+  return t("detail.chunkIndex", { index: index + 1 });
+}
+
 function EvidenceLedgerPanel({ ledger }: { ledger?: EvidenceLedger | null }) {
   return (
     <section className="x-detail-sec x-detail-ev">
@@ -499,8 +542,8 @@ function EvidenceLedgerPanel({ ledger }: { ledger?: EvidenceLedger | null }) {
             <span>{t("detail.claims", { count: ledger.summary.totalClaims })}</span>
           </div>
           <div className="x-ev-claims">
-            {ledger.claims.slice(0, 5).map((claim) => (
-              <div className={`x-ev-claim ${claim.status}`} key={claim.id}>
+            {ledger.claims.map((claim) => (
+              <div className={`x-ev-claim ${claim.status}`} id={`evidence-${claim.id}`} key={claim.id}>
                 <div className="x-ev-claimtop">
                   <span>{formatEvidenceFieldPath(claim.fieldPath)}</span>
                   <strong>{formatGroundingStatus(claim.status)}</strong>

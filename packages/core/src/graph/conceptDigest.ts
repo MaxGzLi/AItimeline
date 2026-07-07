@@ -28,24 +28,11 @@ export interface ConceptDigest {
   entries: ConceptDigestEntry[];
 }
 
-const roleOrder: Record<ConceptDigestRole, number> = {
-  foundation: 0,
-  builds: 1,
-  applies: 2,
-  contrast: 3
-};
-
-const difficultyOrder: Record<KnowledgeDifficulty, number> = {
-  beginner: 0,
-  intermediate: 1,
-  advanced: 2
-};
-
 /**
  * Assemble every accumulated fragment that touches one concept into a single readable
- * "whole": ordered foundations -> builds -> applications -> contrasts so a user can read a
- * concept end to end instead of meeting it scattered across the stream. A card counts as
- * touching the concept when it lists the concept or when one of its graph edges names it.
+ * "whole": requires prerequisites first, then creation order, so a user can read a concept
+ * end to end instead of meeting it scattered across the stream. A card counts as touching
+ * the concept when it lists the concept or when one of its graph edges names it.
  */
 export function buildConceptDigest(
   concept: string,
@@ -138,19 +125,112 @@ function deriveRole(card: KnowledgeCard, relations: KnowledgeEdgeRelation[]): Co
 
 function compareEntries(allCards: KnowledgeCard[]) {
   const createdAt = new Map(allCards.map((card) => [card.id, card.createdAt]));
+  const requiresRank = buildRequiresRanks(allCards);
 
   return (left: ConceptDigestEntry, right: ConceptDigestEntry): number => {
-    if (roleOrder[left.role] !== roleOrder[right.role]) {
-      return roleOrder[left.role] - roleOrder[right.role];
-    }
+    const leftRank = requiresRank.get(left.cardId) ?? 0;
+    const rightRank = requiresRank.get(right.cardId) ?? 0;
 
-    const leftDifficulty = left.difficulty ? difficultyOrder[left.difficulty] : 1;
-    const rightDifficulty = right.difficulty ? difficultyOrder[right.difficulty] : 1;
-
-    if (leftDifficulty !== rightDifficulty) {
-      return leftDifficulty - rightDifficulty;
+    if (leftRank !== rightRank) {
+      return leftRank - rightRank;
     }
 
     return (createdAt.get(left.cardId) ?? "").localeCompare(createdAt.get(right.cardId) ?? "");
   };
+}
+
+function buildRequiresRanks(allCards: KnowledgeCard[]): Map<string, number> {
+  const cards = allCards.filter((card) => card.kind !== "connection_note");
+  const cardIds = new Set(cards.map((card) => card.id));
+  const conceptToCardIds = new Map<string, Set<string>>();
+  const outgoing = new Map<string, Set<string>>();
+  const indegree = new Map<string, number>();
+
+  for (const card of cards) {
+    outgoing.set(card.id, new Set());
+    indegree.set(card.id, 0);
+
+    for (const concept of collectCardConcepts(card)) {
+      const key = slugConcept(concept);
+
+      if (!key) {
+        continue;
+      }
+
+      const ids = conceptToCardIds.get(key) ?? new Set<string>();
+      ids.add(card.id);
+      conceptToCardIds.set(key, ids);
+    }
+  }
+
+  for (const card of cards) {
+    for (const edge of card.graphEdges ?? []) {
+      if (edge.relation !== "requires") {
+        continue;
+      }
+
+      const dependentIds = conceptToCardIds.get(slugConcept(edge.sourceConcept)) ?? new Set<string>();
+      const prerequisiteIds = conceptToCardIds.get(slugConcept(edge.targetConcept)) ?? new Set<string>();
+
+      for (const prerequisiteId of prerequisiteIds) {
+        for (const dependentId of dependentIds) {
+          if (prerequisiteId === dependentId || !cardIds.has(prerequisiteId) || !cardIds.has(dependentId)) {
+            continue;
+          }
+
+          const edges = outgoing.get(prerequisiteId);
+
+          if (!edges || edges.has(dependentId)) {
+            continue;
+          }
+
+          edges.add(dependentId);
+          indegree.set(dependentId, (indegree.get(dependentId) ?? 0) + 1);
+        }
+      }
+    }
+  }
+
+  const createdAt = new Map(cards.map((card) => [card.id, card.createdAt]));
+  const queue = Array.from(indegree.entries())
+    .filter(([, count]) => count === 0)
+    .map(([cardId]) => cardId)
+    .sort((left, right) => (createdAt.get(left) ?? "").localeCompare(createdAt.get(right) ?? ""));
+  const rank = new Map<string, number>();
+
+  while (queue.length) {
+    const cardId = queue.shift() as string;
+    const currentRank = rank.size;
+
+    rank.set(cardId, currentRank);
+
+    for (const nextId of outgoing.get(cardId) ?? []) {
+      const nextIndegree = (indegree.get(nextId) ?? 0) - 1;
+      indegree.set(nextId, nextIndegree);
+
+      if (nextIndegree === 0) {
+        queue.push(nextId);
+        queue.sort((left, right) => (createdAt.get(left) ?? "").localeCompare(createdAt.get(right) ?? ""));
+      }
+    }
+  }
+
+  for (const card of cards.sort((left, right) => left.createdAt.localeCompare(right.createdAt))) {
+    if (!rank.has(card.id)) {
+      rank.set(card.id, rank.size);
+    }
+  }
+
+  return rank;
+}
+
+function collectCardConcepts(card: KnowledgeCard): string[] {
+  return [
+    ...card.concepts,
+    ...(card.graphEdges ?? []).flatMap((edge) => [edge.sourceConcept, edge.targetConcept])
+  ];
+}
+
+function slugConcept(concept: string): string {
+  return concept.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/(^-|-$)/g, "");
 }

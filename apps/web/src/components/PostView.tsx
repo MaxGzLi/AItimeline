@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { getCardMedia, resolveMediaUrl } from "../lib/api";
-import { formatConnectionKind, formatRelativeTime, getAgentInitials, getAgentName, slugConcept } from "../lib/format";
+import { formatConnectionKind, formatDaysAgo, formatRelativeTime, getAgentInitials, getAgentName, slugConcept } from "../lib/format";
 import { t } from "../lib/i18n";
 import { renderMathInText } from "../lib/math";
 import { renderWithWikilinks } from "../lib/wikilinks";
@@ -242,6 +242,7 @@ export function PostView({
             <div className="x-connection-body">
               {t("connection.body", {
                 days: note.daysSinceOldCard,
+                when: formatDaysAgo(note.daysSinceOldCard),
                 oldTitle: note.oldPostTitle,
                 newTitle: note.newPostTitle,
                 evidence: note.evidence

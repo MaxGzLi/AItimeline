@@ -184,6 +184,7 @@ function buildInitialMessages(
         "- Source facts must be supported by cited chunks; do not invent claims outside the source.",
         "- Every numeric token in source-fact fields must appear verbatim in that card's cited chunks. Digits inside names count (GPT-4o contains 4, Claude-3.5 contains 3.5): if a cited chunk does not contain the token, do not write it.",
         "- Each thread must include explain, example, contrast, extension, and quiz blocks.",
+        ...formatThreadDepthRequirements(contentLanguage),
         "- Use graphEdges for durable concept links that can power review and recommendation.",
         "- Use nextActions to say whether the user should go deeper, broader, simpler, review, or cool down.",
         "- Write mathematical formulas in LaTeX: inline `$...$`, display `$$...$$`; do not flatten them into Unicode subscripts/superscripts.",
@@ -199,6 +200,7 @@ function buildInitialMessages(
         "- Source facts must be supported by cited chunks; do not invent claims outside the source.",
         "- Every numeric token in source-fact fields must appear verbatim in that card's cited chunks. Digits inside names count (GPT-4o contains 4, Claude-3.5 contains 3.5): if a cited chunk does not contain the token, do not write it.",
         "- Each thread must include explain, example, contrast, extension, and quiz blocks.",
+        ...formatThreadDepthRequirements(contentLanguage),
         "- Use graphEdges for durable concept links that can power review and recommendation.",
         "- Use nextActions to say whether the user should go deeper, broader, simpler, review, or cool down.",
         "- Write mathematical formulas in LaTeX: inline `$...$`, display `$$...$$`; do not flatten them into Unicode subscripts/superscripts.",
@@ -492,6 +494,22 @@ function formatHardRequirementLanguagePolicy(contentLanguage?: ContentLanguage):
 
   return [
     "- 所有面向用户的字段(title、hook、thesis、shortBody、keyTakeaway、summary、thread、reviewPrompts、recommendedBecause)必须以简体中文书写,技术术语保留英文;graphEdges 的 evidence 保持来源原文语言。"
+  ];
+}
+
+function formatThreadDepthRequirements(contentLanguage?: ContentLanguage): string[] {
+  if (contentLanguage === "en") {
+    return [
+      "- Thread blocks must be substantive: explain = mechanism + design reason; example = concrete scene or numbers from input to transformation to output; contrast = compare with a known User context concept or adjacent source concept and say when to use which; extension = engineering trade-off or open problem, not vague future talk; quiz = application decision scenario.",
+      "- Each thread block should give the user one judgment they can repeat to someone else, with body >= 60 English words as a warning-level depth target.",
+      "- If a sentence uses common knowledge beyond the registered source chunks, prefix that sentence with \"[beyond source]\" and do not add new numbers or new proper-noun facts."
+    ];
+  }
+
+  return [
+    "- 知识块必须有实质内容:讲解=机制+设计原因;例子=具体场景或数字并走完输入→变换→输出;对比=优先对比 User context 里的已知概念,没有则对比来源内相邻概念,并说明什么时候用哪个;延伸=工程权衡或开放问题,不要空泛未来可期;小测=应用决策题。",
+    "- 每个知识块都要让用户带走一个能复述给别人的判断,body 以不少于 80 个中文字符为 warning 级深度目标。",
+    "- 如果某句话使用了注册来源片段之外的通识补充,该句必须以 \"[超出来源]\" 开头,且不得新增数字或新的专有名词事实。"
   ];
 }
 

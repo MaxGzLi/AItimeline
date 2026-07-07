@@ -315,6 +315,18 @@ export function formatRelativeTime(value: string): string {
   }).format(date);
 }
 
+export function formatDaysAgo(days: number): string {
+  if (days <= 0) {
+    return t("format.daysAgo.today");
+  }
+
+  if (days === 1) {
+    return t("format.daysAgo.yesterday");
+  }
+
+  return t("format.daysAgo.days", { count: days });
+}
+
 export function formatFullTimestamp(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {

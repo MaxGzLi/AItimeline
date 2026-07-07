@@ -13,6 +13,7 @@ import type {
 
 export type BackgroundCurationJobKind =
   | "generate_followup"
+  | "concept_brief"
   | "discover_sources"
   | "research_question"
   | "research_idea"
@@ -281,7 +282,12 @@ export function applyDailyAutoJobBudget(input: ApplyDailyAutoJobBudgetInput): Da
 }
 
 export function isMeteredAutoJobKind(kind: BackgroundCurationJobKind): boolean {
-  return kind === "discover_sources" || kind === "import_source" || kind === "generate_followup";
+  return (
+    kind === "discover_sources" ||
+    kind === "import_source" ||
+    kind === "generate_followup" ||
+    kind === "concept_brief"
+  );
 }
 
 function shouldQueueBackgroundSources(
