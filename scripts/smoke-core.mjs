@@ -8,7 +8,7 @@ const { createDeterministicConceptBrief } = await import("../packages/core/dist/
 const { runConversationTurn } = await import("../packages/core/dist/agents/conversationAgent.js");
 const { runIdeaObservation } = await import("../packages/core/dist/agents/ideaFlow.js");
 const { createStaticSearchProvider } = await import("../packages/core/dist/discovery/searchProvider.js");
-const { planDiscoveryQueries, runSourceDiscovery } = await import(
+const { DISCOVERY_GEO_BAIT_TERMS, planDiscoveryQueries, runSourceDiscovery, screenDiscoveredSources } = await import(
   "../packages/core/dist/discovery/sourceDiscovery.js"
 );
 const { buildKnowledgeBoundary, classifyConceptZone } = await import(
@@ -167,11 +167,11 @@ function makeSmokePost({
   };
 }
 
-function makeSourceQualityInput(fixture, sourceId, url, concepts) {
+function makeSourceQualityInput(fixture, sourceId, url, concepts, title = fixture.title) {
   return {
     source: {
       id: sourceId,
-      title: fixture.title,
+      title,
       url,
       type: "article"
     },
@@ -209,10 +209,37 @@ const technicalGateVerdict = evaluateSourceQualityDeterministic(
     ["Speculative Decoding", "LLM serving"]
   )
 );
+const neutralTitleGateVerdict = evaluateSourceQualityDeterministic(
+  makeSourceQualityInput(
+    technicalSourceFixture,
+    "neutral-title-source",
+    "https://example.com/speculative-decoding-evaluation",
+    ["Speculative Decoding", "LLM serving"],
+    "Speculative decoding latency evaluation"
+  )
+);
+const baitTitleGateVerdict = evaluateSourceQualityDeterministic(
+  makeSourceQualityInput(
+    technicalSourceFixture,
+    "bait-title-source",
+    "https://example.com/speculative-decoding-explained-part-2",
+    ["Speculative Decoding", "LLM serving"],
+    "Speculative decoding explained Part 2"
+  )
+);
 
 assert.equal(seoGateVerdict.verdict, "reject", "deterministic source gate should reject SEO water");
 assert.ok(seoGateVerdict.reasons.length > 0, "rejected sources should include reasons");
 assert.equal(technicalGateVerdict.verdict, "accept", "deterministic source gate should accept a normal technical article");
+assert.ok(
+  baitTitleGateVerdict.score < neutralTitleGateVerdict.score,
+  "series/explained title bait should visibly reduce deterministic source quality score"
+);
+assert.equal(
+  baitTitleGateVerdict.verdict,
+  "accept",
+  "series/explained title bait alone should not reject an otherwise technical source"
+);
 
 function makeDuplicateImport({ importId, sourceId, postId, url, title }) {
   const source = {
@@ -2410,12 +2437,68 @@ const discoveryQueries = planDiscoveryQueries({
 
 assert.equal(
   discoveryQueries[0],
-  "Knowledge Graph applications and comparisons",
+  "Knowledge Graph survey",
   "broaden intent should shape the discovery query"
+);
+assert.ok(
+  discoveryQueries.includes("Knowledge Graph applications"),
+  "broaden intent should keep an applications query"
 );
 assert.ok(
   discoveryQueries.some((query) => query.includes("ship an agent product")),
   "user goals should add a goal-flavored discovery query"
+);
+
+const queryPlansByIntent = [
+  planDiscoveryQueries({ concepts: ["Knowledge Graph"], nextAction: "continue_deeper", goals: ["ship product"] }),
+  planDiscoveryQueries({ concepts: ["Knowledge Graph"], nextAction: "expand_broader", goals: ["ship product"] }),
+  planDiscoveryQueries({ concepts: ["Knowledge Graph"], goals: ["ship product"] })
+];
+
+for (const plannedQueries of queryPlansByIntent) {
+  const plannedText = plannedQueries.join("\n").toLowerCase();
+
+  for (const baitTerm of DISCOVERY_GEO_BAIT_TERMS) {
+    assert.equal(
+      plannedText.includes(baitTerm),
+      false,
+      `planned discovery queries should not contain GEO bait term "${baitTerm}"`
+    );
+  }
+}
+
+const primarySourceScreen = screenDiscoveredSources({
+  discovered: [
+    {
+      url: "https://arxiv.org/abs/2601.01234",
+      title: "Knowledge Graph Retrieval Benchmark",
+      snippet:
+        "This benchmark describes evaluation design, dataset construction, implementation details, latency measurements, and error analysis for retrieval systems.",
+      sourceType: "article"
+    },
+    {
+      url: "https://towardsdatascience.com/knowledge-graph-retrieval-benchmark",
+      title: "Knowledge Graph Retrieval Benchmark",
+      snippet:
+        "This benchmark describes evaluation design, dataset construction, implementation details, latency measurements, and error analysis for retrieval systems.",
+      sourceType: "article"
+    }
+  ],
+  concepts: ["Knowledge Graph"],
+  query: "Knowledge Graph benchmark",
+  now: "2026-06-10T00:30:00.000Z"
+});
+const arxivCandidate = primarySourceScreen.find((candidate) => candidate.source.url.includes("arxiv.org"));
+const aggregateCandidate = primarySourceScreen.find((candidate) =>
+  candidate.source.url.includes("towardsdatascience.com")
+);
+
+assert.ok(arxivCandidate, "arxiv candidate should be screened");
+assert.ok(aggregateCandidate, "aggregate-domain candidate should be screened");
+assert.equal(arxivCandidate.source.type, "paper", "arxiv URLs should be inferred as paper even when provider says article");
+assert.ok(
+  arxivCandidate.qualityScore > aggregateCandidate.qualityScore,
+  "primary-source arxiv candidate should score higher than an aggregate-domain candidate with the same title and snippet"
 );
 
 const staticProvider = createStaticSearchProvider({}, [

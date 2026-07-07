@@ -38,6 +38,7 @@ export function createStaticSearchProvider(
 export interface TavilySearchProviderOptions {
   apiKey: string;
   baseUrl?: string;
+  excludeDomains?: readonly string[];
   fetch?: typeof fetch;
   timeoutMs?: number;
 }
@@ -55,6 +56,7 @@ const defaultTavilyBaseUrl = "https://api.tavily.com";
 
 export function createTavilySearchProvider(options: TavilySearchProviderOptions): SearchProvider {
   const endpoint = `${(options.baseUrl ?? defaultTavilyBaseUrl).replace(/\/+$/, "")}/search`;
+  const excludeDomains = Array.from(new Set((options.excludeDomains ?? []).map((domain) => domain.trim()).filter(Boolean)));
 
   return {
     id: "tavily",
@@ -76,7 +78,8 @@ export function createTavilySearchProvider(options: TavilySearchProviderOptions)
           body: JSON.stringify({
             api_key: options.apiKey,
             query,
-            max_results: searchOptions.limit ?? 5
+            max_results: searchOptions.limit ?? 5,
+            ...(excludeDomains.length ? { exclude_domains: excludeDomains } : {})
           }),
           signal: controller.signal
         });
