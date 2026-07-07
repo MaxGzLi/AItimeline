@@ -17,6 +17,7 @@ import type {
   SourceQualityVerdict,
   SubscriptionRecord,
   TopicState,
+  UserMemory,
   WeeklyRecapRecord
 } from "@aitimeline/core";
 
@@ -129,6 +130,7 @@ export type ApiSnapshot = {
   autoJobBudget?: DailyAutoJobBudgetRecord[];
   conceptBriefs?: ConceptBrief[];
   subscriptions?: SubscriptionRecord[];
+  userMemories?: Array<{ userId: string; memory: UserMemory; updatedAt?: string }>;
 };
 
 export type ApiConceptBriefResponse = {
@@ -250,7 +252,7 @@ export type AgentConfirmApiResponse = {
 
 export type AgentNotification = {
   id: string;
-  kind: "agent_answer" | "research_progress";
+  kind: "agent_answer" | "research_progress" | "mastery_promotion";
   turnId: string;
   postIds: string[];
   body: string;

@@ -27,6 +27,7 @@ import {
   type SourceAsset,
   type SourceImport,
   type TopicState,
+  type UserMemory,
   type WeeklyRecapRecord
 } from "@aitimeline/core";
 import {
@@ -167,6 +168,7 @@ export function App() {
   const [sourceChunks, setSourceChunks] = useState<KnowledgeChunk[]>([]);
   const [sourceCandidates, setSourceCandidates] = useState<SourceCandidateRecord[]>([]);
   const [subscriptions, setSubscriptions] = useState<SubscriptionRecord[]>([]);
+  const [userMemory, setUserMemory] = useState<UserMemory | null>(null);
   const [conceptAliases, setConceptAliases] = useState<ConceptAliasRecord[]>([]);
   const [conceptMergeSuggestions, setConceptMergeSuggestions] = useState<ConceptMergeSuggestion[]>([]);
   const [conceptBriefs, setConceptBriefs] = useState<ConceptBrief[]>([]);
@@ -703,8 +705,8 @@ export function App() {
     [conceptAliases, reviewDueItems, reviewCardsById]
   );
   const boundary = useMemo(
-    () => buildKnowledgeBoundary({ cards: allCards, signals: allSignals, conceptAliases }),
-    [allCards, allSignals, conceptAliases]
+    () => buildKnowledgeBoundary({ cards: allCards, signals: allSignals, conceptAliases, memory: userMemory ?? undefined }),
+    [allCards, allSignals, conceptAliases, userMemory]
   );
   const selectedThread = selectedCard ? aiThreads[selectedCard.id] ?? [] : [];
   const selectedFeedback = selectedCard ? learningFeedback[selectedCard.id] : undefined;
@@ -1100,6 +1102,7 @@ export function App() {
       setSourceChunks(upsertById([], registryChunks));
       setSourceCandidates(snapshot.sourceCandidates);
       setSubscriptions(snapshot.subscriptions ?? []);
+      setUserMemory(snapshot.userMemories?.find((record) => record.userId === "local-user")?.memory ?? null);
       setConceptAliases(snapshot.conceptAliases ?? []);
       setConceptMergeSuggestions(snapshot.conceptMergeSuggestions ?? []);
       setConceptBriefs(snapshot.conceptBriefs ?? []);

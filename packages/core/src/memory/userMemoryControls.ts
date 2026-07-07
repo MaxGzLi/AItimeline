@@ -13,7 +13,14 @@ export type UserMemoryListField =
 
 export type UserMemoryScalarField = "profile.explanationStyle";
 
-export type UserMemoryEditKind = "add" | "remove" | "replace" | "clear" | "set";
+export type UserMemoryEditKind =
+  | "add"
+  | "remove"
+  | "replace"
+  | "clear"
+  | "set"
+  | "auto_mastery_promotion"
+  | "auto_mastery_blacklist";
 
 export interface UserMemoryEdit {
   id?: string;
@@ -141,7 +148,7 @@ function applyListEdit(previousValue: string[], edit: UserMemoryEdit): string[] 
     throw new Error(`Memory edit for ${edit.field} requires a value.`);
   }
 
-  if (edit.kind === "add") {
+  if (edit.kind === "add" || edit.kind === "auto_mastery_promotion") {
     return dedupe([...previousValue, value]);
   }
 
