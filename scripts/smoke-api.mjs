@@ -133,6 +133,440 @@ try {
 
   assert.equal(resetSettings.contentLanguage, "zh", "settings API should reset back to Chinese mode");
 
+  const backfillDataPath = join(tempDir, "review-backfill.json");
+  const backfillCurationPath = join(tempDir, "review-backfill-curation.json");
+  const backfillPosts = [
+    makeApiSmokePost({
+      id: "legacy-liked-a",
+      title: "Legacy liked A",
+      concepts: ["Legacy Review"],
+      createdAt: "2026-06-01T00:00:00.000Z"
+    }),
+    makeApiSmokePost({
+      id: "legacy-saved-b",
+      title: "Legacy saved B",
+      concepts: ["Legacy Review"],
+      createdAt: "2026-06-01T00:00:00.000Z"
+    }),
+    makeApiSmokePost({
+      id: "legacy-liked-c",
+      title: "Legacy liked C",
+      concepts: ["Legacy Review"],
+      createdAt: "2026-06-01T00:00:00.000Z"
+    })
+  ];
+  const connectionNotePost = {
+    ...makeApiSmokePost({
+      id: "legacy-connection-note",
+      title: "Legacy connection note",
+      concepts: ["Legacy Review"],
+      createdAt: "2026-06-01T00:00:00.000Z"
+    }),
+    kind: "connection_note"
+  };
+
+  await writeFile(
+    backfillDataPath,
+    JSON.stringify({
+      version: 1,
+      updatedAt: "2026-06-01T00:00:00.000Z",
+      posts: [...backfillPosts, connectionNotePost],
+      interactionSignals: [
+        makeInteractionSignalRecord(backfillPosts[0], { liked: true, createdAt: "2026-06-01T00:00:00.000Z" }),
+        makeInteractionSignalRecord(backfillPosts[1], { saved: true, createdAt: "2026-06-02T00:00:00.000Z" }),
+        makeInteractionSignalRecord(backfillPosts[2], { liked: true, createdAt: "2026-06-03T00:00:00.000Z" }),
+        makeInteractionSignalRecord(connectionNotePost, { liked: true, createdAt: "2026-06-04T00:00:00.000Z" })
+      ]
+    })
+  );
+
+  const backfillServer = createApiServer({
+    dataPath: backfillDataPath,
+    curationDataPath: backfillCurationPath,
+    mediaRootDir,
+    enableFixtures: true,
+    searchProvider: fakeSearchProvider
+  });
+
+  try {
+    const firstDue = await requestJsonFromServer(backfillServer, "/api/review/due?now=2026-06-10T00:00:00.000Z");
+    const firstSnapshot = await requestJsonFromServer(backfillServer, "/api/snapshot");
+    const secondDue = await requestJsonFromServer(backfillServer, "/api/review/due?now=2026-06-10T00:00:00.000Z");
+    const secondSnapshot = await requestJsonFromServer(backfillServer, "/api/snapshot");
+
+    assert.deepEqual(
+      firstDue.due.map((state) => state.postId),
+      backfillPosts.map((post) => post.id),
+      "legacy liked/saved signals should be backfilled into due review states"
+    );
+    assert.equal(firstSnapshot.reviewStates.length, 3, "review backfill should skip connection_note cards");
+    assert.equal(
+      firstSnapshot.reviewStates.find((state) => state.postId === backfillPosts[0].id)?.dueAt,
+      "2026-06-02T00:00:00.000Z",
+      "review backfill should derive dueAt from the original signal createdAt"
+    );
+    assert.deepEqual(secondDue.due, firstDue.due, "second due request should not duplicate backfilled review states");
+    assert.equal(secondSnapshot.reviewStates.length, 3, "review backfill should be idempotent");
+  } finally {
+    await closeServer(backfillServer);
+  }
+
+  const backfillLimitDataPath = join(tempDir, "review-backfill-limit.json");
+  const backfillLimitCurationPath = join(tempDir, "review-backfill-limit-curation.json");
+  const backfillLimitPosts = Array.from({ length: 55 }, (_, index) =>
+    makeApiSmokePost({
+      id: `legacy-limit-${index + 1}`,
+      title: `Legacy limit ${index + 1}`,
+      concepts: ["Legacy Review Limit"],
+      createdAt: "2026-06-01T00:00:00.000Z"
+    })
+  );
+
+  await writeFile(
+    backfillLimitDataPath,
+    JSON.stringify({
+      version: 1,
+      updatedAt: "2026-06-01T00:00:00.000Z",
+      posts: backfillLimitPosts,
+      interactionSignals: backfillLimitPosts.map((post, index) =>
+        makeInteractionSignalRecord(post, {
+          liked: true,
+          createdAt: `2026-06-${String((index % 9) + 1).padStart(2, "0")}T00:00:00.000Z`
+        })
+      )
+    })
+  );
+
+  const backfillLimitServer = createApiServer({
+    dataPath: backfillLimitDataPath,
+    curationDataPath: backfillLimitCurationPath,
+    mediaRootDir,
+    enableFixtures: true,
+    searchProvider: fakeSearchProvider
+  });
+
+  try {
+    await requestJsonFromServer(backfillLimitServer, "/api/review/due?now=2026-06-20T00:00:00.000Z");
+    const limitSnapshot = await requestJsonFromServer(backfillLimitServer, "/api/snapshot");
+
+    assert.equal(limitSnapshot.reviewStates.length, 50, "legacy review backfill should create at most 50 states per request");
+  } finally {
+    await closeServer(backfillLimitServer);
+  }
+
+  const masteryDataPath = join(tempDir, "mastery-promotion.json");
+  const masteryCurationPath = join(tempDir, "mastery-promotion-curation.json");
+  const masteryConcept = "Mastery Loop";
+  const masteryPosts = [
+    makeApiSmokePost({
+      id: "mastery-card-a",
+      title: "Mastery card A",
+      concepts: [masteryConcept],
+      createdAt: "2026-06-01T00:00:00.000Z"
+    }),
+    makeApiSmokePost({
+      id: "mastery-card-b",
+      title: "Mastery card B",
+      concepts: [masteryConcept],
+      createdAt: "2026-06-01T00:00:00.000Z"
+    })
+  ];
+
+  await writeFile(
+    masteryDataPath,
+    JSON.stringify({
+      version: 1,
+      updatedAt: "2026-06-10T00:00:00.000Z",
+      posts: masteryPosts,
+      reviewStates: [
+        {
+          postId: masteryPosts[0].id,
+          intervalDays: 3,
+          dueAt: "2026-06-10T00:00:00.000Z",
+          lastReviewedAt: "2026-06-07T00:00:00.000Z"
+        },
+        {
+          postId: masteryPosts[1].id,
+          intervalDays: 7,
+          dueAt: "2026-06-17T00:00:00.000Z",
+          lastReviewedAt: "2026-06-10T00:00:00.000Z"
+        }
+      ],
+      topicStates: [
+        {
+          topicId: masteryConcept.toLowerCase(),
+          interestScore: 0.4,
+          fatigueScore: 0.1,
+          comprehensionScore: 0.2,
+          updatedAt: "2026-05-01T00:00:00.000Z"
+        },
+        {
+          topicId: masteryConcept,
+          interestScore: 0.8,
+          fatigueScore: 0.1,
+          comprehensionScore: 0.72,
+          updatedAt: "2026-06-10T00:00:00.000Z"
+        }
+      ]
+    })
+  );
+
+  const masteryServer = createApiServer({
+    dataPath: masteryDataPath,
+    curationDataPath: masteryCurationPath,
+    mediaRootDir,
+    enableFixtures: true,
+    searchProvider: fakeSearchProvider
+  });
+
+  try {
+    const promoted = await requestJsonFromServer(
+      masteryServer,
+      `/api/review/${encodeURIComponent(masteryPosts[0].id)}/complete`,
+      {
+        method: "POST",
+        body: { reviewedAt: "2026-06-10T00:00:00.000Z" }
+      }
+    );
+    const promotedSnapshot = await requestJsonFromServer(masteryServer, "/api/snapshot");
+    const promotedMemory = promotedSnapshot.userMemories.find((record) => record.userId === "local-user")?.memory;
+    const promotionEvent = promotedSnapshot.memoryEvents.find(
+      (record) => record.event.kind === "auto_mastery_promotion" && record.event.field === "knowledge.knownConcepts"
+    );
+    const promotionNotification = promotedSnapshot.notifications.find((record) => record.kind === "mastery_promotion");
+
+    assert.equal(promoted.masteryPromotions.length, 1, "complete should auto-promote a concept that meets mastery rules");
+    assert.ok(
+      promotedMemory?.knowledge.knownConcepts.includes(masteryConcept),
+      "auto-promoted concept should enter knownConcepts"
+    );
+    assert.ok(promotionEvent, "auto promotion should persist a memory event with an auto_mastery_promotion kind");
+    assert.match(
+      promotionEvent?.event.reason ?? "",
+      /cards=2\/2.*score=/,
+      "auto promotion memory event should record card, interval, and score evidence"
+    );
+    assert.ok(promotionNotification, "auto promotion should create a mastery notification");
+    assert.match(promotionNotification?.body ?? "", /已进入已掌握/, "mastery notification should use the zh template");
+
+    await requestJsonFromServer(masteryServer, "/api/memory", {
+      method: "POST",
+      body: {
+        edits: [{ kind: "add", field: "knowledge.knownConcepts", value: "Manual Only Concept" }]
+      }
+    });
+    const demotion = await requestJsonFromServer(masteryServer, "/api/memory", {
+      method: "POST",
+      body: {
+        edits: [
+          { kind: "remove", field: "knowledge.knownConcepts", value: masteryConcept },
+          { kind: "remove", field: "knowledge.knownConcepts", value: "Manual Only Concept" }
+        ]
+      }
+    });
+    const demotedSnapshot = await requestJsonFromServer(masteryServer, "/api/snapshot");
+    const blacklistEvents = demotedSnapshot.memoryEvents.filter(
+      (record) => record.event.kind === "auto_mastery_blacklist" && record.event.field === "knowledge.knownConcepts"
+    );
+
+    assert.ok(
+      demotion.events.some((event) => event.kind === "auto_mastery_blacklist"),
+      "manual removal of an auto-promoted concept should return a blacklist event"
+    );
+    assert.equal(
+      blacklistEvents.length,
+      1,
+      "batch removal should only blacklist the auto-promoted concept, not manual ones removed alongside"
+    );
+    assert.deepEqual(
+      blacklistEvents[0]?.event.previousValue,
+      [masteryConcept],
+      "blacklist event should carry a single-concept diff so batch removals stay precise"
+    );
+
+    const blockedPromotion = await requestJsonFromServer(
+      masteryServer,
+      `/api/review/${encodeURIComponent(masteryPosts[1].id)}/complete`,
+      {
+        method: "POST",
+        body: { reviewedAt: "2026-06-11T00:00:00.000Z" }
+      }
+    );
+    const blockedSnapshot = await requestJsonFromServer(masteryServer, "/api/snapshot");
+    const blockedMemory = blockedSnapshot.userMemories.find((record) => record.userId === "local-user")?.memory;
+
+    assert.deepEqual(blockedPromotion.masteryPromotions, [], "blacklisted concepts should not be auto-promoted again");
+    assert.equal(
+      blockedMemory?.knowledge.knownConcepts.includes(masteryConcept),
+      false,
+      "blacklisted concepts should stay out of knownConcepts after later review completions"
+    );
+    assert.equal(
+      blockedSnapshot.notifications.filter((record) => record.kind === "mastery_promotion").length,
+      1,
+      "blacklisted concepts should not create another mastery notification"
+    );
+  } finally {
+    await closeServer(masteryServer);
+  }
+
+  const lowIntervalDataPath = join(tempDir, "mastery-low-interval.json");
+  const lowIntervalCurationPath = join(tempDir, "mastery-low-interval-curation.json");
+  const lowIntervalConcept = "Low Interval Mastery";
+  const lowIntervalPosts = [
+    makeApiSmokePost({
+      id: "low-interval-a",
+      title: "Low interval A",
+      concepts: [lowIntervalConcept],
+      createdAt: "2026-06-01T00:00:00.000Z"
+    }),
+    makeApiSmokePost({
+      id: "low-interval-b",
+      title: "Low interval B",
+      concepts: [lowIntervalConcept],
+      createdAt: "2026-06-01T00:00:00.000Z"
+    })
+  ];
+
+  await writeFile(
+    lowIntervalDataPath,
+    JSON.stringify({
+      version: 1,
+      updatedAt: "2026-06-10T00:00:00.000Z",
+      posts: lowIntervalPosts,
+      reviewStates: [
+        { postId: lowIntervalPosts[0].id, intervalDays: 1, dueAt: "2026-06-10T00:00:00.000Z" },
+        { postId: lowIntervalPosts[1].id, intervalDays: 7, dueAt: "2026-06-17T00:00:00.000Z" }
+      ],
+      topicStates: [
+        {
+          topicId: lowIntervalConcept,
+          interestScore: 0.8,
+          fatigueScore: 0.1,
+          comprehensionScore: 0.78,
+          updatedAt: "2026-06-10T00:00:00.000Z"
+        }
+      ]
+    })
+  );
+
+  const lowIntervalServer = createApiServer({
+    dataPath: lowIntervalDataPath,
+    curationDataPath: lowIntervalCurationPath,
+    mediaRootDir,
+    enableFixtures: true,
+    searchProvider: fakeSearchProvider
+  });
+
+  try {
+    const lowInterval = await requestJsonFromServer(
+      lowIntervalServer,
+      `/api/review/${encodeURIComponent(lowIntervalPosts[0].id)}/complete`,
+      {
+        method: "POST",
+        body: { reviewedAt: "2026-06-10T00:00:00.000Z" }
+      }
+    );
+    const lowIntervalSnapshot = await requestJsonFromServer(lowIntervalServer, "/api/snapshot");
+
+    assert.deepEqual(lowInterval.masteryPromotions, [], "concepts should not promote when fewer than two cards meet interval rules");
+    assert.equal(lowIntervalSnapshot.userMemories.length, 0, "low-interval negative case should not write memory");
+  } finally {
+    await closeServer(lowIntervalServer);
+  }
+
+  const lowScoreDataPath = join(tempDir, "mastery-low-score.json");
+  const lowScoreCurationPath = join(tempDir, "mastery-low-score-curation.json");
+  const lowScoreConcept = "Low Score Mastery";
+  const lowScorePosts = [
+    makeApiSmokePost({
+      id: "low-score-a",
+      title: "Low score A",
+      concepts: [lowScoreConcept],
+      createdAt: "2026-06-01T00:00:00.000Z"
+    }),
+    makeApiSmokePost({
+      id: "low-score-b",
+      title: "Low score B",
+      concepts: [lowScoreConcept],
+      createdAt: "2026-06-01T00:00:00.000Z"
+    })
+  ];
+
+  await writeFile(
+    lowScoreDataPath,
+    JSON.stringify({
+      version: 1,
+      updatedAt: "2026-06-10T00:00:00.000Z",
+      posts: lowScorePosts,
+      reviewStates: [
+        { postId: lowScorePosts[0].id, intervalDays: 3, dueAt: "2026-06-10T00:00:00.000Z" },
+        { postId: lowScorePosts[1].id, intervalDays: 7, dueAt: "2026-06-17T00:00:00.000Z" }
+      ],
+      topicStates: [
+        {
+          topicId: lowScoreConcept,
+          interestScore: 0.8,
+          fatigueScore: 0.1,
+          comprehensionScore: 0.2,
+          updatedAt: "2026-06-10T00:00:00.000Z"
+        }
+      ]
+    })
+  );
+
+  const lowScoreServer = createApiServer({
+    dataPath: lowScoreDataPath,
+    curationDataPath: lowScoreCurationPath,
+    mediaRootDir,
+    enableFixtures: true,
+    searchProvider: fakeSearchProvider
+  });
+
+  try {
+    const lowScore = await requestJsonFromServer(
+      lowScoreServer,
+      `/api/review/${encodeURIComponent(lowScorePosts[0].id)}/complete`,
+      {
+        method: "POST",
+        body: { reviewedAt: "2026-06-10T00:00:00.000Z" }
+      }
+    );
+    const lowScoreSnapshot = await requestJsonFromServer(lowScoreServer, "/api/snapshot");
+
+    assert.deepEqual(lowScore.masteryPromotions, [], "concepts should not promote when topic comprehension is below threshold");
+    assert.equal(lowScoreSnapshot.userMemories.length, 0, "low-score negative case should not write memory");
+  } finally {
+    await closeServer(lowScoreServer);
+  }
+
+  const legacyMasteryDataPath = join(tempDir, "mastery-legacy-compatible.json");
+  const legacyMasteryCurationPath = join(tempDir, "mastery-legacy-compatible-curation.json");
+  await writeFile(
+    legacyMasteryDataPath,
+    JSON.stringify({
+      version: 1,
+      updatedAt: "2026-06-10T00:00:00.000Z"
+    })
+  );
+  const legacyMasteryServer = createApiServer({
+    dataPath: legacyMasteryDataPath,
+    curationDataPath: legacyMasteryCurationPath,
+    mediaRootDir,
+    enableFixtures: true,
+    searchProvider: fakeSearchProvider
+  });
+
+  try {
+    const legacyMasterySnapshot = await requestJsonFromServer(legacyMasteryServer, "/api/snapshot");
+
+    assert.deepEqual(legacyMasterySnapshot.memoryEvents, [], "legacy snapshots without memoryEvents should load compatibly");
+    assert.deepEqual(legacyMasterySnapshot.notifications, [], "legacy snapshots without notifications should load compatibly");
+    assert.deepEqual(legacyMasterySnapshot.reviewStates, [], "legacy snapshots without reviewStates should load compatibly");
+  } finally {
+    await closeServer(legacyMasteryServer);
+  }
+
   const subscriptionDataPath = join(tempDir, "subscriptions.json");
   const subscriptionCurationPath = join(tempDir, "subscriptions-curation-jobs.json");
   const subscriptionFeedUrl = "https://feeds.local/aitimeline-rss.xml";
@@ -1952,7 +2386,7 @@ async function requestJsonFromServer(targetServer, path, options = {}) {
   });
   const payload = await response.json();
 
-  assert.equal(response.ok, true, `${path} should respond with 2xx`);
+  assert.equal(response.ok, true, `${path} should respond with 2xx: ${JSON.stringify(payload)}`);
 
   return payload;
 }
@@ -2056,6 +2490,39 @@ function makeApiSmokePost({ id, title, concepts, createdAt = "2026-06-01T00:00:0
     reviewPrompts: [],
     nextActions: [],
     harnessVersion: "smoke"
+  };
+}
+
+function makeInteractionSignalRecord(post, { liked = false, saved = false, createdAt = "2026-06-01T00:00:00.000Z" } = {}) {
+  const topicId = post.concepts[0] ?? post.id;
+  const signal = {
+    postId: post.id,
+    topicId,
+    conceptIds: post.concepts,
+    impression: true,
+    dwellTimeMs: 0,
+    openedThread: false,
+    liked,
+    saved,
+    askedQuestion: false,
+    reviewed: false,
+    skippedQuickly: false,
+    createdAt
+  };
+
+  return {
+    id: `signal-${post.id}-${createdAt}`,
+    signal,
+    feedback: {
+      postId: post.id,
+      topicId,
+      conceptIds: post.concepts,
+      signalStrength: liked || saved ? 1 : 0,
+      inferredState: liked || saved ? "interested" : "not_relevant",
+      nextAction: liked || saved ? "schedule_review" : "continue_deeper",
+      reason: "Smoke fixture."
+    },
+    createdAt
   };
 }
 

@@ -29,6 +29,7 @@ import {
   createTavilySearchProvider,
   buildWeeklyRecap,
   buildWeeklyRecapId,
+  evaluateMasteryPromotions,
   evaluateInteraction,
   fetchArticle,
   fetchYouTubeTranscript,
@@ -362,9 +363,10 @@ export function createApiServer(options = {}) {
       }
 
       if (request.method === "GET" && url.pathname === "/api/review/due") {
-        const snapshot = persistenceStore.getSnapshot();
+        const now = url.searchParams.get("now") ?? new Date().toISOString();
+        const snapshot = backfillLegacyReviewStates(persistenceStore, now);
         const hardDismissedPostIds = getHardDismissedPostIds(snapshot.dismissedPosts);
-        const due = getDueReviewStates(snapshot.reviewStates, url.searchParams.get("now") ?? new Date())
+        const due = getDueReviewStates(snapshot.reviewStates, now)
           .filter((state) => !hardDismissedPostIds.has(state.postId))
           .map(({ postId, intervalDays, dueAt }) => ({ postId, intervalDays, dueAt }));
 
@@ -377,6 +379,7 @@ export function createApiServer(options = {}) {
           url.pathname.replace(/^\/api\/review\//, "").replace(/\/complete$/, "")
         );
         const body = await readJsonBody(request);
+        const userId = typeof body.userId === "string" && body.userId.trim() ? body.userId : "local-user";
         const snapshot = persistenceStore.getSnapshot();
         const reviewState = snapshot.reviewStates.find((state) => state.postId === postId);
 
@@ -412,10 +415,23 @@ export function createApiServer(options = {}) {
           createdAt: reviewedSignal.createdAt
         };
 
-        persistenceStore.saveReviewStates([nextReviewState], reviewedAt);
-        persistenceStore.saveInteractionSignalRecords([signalRecord], reviewedAt);
-        persistenceStore.saveTopicStateRecords([topicState], reviewedAt);
-        sendJson(response, 200, { reviewState: nextReviewState });
+        let nextSnapshot = persistenceStore.saveReviewStates([nextReviewState], reviewedAt);
+        nextSnapshot = persistenceStore.saveInteractionSignalRecords([signalRecord], reviewedAt);
+        nextSnapshot = persistenceStore.saveTopicStateRecords([topicState], reviewedAt);
+        const masteryResult = promoteMasteryAfterReview({
+          persistenceStore,
+          snapshot: nextSnapshot,
+          post,
+          userId,
+          reviewedAt,
+          contentLanguage: resolveContentLanguage(persistenceStore, process.env)
+        });
+
+        sendJson(response, 200, {
+          reviewState: nextReviewState,
+          masteryPromotions: masteryResult.promotions,
+          snapshotSummary: summarizeSnapshot(masteryResult.snapshot)
+        });
         return;
       }
 
@@ -935,14 +951,29 @@ export function createApiServer(options = {}) {
       if (request.method === "POST" && url.pathname === "/api/memory") {
         const body = await readJsonBody(request);
         const userId = body.userId ?? "local-user";
+        const currentSnapshot = persistenceStore.getSnapshot();
         const currentMemory =
-          persistenceStore.getSnapshot().userMemories.find((record) => record.userId === userId)?.memory ??
+          currentSnapshot.userMemories.find((record) => record.userId === userId)?.memory ??
           createEmptyUserMemory();
-        const editResult = applyUserMemoryEdits(body.memory ?? currentMemory, body.edits ?? []);
-        const snapshot = persistenceStore.saveUserMemory(userId, editResult.memory, editResult.events);
+        const now = new Date().toISOString();
+        const editResult = applyUserMemoryEdits(body.memory ?? currentMemory, body.edits ?? [], now);
+        const blacklistEvents = createManualMasteryDemotionEvents(
+          currentSnapshot,
+          userId,
+          currentMemory,
+          editResult.memory,
+          now
+        );
+        const snapshot = persistenceStore.saveUserMemory(
+          userId,
+          editResult.memory,
+          [...editResult.events, ...blacklistEvents],
+          now
+        );
 
         sendJson(response, 200, {
           ...editResult,
+          events: [...editResult.events, ...blacklistEvents],
           snapshotSummary: summarizeSnapshot(snapshot)
         });
         return;
@@ -3038,6 +3069,209 @@ function maybeCreateInitialReviewState(snapshot, signal, generatedAt) {
   }
 
   return createInitialReviewState(signal.postId, signal.createdAt ?? generatedAt);
+}
+
+function backfillLegacyReviewStates(persistenceStore, savedAt) {
+  const snapshot = persistenceStore.getSnapshot();
+  const reviewStates = createLegacyReviewBackfillStates(snapshot);
+
+  return reviewStates.length ? persistenceStore.saveReviewStates(reviewStates, savedAt) : snapshot;
+}
+
+function createLegacyReviewBackfillStates(snapshot, limit = 50) {
+  const existingPostIds = new Set(snapshot.reviewStates.map((state) => state.postId));
+  const postById = new Map(snapshot.posts.map((post) => [post.id, post]));
+  const reviewStates = [];
+
+  for (const record of snapshot.interactionSignals) {
+    const signal = record.signal;
+
+    if (reviewStates.length >= limit) {
+      break;
+    }
+
+    if (!signal.liked && !signal.saved) {
+      continue;
+    }
+
+    if (existingPostIds.has(signal.postId)) {
+      continue;
+    }
+
+    const post = postById.get(signal.postId);
+
+    if (!post || post.kind === "connection_note") {
+      continue;
+    }
+
+    reviewStates.push(createInitialReviewState(signal.postId, signal.createdAt ?? record.createdAt));
+    existingPostIds.add(signal.postId);
+  }
+
+  return reviewStates;
+}
+
+function promoteMasteryAfterReview({ persistenceStore, snapshot, post, userId, reviewedAt, contentLanguage }) {
+  const memory = getSnapshotUserMemory(snapshot, userId);
+  const promotions = evaluateMasteryPromotions({
+    concepts: post.concepts,
+    cards: snapshot.posts,
+    reviewStates: snapshot.reviewStates,
+    topicStates: snapshot.topicStates,
+    knownConcepts: memory.knowledge.knownConcepts,
+    promotionBlacklist: collectMasteryPromotionBlacklist(snapshot, userId)
+  });
+
+  if (!promotions.length) {
+    return { snapshot, promotions: [] };
+  }
+
+  const editResult = applyUserMemoryEdits(
+    memory,
+    promotions.map((promotion) => ({
+      id: `memory-edit-auto-mastery-promotion-${hashText(`${userId}|${promotion.concept}|${reviewedAt}`)}`,
+      kind: "auto_mastery_promotion",
+      field: "knowledge.knownConcepts",
+      value: promotion.concept,
+      createdAt: reviewedAt,
+      reason: buildAutoMasteryPromotionReason(promotion)
+    })),
+    reviewedAt
+  );
+  let nextSnapshot = persistenceStore.saveUserMemory(userId, editResult.memory, editResult.events, reviewedAt);
+
+  nextSnapshot = persistenceStore.saveNotifications(
+    promotions.map((promotion) => createMasteryPromotionNotification(promotion, contentLanguage, reviewedAt)),
+    reviewedAt
+  );
+
+  return { snapshot: nextSnapshot, promotions };
+}
+
+function getSnapshotUserMemory(snapshot, userId) {
+  return snapshot.userMemories.find((record) => record.userId === userId)?.memory ?? createEmptyUserMemory();
+}
+
+function buildAutoMasteryPromotionReason(promotion) {
+  return [
+    "auto_mastery_promotion",
+    `concept=${promotion.concept}`,
+    `cards=${promotion.qualifyingCardCount}/${promotion.cardCount}`,
+    `intervals=${promotion.intervalDays.join(",")}`,
+    `score=${promotion.comprehensionScore.toFixed(2)}`
+  ].join("; ");
+}
+
+function createMasteryPromotionNotification(promotion, contentLanguage, createdAt) {
+  const body =
+    contentLanguage === "en"
+      ? `#${promotion.concept} is now mastered: you reviewed it ${promotion.estimatedReviewCount} times across ${promotion.maxIntervalDays} days.`
+      : `#${promotion.concept} 已进入已掌握:你复习了 ${promotion.estimatedReviewCount} 次、跨 ${promotion.maxIntervalDays} 天。`;
+
+  return {
+    id: `notification-${hashText(`mastery_promotion|${promotion.concept}|${createdAt}|${promotion.postIds.join("|")}`)}`,
+    kind: "mastery_promotion",
+    turnId: `mastery-${hashText(`${promotion.concept}|${createdAt}`)}`,
+    postIds: promotion.postIds,
+    body,
+    createdAt
+  };
+}
+
+function createManualMasteryDemotionEvents(snapshot, userId, previousMemory, nextMemory, createdAt) {
+  const autoPromotedKeys = collectAutoMasteryPromotionKeys(snapshot, userId);
+  const blacklistKeys = new Set(collectMasteryPromotionBlacklist(snapshot, userId).map(normalizeConceptKey));
+  const nextKnownKeys = new Set(nextMemory.knowledge.knownConcepts.map(normalizeConceptKey));
+  const removedConcepts = previousMemory.knowledge.knownConcepts.filter((concept) => {
+    const conceptKey = normalizeConceptKey(concept);
+
+    return conceptKey && !nextKnownKeys.has(conceptKey);
+  });
+
+  return removedConcepts.flatMap((concept) => {
+    const conceptKey = normalizeConceptKey(concept);
+
+    if (!autoPromotedKeys.has(conceptKey) || blacklistKeys.has(conceptKey)) {
+      return [];
+    }
+
+    return [
+      {
+        id: `memory-edit-knowledge-knownConcepts-auto-mastery-blacklist-${hashText(`${userId}|${conceptKey}|${createdAt}`)}`,
+        kind: "auto_mastery_blacklist",
+        field: "knowledge.knownConcepts",
+        // Single-concept diff on purpose: the blacklist is re-derived from
+        // previousValue/nextValue, so a batch removal must not drag
+        // manually-added concepts deleted in the same edit into it.
+        previousValue: [concept],
+        nextValue: [],
+        createdAt,
+        reason: `auto_mastery_blacklist; concept=${concept}`
+      }
+    ];
+  });
+}
+
+function collectAutoMasteryPromotionKeys(snapshot, userId) {
+  const keys = new Set();
+
+  for (const record of snapshot.memoryEvents) {
+    if (record.userId !== userId || record.event.field !== "knowledge.knownConcepts") {
+      continue;
+    }
+
+    if (record.event.kind !== "auto_mastery_promotion") {
+      continue;
+    }
+
+    for (const concept of getAddedMemoryConcepts(record.event)) {
+      const conceptKey = normalizeConceptKey(concept);
+
+      if (conceptKey) {
+        keys.add(conceptKey);
+      }
+    }
+  }
+
+  return keys;
+}
+
+function collectMasteryPromotionBlacklist(snapshot, userId) {
+  const concepts = [];
+
+  for (const record of snapshot.memoryEvents) {
+    if (record.userId !== userId || record.event.field !== "knowledge.knownConcepts") {
+      continue;
+    }
+
+    if (record.event.kind !== "auto_mastery_blacklist") {
+      continue;
+    }
+
+    concepts.push(...getRemovedMemoryConcepts(record.event));
+  }
+
+  return uniqueStrings(concepts);
+}
+
+function getAddedMemoryConcepts(event) {
+  const previousKeys = new Set(toMemoryConceptArray(event.previousValue).map(normalizeConceptKey));
+
+  return toMemoryConceptArray(event.nextValue).filter((concept) => !previousKeys.has(normalizeConceptKey(concept)));
+}
+
+function getRemovedMemoryConcepts(event) {
+  const nextKeys = new Set(toMemoryConceptArray(event.nextValue).map(normalizeConceptKey));
+
+  return toMemoryConceptArray(event.previousValue).filter((concept) => !nextKeys.has(normalizeConceptKey(concept)));
+}
+
+function toMemoryConceptArray(value) {
+  if (Array.isArray(value)) {
+    return value.filter((item) => typeof item === "string" && item.trim());
+  }
+
+  return typeof value === "string" && value.trim() ? [value] : [];
 }
 
 function createReviewedInteractionSignal(post, reviewedAt) {

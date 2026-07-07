@@ -88,7 +88,7 @@ export interface AgentTurnRecord {
 
 export type AgentTurnStatus = "answered" | "pending_confirmation" | "researching" | "closed";
 
-export type AgentNotificationKind = "agent_answer" | "research_progress";
+export type AgentNotificationKind = "agent_answer" | "research_progress" | "mastery_promotion";
 
 export interface AgentNotificationCitation {
   sourceId: string;
@@ -561,7 +561,8 @@ function isAgentTurnStatus(value: unknown): value is AgentTurnStatus {
 function normalizeNotificationRecord(
   value: AgentNotificationRecord | (Partial<AgentNotificationRecord> & { id: string })
 ): AgentNotificationRecord {
-  const kind = value.kind === "research_progress" ? "research_progress" : "agent_answer";
+  const kind =
+    value.kind === "research_progress" || value.kind === "mastery_promotion" ? value.kind : "agent_answer";
 
   return {
     id: value.id,

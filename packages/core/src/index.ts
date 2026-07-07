@@ -33,6 +33,7 @@ export * from "./ranking/ranker.js";
 export * from "./recap/weeklyRecap.js";
 export * from "./review/spacedReview.js";
 export * from "./review/reviewState.js";
+export * from "./review/masteryPromotion.js";
 export * from "./source/sourceImportWorker.js";
 export * from "./source/sourceQualityGate.js";
 export * from "./source/sourceRegistry.js";

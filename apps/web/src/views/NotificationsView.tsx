@@ -32,7 +32,9 @@ export function NotificationsView({
             <span className="x-name">
               {notification.kind === "agent_answer"
                 ? t("notifications.kind.agentAnswer")
-                : t("notifications.kind.researchProgress")}
+                : notification.kind === "mastery_promotion"
+                  ? t("notifications.kind.masteryPromotion")
+                  : t("notifications.kind.researchProgress")}
             </span>
             {!notification.readAt ? <span className="x-navdot inline" /> : null}
             <span className="x-meta">{new Date(notification.createdAt).toLocaleString()}</span>
