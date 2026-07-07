@@ -171,8 +171,11 @@ function buildModelMessages(input: SourceQualityGateInput): ModelMessage[] {
         "You are AITimeline's source quality gate.",
         "Score a fetched source before card generation.",
         "Return JSON only: {\"score\":0-1,\"verdict\":\"accept\"|\"reject\",\"reasons\":[\"...\"]}.",
-        "Judge three dimensions: content density, relevance to the user's current graph, and source credibility.",
+        "Judge four dimensions: content density, relevance to the user's current graph, source credibility, and first-hand vs second-hand value.",
         "Accept sources with concrete mechanisms, data, verifiable claims, implementation details, papers, official docs, or substantial technical analysis.",
+        "First-hand sources include papers, official blogs/docs, author-owned writeups, and first-party implementations.",
+        "Second-hand sources summarize or restate someone else's result. Accept them when they add original analysis, experiments, comparisons, synthesis, or practical interpretation.",
+        "Lean reject on pure second-hand recaps that only paraphrase a paper/report/blog without adding new information; when rejecting for this, include the phrase \"二手复述\" in reasons.",
         "Reject obvious SEO/marketing filler: slogans, keyword stuffing, listicles with no specific claims, thin ultimate-guide pages, or pages that mainly sell a product.",
         "Use a permissive threshold. Reject only when the source is not worth learning from."
       ].join("\n")
@@ -427,6 +430,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 const titleBaitKeywords = [
+  /\bdeep dive\b/gi,
+  /\bexplained\b/gi,
+  /\bguide to\b/gi,
+  /\bpart\s+\d+\b/gi,
+  /\(\s*\d+\s*\/\s*\d+\s*\)/g,
+  /第\s*[0-9一二三四五六七八九十百]+\s*部分/g,
   /\bultimate guide\b/gi,
   /\badvanced guide\b/gi,
   /\bmastering\b/gi,

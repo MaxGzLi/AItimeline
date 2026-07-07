@@ -3,6 +3,28 @@ import type { ContentLanguage } from "../harness/contentLanguage.js";
 import type { NextActionPolicy, SourceType } from "../types.js";
 import type { DiscoveredSource, SearchProvider } from "./searchProvider.js";
 
+// Query templates must not contain these GEO bait phrases: deep dive, advanced,
+// explained, analysis, guide, mastering, ultimate.
+export const DISCOVERY_GEO_BAIT_TERMS = [
+  "deep dive",
+  "advanced",
+  "explained",
+  "analysis",
+  "guide",
+  "mastering",
+  "ultimate"
+] as const;
+
+export const DISCOVERY_AGGREGATE_DOMAINS = [
+  "towardsdatascience.com",
+  "pub.towardsai.net",
+  "ai.plainenglish.io",
+  "ai.gopubby.com",
+  "medium.com",
+  "emergentmind.com",
+  "findskill.ai"
+] as const;
+
 export interface PlanDiscoveryQueriesInput {
   concepts: string[];
   topicId?: string;
@@ -21,11 +43,11 @@ export function planDiscoveryQueries(input: PlanDiscoveryQueriesInput): string[]
 
   for (const concept of concepts) {
     if (input.nextAction === "continue_deeper") {
-      queries.push(`${concept} advanced deep dive`);
+      queries.push(`${concept} paper`, `${concept} technical report`);
     } else if (input.nextAction === "expand_broader") {
-      queries.push(`${concept} applications and comparisons`);
+      queries.push(`${concept} survey`, `${concept} applications`);
     } else {
-      queries.push(`${concept} explained analysis`);
+      queries.push(concept, `${concept} benchmark`);
     }
   }
 
@@ -70,7 +92,7 @@ export function screenDiscoveredSources(input: ScreenDiscoveredSourcesInput): Ba
     seenUrls.add(normalizedUrl);
 
     const parsedUrl = new URL(normalizedUrl);
-    const type = item.sourceType ?? inferSourceType(parsedUrl);
+    const type = inferSourceType(parsedUrl, item.sourceType);
     const sourceId = buildSourceId(type, parsedUrl);
     const title = item.title.trim() || parsedUrl.hostname;
 
@@ -87,7 +109,7 @@ export function screenDiscoveredSources(input: ScreenDiscoveredSourcesInput): Ba
       conceptIds: dedupeStrings(input.concepts),
       relevanceScore: scoreRelevance(item, input.concepts),
       noveltyScore: scoreNovelty(title, existingTitles),
-      qualityScore: scoreQuality(item, parsedUrl),
+      qualityScore: scoreQuality(item, parsedUrl, type),
       reason: buildReason(input.concepts, input.query, input.contentLanguage ?? "zh"),
       discoveredAt: now
     });
@@ -178,7 +200,7 @@ function scoreNovelty(title: string, existingTitles: string[]): number {
   return nearDuplicate ? 0.35 : 0.7;
 }
 
-function scoreQuality(item: DiscoveredSource, url: URL): number {
+function scoreQuality(item: DiscoveredSource, url: URL, type: SourceType): number {
   let score = 0.5;
 
   if (url.protocol === "https:") {
@@ -193,7 +215,11 @@ function scoreQuality(item: DiscoveredSource, url: URL): number {
     score += 0.15;
   }
 
-  return roundScore(Math.min(0.9, score));
+  score += getSourceTypeBoost(type);
+  score += isOfficialPrimaryHost(url.hostname) ? 0.08 : 0;
+  score -= isAggregateSourceHost(url.hostname) ? 0.18 : 0;
+
+  return roundScore(Math.min(0.98, Math.max(0.1, score)));
 }
 
 function buildReason(concepts: string[], query?: string, contentLanguage: ContentLanguage = "zh"): string {
@@ -234,8 +260,12 @@ function normalizeUrl(value: string): string | null {
   }
 }
 
-function inferSourceType(url: URL): SourceType {
+function inferSourceType(url: URL, currentType?: SourceType): SourceType {
   const host = url.hostname.replace(/^www\./, "");
+
+  if (isPaperUrl(url)) {
+    return "paper";
+  }
 
   if (host.includes("youtube.com") || host === "youtu.be") {
     return "youtube";
@@ -245,11 +275,50 @@ function inferSourceType(url: URL): SourceType {
     return "repo";
   }
 
-  if (host.includes("arxiv.org")) {
-    return "paper";
-  }
+  return currentType ?? "article";
+}
 
-  return "article";
+function isPaperUrl(url: URL): boolean {
+  const host = url.hostname.replace(/^www\./, "");
+
+  return (
+    host === "arxiv.org" ||
+    host.endsWith(".arxiv.org") ||
+    host === "doi.org" ||
+    host.endsWith(".doi.org") ||
+    /\/doi\/10\./i.test(url.pathname)
+  );
+}
+
+function getSourceTypeBoost(type: SourceType): number {
+  if (type === "paper") return 0.18;
+  if (type === "repo") return 0.12;
+  if (type === "article" || type === "blog") return 0.06;
+
+  return 0;
+}
+
+function isOfficialPrimaryHost(hostname: string): boolean {
+  const host = hostname.replace(/^www\./, "").toLowerCase();
+
+  return (
+    host.startsWith("docs.") ||
+    host.includes(".docs.") ||
+    host.startsWith("developer.") ||
+    host.includes(".developer.") ||
+    host === "github.com" ||
+    host.endsWith(".github.com") ||
+    host === "arxiv.org" ||
+    host.endsWith(".arxiv.org") ||
+    host === "doi.org" ||
+    host.endsWith(".doi.org")
+  );
+}
+
+function isAggregateSourceHost(hostname: string): boolean {
+  const host = hostname.replace(/^www\./, "").toLowerCase();
+
+  return DISCOVERY_AGGREGATE_DOMAINS.some((domain) => host === domain || host.endsWith(`.${domain}`));
 }
 
 function buildSourceId(type: SourceType, url: URL): string {

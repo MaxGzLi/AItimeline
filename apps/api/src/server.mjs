@@ -16,6 +16,7 @@ import {
   applyDailyAutoJobBudget,
   createBackgroundCurationPlan,
   createDeterministicConceptBrief,
+  DISCOVERY_AGGREGATE_DOMAINS,
   createConceptMergeSuggestion,
   createConnectionNoteForImport,
   createEmptyUserMemory,
@@ -2599,7 +2600,11 @@ function createConfiguredSearchProvider(env) {
 
   console.log("[aitimeline] source discovery using tavily search.");
 
-  return createTavilySearchProvider({ apiKey, baseUrl: env.AITIMELINE_SEARCH_BASE_URL });
+  return createTavilySearchProvider({
+    apiKey,
+    baseUrl: env.AITIMELINE_SEARCH_BASE_URL,
+    excludeDomains: DISCOVERY_AGGREGATE_DOMAINS
+  });
 }
 
 async function handleAsk(body, persistenceStore, client, contentLanguage) {
