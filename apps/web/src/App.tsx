@@ -57,6 +57,7 @@ import { ConceptDigestPanel } from "./components/ConceptDigestPanel";
 import { ContextRail } from "./components/ContextRail";
 import { PostDetailView } from "./components/PostDetailView";
 import { PostView } from "./components/PostView";
+import { SupplyDroughtCard, type SupplyRefillState } from "./components/SupplyDroughtCard";
 import { WeeklyRecapCard } from "./components/WeeklyRecapCard";
 import { buildWikilinkAutocompleteCandidates } from "./components/WikilinkAutocomplete";
 import { DiscoverView } from "./views/DiscoverView";
@@ -103,6 +104,7 @@ import type {
   ApiSettings,
   ApiSnapshot,
   ApiStatus,
+  ApiSupplyRefillResponse,
   ApiTimelineResponse,
   ApiWeeklyRecapResponse,
   ApiWeeklyRecapSeenResponse,
@@ -118,6 +120,7 @@ import type {
   NoteApiResponse,
   ReviewDueItem,
   SourceCandidateRecord,
+  SupplyStatus,
   SubscriptionRecord,
   TimelineCard
 } from "./lib/types";
@@ -170,6 +173,8 @@ export function App() {
   const [sourceChunks, setSourceChunks] = useState<KnowledgeChunk[]>([]);
   const [sourceCandidates, setSourceCandidates] = useState<SourceCandidateRecord[]>([]);
   const [subscriptions, setSubscriptions] = useState<SubscriptionRecord[]>([]);
+  const [supplyStatus, setSupplyStatus] = useState<SupplyStatus | null>(null);
+  const [supplyRefillState, setSupplyRefillState] = useState<SupplyRefillState>({ status: "idle" });
   const [userMemory, setUserMemory] = useState<UserMemory | null>(null);
   const [conceptAliases, setConceptAliases] = useState<ConceptAliasRecord[]>([]);
   const [conceptMergeSuggestions, setConceptMergeSuggestions] = useState<ConceptMergeSuggestion[]>([]);
@@ -1105,6 +1110,10 @@ export function App() {
       }
 
       setSourceImports(timeline.sourceImports);
+      setSupplyStatus(timeline.supplyStatus ?? null);
+      if (!timeline.supplyStatus?.drought) {
+        setSupplyRefillState({ status: "idle" });
+      }
       setSourceAssets(upsertById([], registryAssets));
       setSourceChunks(upsertById([], registryChunks));
       setSourceCandidates(snapshot.sourceCandidates);
@@ -1500,6 +1509,9 @@ export function App() {
       const importedCount = result.records.filter((record) => record.result?.sourceImport).length;
       const checkedAt = new Date().toISOString();
 
+      if (result.supplyRefill && (result.supplyRefill.queued > 0 || result.supplyRefill.skipped > 0)) {
+        setSupplyRefillState({ status: "done", result: result.supplyRefill });
+      }
       setApiStatus("connected");
       setApiMessage(t("api.connected"));
       setLastScoutAt(checkedAt);
@@ -1522,6 +1534,42 @@ export function App() {
 
   function handleRunCuration() {
     void runCuration("manual");
+  }
+
+  function openAgentSection(section: "import" | "subscriptions") {
+    setActiveView("agent");
+    setSelectedCardId(null);
+    const elementId = section === "subscriptions" ? "agent-subscriptions" : "agent-source-import";
+
+    requestAnimationFrame(() => {
+      document.getElementById(elementId)?.scrollIntoView({ block: "start", behavior: scrollMotion() });
+    });
+  }
+
+  async function handleSupplyRefill() {
+    if (supplyRefillState.status === "running") {
+      return;
+    }
+
+    setSupplyRefillState({ status: "running" });
+
+    try {
+      const result = await apiRequest<ApiSupplyRefillResponse>("/api/supply/refill", {
+        method: "POST",
+        body: { now: new Date().toISOString() }
+      });
+
+      setSupplyRefillState({ status: "done", result });
+      setApiStatus("connected");
+      setApiMessage(t("api.connected"));
+      await refreshFromApi({ silent: true, mode: "buffer" });
+    } catch (error) {
+      setApiStatus("offline");
+      setSupplyRefillState({
+        status: "error",
+        message: error instanceof Error ? error.message : t("api.unavailable")
+      });
+    }
   }
 
   async function handleAskAi(event: FormEvent<HTMLFormElement>) {
@@ -2250,6 +2298,19 @@ export function App() {
                     })
                   : t("feed.productionPaused", { count: queuedJobCount })}
               </div>
+            ) : null}
+
+            {supplyStatus?.drought ? (
+              <SupplyDroughtCard
+                onImportLink={() => openAgentSection("import")}
+                onOpenReview={() => setActiveView("review")}
+                onRefillCandidates={() => {
+                  void handleSupplyRefill();
+                }}
+                onSubscriptions={() => openAgentSection("subscriptions")}
+                refillState={supplyRefillState}
+                status={supplyStatus}
+              />
             ) : null}
 
             {weeklyRecap ? <WeeklyRecapCard onDismiss={dismissWeeklyRecap} recap={weeklyRecap} theme={theme} /> : null}

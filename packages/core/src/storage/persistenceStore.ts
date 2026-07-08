@@ -70,7 +70,13 @@ export interface TopicStateRecord extends TopicState {
   updatedAt: string;
 }
 
-export type SourceCandidateRecordStatus = "pending" | "queued" | "imported" | "dismissed" | "rejected_source";
+export type SourceCandidateRecordStatus =
+  | "pending"
+  | "queued"
+  | "imported"
+  | "dismissed"
+  | "rejected_source"
+  | "unreachable";
 
 export type SourceCandidateIntakeKind = "user_paste" | "browser_share" | "agent_discovery" | "manual" | "subscription";
 
@@ -89,7 +95,12 @@ export interface AgentTurnRecord {
 
 export type AgentTurnStatus = "answered" | "pending_confirmation" | "researching" | "closed";
 
-export type AgentNotificationKind = "agent_answer" | "research_progress" | "mastery_promotion" | "learning_goal_achieved";
+export type AgentNotificationKind =
+  | "agent_answer"
+  | "research_progress"
+  | "mastery_promotion"
+  | "learning_goal_achieved"
+  | "supply_drought";
 
 export interface AgentNotificationCitation {
   sourceId: string;
@@ -543,7 +554,7 @@ function createSnapshot(input: AITimelinePersistenceSnapshotInput = {}): AITimel
     topicStates: input.topicStates ?? [],
     dismissedPosts: normalizeDismissedPosts(input, updatedAt),
     reviewStates: input.reviewStates ?? [],
-    sourceCandidates: input.sourceCandidates ?? [],
+    sourceCandidates: normalizeSourceCandidateRecords(input.sourceCandidates ?? []),
     agentTurns: (input.agentTurns ?? []).map((record) => normalizeAgentTurnRecord(record)),
     notifications: (input.notifications ?? []).map(normalizeNotificationRecord),
     userSettings: normalizeUserSettings(input.userSettings),
@@ -587,7 +598,10 @@ function normalizeNotificationRecord(
   value: AgentNotificationRecord | (Partial<AgentNotificationRecord> & { id: string })
 ): AgentNotificationRecord {
   const kind =
-    value.kind === "research_progress" || value.kind === "mastery_promotion" || value.kind === "learning_goal_achieved"
+    value.kind === "research_progress" ||
+    value.kind === "mastery_promotion" ||
+    value.kind === "learning_goal_achieved" ||
+    value.kind === "supply_drought"
       ? value.kind
       : "agent_answer";
 
@@ -1137,6 +1151,82 @@ function normalizeLearningGoals(value: unknown): LearningGoalRecord[] {
 
 function normalizeLearningGoalStatus(value: unknown): LearningGoalRecord["status"] {
   return value === "achieved" || value === "archived" ? value : "active";
+}
+
+function normalizeSourceCandidateRecords(value: unknown): SourceCandidateRecord[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const byId = new Map<string, SourceCandidateRecord>();
+
+  for (const record of value) {
+    if (!isRecord(record) || typeof record.id !== "string" || !isRecord(record.candidate)) {
+      continue;
+    }
+
+    const id = record.id.trim();
+    const candidate = record.candidate as unknown as BackgroundSourceCandidate;
+
+    if (!id || typeof candidate.id !== "string" || !isRecord(candidate.source)) {
+      continue;
+    }
+
+    const createdAt = typeof record.createdAt === "string" ? record.createdAt : new Date().toISOString();
+    const updatedAt = typeof record.updatedAt === "string" ? record.updatedAt : createdAt;
+
+    byId.set(id, {
+      id,
+      candidate,
+      status: normalizeSourceCandidateRecordStatus(record.status),
+      intakeKind: normalizeSourceCandidateIntakeKind(record.intakeKind),
+      createdAt,
+      updatedAt,
+      userId: typeof record.userId === "string" ? record.userId : undefined,
+      notes: typeof record.notes === "string" ? record.notes : undefined,
+      qualityGate: isSourceQualityVerdict(record.qualityGate) ? record.qualityGate : undefined,
+      rejectionReasons: normalizeStringArray(record.rejectionReasons),
+      lastQueuedAt: typeof record.lastQueuedAt === "string" ? record.lastQueuedAt : undefined,
+      importedAt: typeof record.importedAt === "string" ? record.importedAt : undefined,
+      dismissedAt: typeof record.dismissedAt === "string" ? record.dismissedAt : undefined,
+      rejectedAt: typeof record.rejectedAt === "string" ? record.rejectedAt : undefined
+    });
+  }
+
+  return Array.from(byId.values()).sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+}
+
+function normalizeSourceCandidateRecordStatus(value: unknown): SourceCandidateRecordStatus {
+  return value === "queued" ||
+    value === "imported" ||
+    value === "dismissed" ||
+    value === "rejected_source" ||
+    value === "unreachable"
+    ? value
+    : "pending";
+}
+
+function normalizeSourceCandidateIntakeKind(value: unknown): SourceCandidateIntakeKind {
+  return value === "browser_share" ||
+    value === "agent_discovery" ||
+    value === "manual" ||
+    value === "subscription"
+    ? value
+    : "user_paste";
+}
+
+function isSourceQualityVerdict(value: unknown): value is SourceQualityVerdict {
+  return (
+    isRecord(value) &&
+    typeof value.url === "string" &&
+    typeof value.sourceId === "string" &&
+    typeof value.sourceTitle === "string" &&
+    typeof value.score === "number" &&
+    (value.verdict === "accept" || value.verdict === "reject") &&
+    (value.runnerKind === "deterministic" || value.runnerKind === "model") &&
+    typeof value.evaluatedAt === "string" &&
+    Array.isArray(value.reasons)
+  );
 }
 
 function normalizeStringArray(value: unknown): string[] {
