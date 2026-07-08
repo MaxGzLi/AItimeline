@@ -10,6 +10,7 @@ const {
   createDeepReadArticle,
   createDeepReadMaterialContext,
   createDeepReadOutlineContracts,
+  dedupeArticleParagraphs,
   gateDeepReadChapter,
   gateDeepReadParagraph,
   selectDeepReadMaterials
@@ -4182,6 +4183,218 @@ const changedNumberReport = await gateDeepReadParagraph(
 
 assert.equal(changedNumberReport.passed, false, "deep-read key fact gate should reject altered numbers");
 
+const mlaPointer = { cardId: "deep-card-mla", sourceId: "deep-source-mla", chunkId: "deep-chunk-mla" };
+const mlaMaterial = {
+  pointer: mlaPointer,
+  cardTitle: "MLA basics",
+  cardSummary: "MLA basics",
+  cardConcepts: ["Multi-head Latent Attention"],
+  sourceTitle: "MLA paper notes",
+  sourceUrl: "https://example.com/mla",
+  sourceType: "paper",
+  chunkText: "Multi-head Latent Attention uses latent vectors to reduce attention state.",
+  admissionScore: 0.9,
+  admissionReasons: ["fixture"],
+  keyFacts: []
+};
+const mlaContext = createDeepReadMaterialContext([mlaMaterial], {
+  topic: "Multi-head Latent Attention",
+  conceptAliases: [
+    {
+      canonical: "Multi-head Latent Attention",
+      aliases: ["MLA"],
+      decidedBy: "user",
+      decidedAt: "2026-07-08T00:00:00.000Z"
+    }
+  ]
+});
+const mlaContract = {
+  id: "chapter-mla",
+  title: "Multi-head Latent Attention",
+  question: "What does the cited source support about MLA?",
+  materialPointers: [mlaPointer],
+  keyFacts: [],
+  conflictInstructions: [],
+  singleSource: true,
+  readerPositioning: { masteredConcepts: [], gapConcepts: [] }
+};
+const mlaAbbreviationReport = await gateDeepReadParagraph(
+  {
+    id: "mla-abbreviation",
+    kind: "fact",
+    text: "MLA uses latent vectors.",
+    citations: [mlaPointer]
+  },
+  mlaContract,
+  mlaContext,
+  { checkedAt: "2026-07-08T00:00:00.000Z" }
+);
+
+assert.equal(
+  mlaAbbreviationReport.passed,
+  true,
+  "deep-read literal gate should exempt a topic abbreviation backed by a cited full name"
+);
+
+const mlaFullNameOnlyReport = await gateDeepReadParagraph(
+  {
+    id: "mla-full-name-only",
+    kind: "fact",
+    text: "MLA uses latent vectors.",
+    citations: [mlaPointer]
+  },
+  mlaContract,
+  createDeepReadMaterialContext([mlaMaterial], { topic: "Attention" }),
+  { checkedAt: "2026-07-08T00:00:00.000Z" }
+);
+
+assert.equal(
+  mlaFullNameOnlyReport.passed,
+  true,
+  "deep-read literal gate should match paragraph abbreviations against cited full names without requiring an alias"
+);
+
+const keyFactPointer = { cardId: "deep-card-keyfact", sourceId: "deep-source-keyfact", chunkId: "deep-chunk-keyfact" };
+const keyFactContext = createDeepReadMaterialContext([
+  {
+    ...mlaMaterial,
+    pointer: keyFactPointer,
+    cardTitle: "Retrieval component",
+    cardConcepts: ["Retrieval"],
+    sourceTitle: "Retrieval notes",
+    sourceUrl: "https://example.com/keyfact",
+    chunkText: "The retrieval component handles lookup.",
+    keyFacts: []
+  }
+]);
+const keyFactContract = {
+  ...mlaContract,
+  id: "chapter-keyfact",
+  title: "Retrieval component",
+  materialPointers: [keyFactPointer],
+  keyFacts: [
+    {
+      id: "keyfact-alpha",
+      kind: "proper_noun",
+      value: "AlphaSearch",
+      normalizedValue: "alphasearch",
+      fieldKey: "proper_noun:identity",
+      sourceId: keyFactPointer.sourceId,
+      chunkId: keyFactPointer.chunkId,
+      cardId: keyFactPointer.cardId
+    }
+  ]
+};
+const keyFactExemptionReport = await gateDeepReadParagraph(
+  {
+    id: "keyfact-exemption",
+    kind: "fact",
+    text: "AlphaSearch handles lookup.",
+    citations: [keyFactPointer]
+  },
+  keyFactContract,
+  keyFactContext,
+  { checkedAt: "2026-07-08T00:00:00.000Z" }
+);
+
+assert.equal(
+  keyFactExemptionReport.passed,
+  true,
+  "deep-read literal gate should exempt proper nouns already present in the chapter contract keyFacts"
+);
+
+const downgradedFactChapter = await gateDeepReadChapter(
+  {
+    contract: firstContractWithMaterial,
+    paragraphs: [
+      {
+        id: "proper-noun-only",
+        kind: "fact",
+        text: "BetaSearch changes retrieval.",
+        citations: [firstContractWithMaterial.materialPointers[0]]
+      }
+    ]
+  },
+  deepContext,
+  { contentLanguage: "zh", now: "2026-07-08T00:00:00.000Z" }
+);
+
+assert.equal(
+  downgradedFactChapter.chapter.paragraphs[0]?.kind,
+  "synthesis",
+  "deep-read gate should downgrade a cited fact paragraph with only proper-noun literal failure to synthesis"
+);
+assert.deepEqual(
+  downgradedFactChapter.chapter.paragraphs[0]?.citations,
+  [firstContractWithMaterial.materialPointers[0]],
+  "deep-read fact-to-synthesis downgrade should retain citations"
+);
+// Strict numeric literals apply to synthesis prose too: a digit must not dodge
+// the gate by riding in a synthesis paragraph.
+const synthesisNumberMismatch = await gateDeepReadParagraph(
+  {
+    id: "synthesis-number-mismatch",
+    kind: "synthesis",
+    text: "Read together, retrieval uses 9 steps.",
+    citations: [firstContractWithMaterial.materialPointers[0]]
+  },
+  firstContractWithMaterial,
+  deepContext,
+  { checkedAt: "2026-07-08T00:00:00.000Z" }
+);
+
+assert.equal(
+  synthesisNumberMismatch.passed,
+  false,
+  "deep-read gate should reject synthesis paragraphs whose numbers are absent from cited chunks"
+);
+
+const synthesisNumberUncited = await gateDeepReadParagraph(
+  {
+    id: "synthesis-number-uncited",
+    kind: "synthesis",
+    text: "Read together, retrieval uses 3 steps.",
+    citations: []
+  },
+  firstContractWithMaterial,
+  deepContext,
+  { checkedAt: "2026-07-08T00:00:00.000Z" }
+);
+
+assert.equal(
+  synthesisNumberUncited.passed,
+  false,
+  "deep-read gate should reject synthesis paragraphs that state numbers without citing evidence"
+);
+
+const threeStepsPointer = deepSelection.materials.find((material) => material.chunkText.includes("3 steps"))?.pointer;
+
+assert.ok(threeStepsPointer, "deep-read fixture should include the 3-steps chunk material");
+
+const synthesisNumberGrounded = await gateDeepReadParagraph(
+  {
+    id: "synthesis-number-grounded",
+    kind: "synthesis",
+    text: "Read together, retrieval uses 3 steps in 2024.",
+    citations: [threeStepsPointer]
+  },
+  firstContractWithMaterial,
+  deepContext,
+  { checkedAt: "2026-07-08T00:00:00.000Z" }
+);
+
+assert.equal(
+  synthesisNumberGrounded.passed,
+  true,
+  "deep-read gate should keep synthesis paragraphs whose numbers are literally present in cited chunks"
+);
+
+assert.equal(
+  downgradedFactChapter.deletedParagraphLog.length,
+  0,
+  "deep-read fact-to-synthesis downgrade should not log the retained paragraph as deleted"
+);
+
 const degradedChapter = await gateDeepReadChapter(
   {
     contract: firstContractWithMaterial,
@@ -4216,6 +4429,93 @@ assert.ok(
   "deep-read deleted paragraph log should record removed paragraphs"
 );
 
+let retryDraftCalls = 0;
+const retryPointer = firstContractWithMaterial.materialPointers[0];
+const retrySupportedText =
+  deepContext.chunkByPointerKey.get(`${retryPointer.sourceId}|${retryPointer.chunkId}`)?.content ??
+  "RAG retrieval uses 3 steps in 2024.";
+const retryClient = {
+  async complete(request) {
+    const system = request.messages[0]?.content ?? "";
+
+    if (system.includes("Write one readable article chapter")) {
+      retryDraftCalls += 1;
+      assert.ok(
+        request.messages[1]?.content.includes("gateFeedback"),
+        "deep-read chapter retry should pass gate feedback into the regenerated model draft"
+      );
+
+      return {
+        content: JSON.stringify({
+          takeaway: retrySupportedText,
+          paragraphs: [
+            {
+              text: retrySupportedText,
+              kind: "fact",
+              citations: [retryPointer]
+            }
+          ]
+        })
+      };
+    }
+
+    if (system.includes("Rewrite one paragraph to satisfy the gate")) {
+      return {
+        content: JSON.stringify({
+          text: "RAG retrieval uses 9 steps in 2024.",
+          kind: "fact",
+          citations: [retryPointer]
+        })
+      };
+    }
+
+    if (system.includes("Judge whether every factual sentence")) {
+      return { content: JSON.stringify({ passed: true, issues: [] }) };
+    }
+
+    if (system.includes("Detect overstatement in synthesis")) {
+      return { content: JSON.stringify({ passed: true, issues: [] }) };
+    }
+
+    return { content: JSON.stringify({ passed: true, issues: [] }) };
+  }
+};
+const retriedChapter = await gateDeepReadChapter(
+  {
+    contract: firstContractWithMaterial,
+    paragraphs: [
+      {
+        id: "retry-bad-1",
+        kind: "fact",
+        text: "RAG retrieval uses 9 steps in 2024.",
+        citations: [retryPointer]
+      },
+      {
+        id: "retry-bad-2",
+        kind: "fact",
+        text: "RAG retrieval uses 8 steps in 2024.",
+        citations: [retryPointer]
+      },
+      {
+        id: "retry-bad-3",
+        kind: "fact",
+        text: "RAG retrieval uses 7 steps in 2024.",
+        citations: [retryPointer]
+      }
+    ]
+  },
+  deepContext,
+  { client: retryClient, contentLanguage: "zh", now: "2026-07-08T00:00:00.000Z" }
+);
+
+assert.equal(retryDraftCalls, 1, "deep-read chapter gate should regenerate once after deleting more than one third");
+assert.equal(retriedChapter.chapter.status, "complete", "deep-read chapter retry should use the regenerated gated chapter");
+assert.equal(
+  retriedChapter.chapter.paragraphs[0]?.text,
+  retrySupportedText,
+  "deep-read chapter retry should keep the regenerated supported paragraph"
+);
+
 const fallbackArticleA = await createDeepReadArticle(deepReadInput, { now: "2026-07-08T00:00:00.000Z" });
 const fallbackArticleB = await createDeepReadArticle(deepReadInput, { now: "2026-07-08T00:00:00.000Z" });
 
@@ -4225,6 +4525,84 @@ assert.ok(fallbackArticleA.discardedMaterials.length > 0, "fallback article shou
 assert.ok(
   Array.isArray(fallbackArticleA.deletedParagraphLog),
   "fallback article should persist deleted paragraph log field"
+);
+const fallbackGapChapters = fallbackArticleA.chapters.filter((chapter) => chapter.status === "gap");
+
+assert.equal(fallbackGapChapters.length, 1, "deep-read gaps should be aggregated into one final gap chapter");
+assert.equal(
+  fallbackArticleA.chapters.at(-1)?.title,
+  "本文来源覆盖不到的部分",
+  "deep-read aggregated gap chapter should be appended at the end"
+);
+assert.ok(
+  fallbackArticleA.chapters.slice(0, -1).every((chapter) => chapter.status === "complete" && chapter.contract.materialPointers.length > 0),
+  "deep-read body should keep only material-backed complete chapters before the aggregate gap"
+);
+assert.ok(
+  fallbackArticleA.chapters.at(-1)?.paragraphs.some((paragraph) => paragraph.text.includes("Evaluation")),
+  "deep-read aggregate gap should preserve the original no-material chapter explanation"
+);
+
+const dedupedParagraphs = dedupeArticleParagraphs([
+  {
+    id: "dedupe-a",
+    title: "A",
+    question: "A?",
+    status: "complete",
+    singleSource: false,
+    contract: firstContractWithMaterial,
+    paragraphs: [
+      {
+        id: "dedupe-a-cited",
+        kind: "fact",
+        text: "Repeated cited paragraph.",
+        citations: [firstContractWithMaterial.materialPointers[0]]
+      },
+      {
+        id: "dedupe-a-statement",
+        kind: "synthesis",
+        text: "Repeated no-citation statement.",
+        citations: []
+      }
+    ],
+    sources: []
+  },
+  {
+    id: "dedupe-b",
+    title: "B",
+    question: "B?",
+    status: "complete",
+    singleSource: false,
+    contract: firstContractWithMaterial,
+    paragraphs: [
+      {
+        id: "dedupe-b-cited",
+        kind: "fact",
+        text: "Repeated cited paragraph.",
+        citations: [firstContractWithMaterial.materialPointers[0]]
+      },
+      {
+        id: "dedupe-b-statement",
+        kind: "synthesis",
+        text: "Repeated no-citation statement.",
+        citations: []
+      }
+    ],
+    sources: []
+  }
+]);
+
+assert.equal(
+  dedupedParagraphs.flatMap((chapter) => chapter.paragraphs).filter((paragraph) => paragraph.text === "Repeated cited paragraph.").length,
+  1,
+  "deep-read dedupe should still remove duplicate cited body paragraphs"
+);
+assert.equal(
+  dedupedParagraphs
+    .flatMap((chapter) => chapter.paragraphs)
+    .filter((paragraph) => paragraph.text === "Repeated no-citation statement.").length,
+  2,
+  "deep-read dedupe should not remove duplicate no-citation declaration paragraphs"
 );
 
 // The en fallback templates must survive the literal fact gate: template words

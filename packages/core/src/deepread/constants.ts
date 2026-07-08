@@ -11,6 +11,32 @@ export const DEEP_READ_STRUCTURE_RULES = [
   "结尾=可复述的收获+明说没覆盖什么。"
 ] as const;
 
+export const DEEP_READ_WRITING_REQUIREMENTS = [
+  "这是给人读的文章正文,不是要点列表、不是表格填空、不是几字一句的提纲。",
+  "每章写 5-8 段;每段 3-6 句,约 150-350 字。",
+  "章首用一个具体例子、冲突或问题进入,不要先下抽象定义。",
+  "段与段之间要承接:上一段结尾自然引出下一段,不要孤立罗列。",
+  "章尾用一句话接回全文主线,说明本章怎样帮助读者理解主题。",
+  "不得重复已写章节讲过的概念解释或例子;需要时用一句话回指前文,然后只写新内容。",
+  "整篇用目标语言写作;术语可保留英文,但不得整段照抄英文原文,引用内容要用自己的话转述。",
+  "涉及数字、日期、版本号的句子必须标为 fact 并挂引用;综合段里出现的数字同样必须能在所引原文里找到。"
+] as const;
+
+export const DEEP_READ_MODEL_PARAGRAPH_COUNT_RANGE = {
+  min: 5,
+  max: 8
+} as const;
+
+export const DEEP_READ_MODEL_SENTENCE_COUNT_RANGE = {
+  min: 3,
+  max: 6
+} as const;
+
+export const DEEP_READ_MODEL_PARAGRAPH_LENGTH_RANGE = {
+  min: 150,
+  max: 350
+} as const;
+
 export const DEEP_READ_ANTI_SLOP_RULES = [
   "禁用空泛转折:值得注意的是、不可否认的是、总的来说、换句话说、从某种意义上说。",
   "禁用否定对仗模板:不是 X 而是 Y、既不是 X 也不是 Y 而是 Z。",
@@ -23,6 +49,9 @@ export const DEEP_READ_BANNED_PHRASES = [
   "值得注意的是",
   "不可否认的是",
   "总的来说",
+  "总而言之",
+  "总结来说",
+  "综上所述",
   "换句话说",
   "从某种意义上说",
   "notably",
