@@ -10,6 +10,7 @@ import type { SourceImportWorker, SourceImportWorkerResult } from "../source/sou
 import type {
   AgentHarnessUserContext,
   ConceptBrief,
+  DeepReadArticleRecord,
   KnowledgeChunk,
   KnowledgePost,
   SourceAsset,
@@ -30,6 +31,7 @@ export interface BackgroundCurationJobResult {
   };
   followupProtocol?: FollowupGenerationProtocol;
   conceptBrief?: ConceptBrief;
+  deepReadArticle?: DeepReadArticleRecord;
 }
 
 export interface BackgroundCurationJobRecord {
@@ -90,6 +92,7 @@ export interface BackgroundCurationExecutionHandlers {
   researchQuestion?: (job: BackgroundCurationJob) => Promise<BackgroundCurationJobResult> | BackgroundCurationJobResult;
   researchIdea?: (job: BackgroundCurationJob) => Promise<BackgroundCurationJobResult> | BackgroundCurationJobResult;
   conceptBrief?: (job: BackgroundCurationJob) => Promise<BackgroundCurationJobResult> | BackgroundCurationJobResult;
+  deepReadArticle?: (job: BackgroundCurationJob) => Promise<BackgroundCurationJobResult> | BackgroundCurationJobResult;
 }
 
 export interface RunBackgroundCurationJobsOptions {
@@ -299,6 +302,12 @@ async function runJob(
     return handlers.conceptBrief
       ? handlers.conceptBrief(job)
       : skippedResult(job, "concept brief handler is not configured.");
+  }
+
+  if (job.kind === "deep_read_article") {
+    return handlers.deepReadArticle
+      ? handlers.deepReadArticle(job)
+      : skippedResult(job, "deep-read article handler is not configured.");
   }
 
   if (job.kind === "schedule_review") {

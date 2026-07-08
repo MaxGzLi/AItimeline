@@ -6,6 +6,14 @@ import { join } from "node:path";
 const { applyDailyAutoJobBudget, createBackgroundCurationPlan } = await import("../packages/core/dist/agents/backgroundCuration.js");
 const { createDeterministicConceptBrief } = await import("../packages/core/dist/agents/conceptBrief.js");
 const { runConversationTurn } = await import("../packages/core/dist/agents/conversationAgent.js");
+const {
+  createDeepReadArticle,
+  createDeepReadMaterialContext,
+  createDeepReadOutlineContracts,
+  gateDeepReadChapter,
+  gateDeepReadParagraph,
+  selectDeepReadMaterials
+} = await import("../packages/core/dist/deepread/index.js");
 const { runIdeaObservation } = await import("../packages/core/dist/agents/ideaFlow.js");
 const { createStaticSearchProvider } = await import("../packages/core/dist/discovery/searchProvider.js");
 const { DISCOVERY_GEO_BAIT_TERMS, planDiscoveryQueries, runSourceDiscovery, screenDiscoveredSources } = await import(
@@ -3957,6 +3965,283 @@ assert.equal(
   shallowSkillTree.tree?.nodes[0]?.gap,
   true,
   "single-card goals with no known prerequisites should be marked as shallow gaps"
+);
+
+const deepReadSources = [
+  {
+    id: "deep-source-a",
+    title: "RAG retrieval field notes",
+    url: "https://example.com/rag-a",
+    type: "article"
+  },
+  {
+    id: "deep-source-b",
+    title: "Grounding checklist",
+    url: "https://example.com/rag-b",
+    type: "paper"
+  },
+  {
+    id: "deep-source-conflict",
+    title: "RAG step count variant",
+    url: "https://example.com/rag-conflict",
+    type: "blog"
+  },
+  {
+    id: "deep-source-bad",
+    title: "Rejected RAG roundup",
+    url: "https://example.com/rag-bad",
+    type: "blog"
+  }
+];
+const deepReadChunks = [
+  {
+    id: "deep-chunk-a",
+    sourceId: "deep-source-a",
+    content: "RAG retrieval uses 3 steps in 2024: index, retrieve, generate. AlphaSearch is the retrieval component.",
+    conceptHints: ["RAG", "Retrieval"]
+  },
+  {
+    id: "deep-chunk-b",
+    sourceId: "deep-source-b",
+    content: "RAG grounding keeps 2 independent checks in 2024: cite chunks and verify numbers.",
+    conceptHints: ["RAG", "Grounding"]
+  },
+  {
+    id: "deep-chunk-conflict",
+    sourceId: "deep-source-conflict",
+    content: "RAG retrieval uses 4 steps in 2024: index, retrieve, rerank, generate.",
+    conceptHints: ["RAG", "Retrieval"]
+  },
+  {
+    id: "deep-chunk-bad",
+    sourceId: "deep-source-bad",
+    content: "RAG magically solves every knowledge problem without evidence.",
+    conceptHints: ["RAG"]
+  }
+];
+const deepReadRegistry = {
+  sources: deepReadSources,
+  assets: [],
+  snapshots: [],
+  chunks: deepReadChunks,
+  chunkVersions: []
+};
+const deepReadCards = [
+  {
+    ...makeSmokePost({
+      id: "deep-card-a",
+      title: "RAG retrieval",
+      concepts: ["RAG", "Retrieval"],
+      graphEdges: [
+        {
+          id: "deep-edge-retrieval",
+          sourceConcept: "RAG",
+          relation: "requires",
+          targetConcept: "Retrieval",
+          evidence: "RAG requires retrieval.",
+          weight: 0.9
+        },
+        {
+          id: "deep-edge-evaluation",
+          sourceConcept: "RAG",
+          relation: "requires",
+          targetConcept: "Evaluation",
+          evidence: "RAG requires evaluation.",
+          weight: 0.8
+        }
+      ]
+    }),
+    sources: [deepReadSources[0]],
+    citations: [{ sourceId: "deep-source-a", chunkId: "deep-chunk-a" }],
+    confidence: "high",
+    trustState: "supported"
+  },
+  {
+    ...makeSmokePost({
+      id: "deep-card-b",
+      title: "RAG grounding",
+      concepts: ["RAG", "Grounding"],
+      graphEdges: [
+        {
+          id: "deep-edge-grounding",
+          sourceConcept: "RAG",
+          relation: "requires",
+          targetConcept: "Grounding",
+          evidence: "RAG requires grounding checks.",
+          weight: 0.8
+        }
+      ]
+    }),
+    sources: [deepReadSources[1]],
+    citations: [{ sourceId: "deep-source-b", chunkId: "deep-chunk-b" }],
+    confidence: "high",
+    trustState: "supported"
+  },
+  {
+    ...makeSmokePost({
+      id: "deep-card-conflict",
+      title: "RAG step variant",
+      concepts: ["RAG", "Retrieval"]
+    }),
+    sources: [deepReadSources[2]],
+    citations: [{ sourceId: "deep-source-conflict", chunkId: "deep-chunk-conflict" }],
+    confidence: "medium",
+    trustState: "contested"
+  },
+  {
+    ...makeSmokePost({
+      id: "deep-card-bad",
+      title: "Rejected RAG roundup",
+      concepts: ["RAG"]
+    }),
+    sources: [deepReadSources[3]],
+    citations: [{ sourceId: "deep-source-bad", chunkId: "deep-chunk-bad" }],
+    confidence: "low",
+    trustState: "emerging"
+  }
+];
+const deepReadInput = {
+  topic: "RAG",
+  userId: "local-user",
+  cards: deepReadCards,
+  sourceRegistries: [
+    {
+      id: "deep-registry",
+      sourceId: "deep-source-a",
+      registry: deepReadRegistry,
+      createdAt: "2026-07-08T00:00:00.000Z"
+    }
+  ],
+  sourceQualityVerdicts: [
+    {
+      url: "https://example.com/rag-bad",
+      sourceId: "deep-source-bad",
+      sourceTitle: "Rejected RAG roundup",
+      score: 0.1,
+      verdict: "reject",
+      reasons: ["unsupported claims"],
+      runnerKind: "deterministic",
+      evaluatedAt: "2026-07-08T00:00:00.000Z"
+    }
+  ],
+  knownConcepts: ["Retrieval"],
+  libraryVersion: "2026-07-08T00:00:00.000Z",
+  contentLanguage: "zh"
+};
+const deepSelection = selectDeepReadMaterials(deepReadInput);
+
+assert.ok(deepSelection.materials.length >= 3, "deep-read selection should admit qualified closure materials");
+assert.ok(
+  deepSelection.discardedMaterials.some((item) => item.cardId === "deep-card-bad"),
+  "deep-read selection should record rejected material in the discard list"
+);
+assert.ok(deepSelection.conflicts.length >= 1, "deep-read conflict precheck should catch changed numeric facts");
+
+const deepOutline = await createDeepReadOutlineContracts(deepSelection, { contentLanguage: "zh" });
+
+assert.ok(deepOutline.contracts.length >= 2, "deep-read outline should produce chapter contracts");
+assert.ok(
+  deepOutline.contracts.some((contract) => contract.materialPointers.length > 0 && contract.keyFacts.length > 0),
+  "deep-read chapter contracts should include material pointers and key facts"
+);
+assert.ok(
+  deepOutline.contracts.some((contract) => contract.materialPointers.length === 0 && contract.gapStatement),
+  "deep-read outline should turn no-material nodes into gap chapters"
+);
+
+const deepContext = createDeepReadMaterialContext(deepSelection.materials);
+const firstContractWithMaterial = deepOutline.contracts.find((contract) => contract.materialPointers.length > 0);
+
+assert.ok(firstContractWithMaterial, "deep-read fixture should have a material-backed contract");
+
+const danglingCitationReport = await gateDeepReadParagraph(
+  {
+    id: "dangling",
+    kind: "fact",
+    text: "Source chunk states: RAG retrieval uses 3 steps in 2024.",
+    citations: [{ sourceId: "missing-source", chunkId: "missing-chunk" }]
+  },
+  firstContractWithMaterial,
+  deepContext,
+  { checkedAt: "2026-07-08T00:00:00.000Z" }
+);
+
+assert.equal(danglingCitationReport.passed, false, "deep-read existence gate should reject dangling citations");
+
+const changedNumberReport = await gateDeepReadParagraph(
+  {
+    id: "changed-number",
+    kind: "fact",
+    text: "Source chunk states: RAG retrieval uses 9 steps in 2024.",
+    citations: [firstContractWithMaterial.materialPointers[0]]
+  },
+  firstContractWithMaterial,
+  deepContext,
+  { checkedAt: "2026-07-08T00:00:00.000Z" }
+);
+
+assert.equal(changedNumberReport.passed, false, "deep-read key fact gate should reject altered numbers");
+
+const degradedChapter = await gateDeepReadChapter(
+  {
+    contract: firstContractWithMaterial,
+    paragraphs: [
+      {
+        id: "bad-1",
+        kind: "fact",
+        text: "值得注意的是 RAG retrieval uses 9 steps in 2024.",
+        citations: [firstContractWithMaterial.materialPointers[0]]
+      },
+      {
+        id: "bad-2",
+        kind: "fact",
+        text: "Source chunk states: RAG retrieval uses 8 steps in 2024.",
+        citations: [firstContractWithMaterial.materialPointers[0]]
+      },
+      {
+        id: "bad-3",
+        kind: "fact",
+        text: "Source chunk states: RAG retrieval uses 7 steps in 2024.",
+        citations: [firstContractWithMaterial.materialPointers[0]]
+      }
+    ]
+  },
+  deepContext,
+  { contentLanguage: "zh", now: "2026-07-08T00:00:00.000Z" }
+);
+
+assert.equal(degradedChapter.chapter.status, "gap", "deep-read chapter should degrade when more than half is deleted");
+assert.ok(
+  degradedChapter.deletedParagraphLog.length >= 2,
+  "deep-read deleted paragraph log should record removed paragraphs"
+);
+
+const fallbackArticleA = await createDeepReadArticle(deepReadInput, { now: "2026-07-08T00:00:00.000Z" });
+const fallbackArticleB = await createDeepReadArticle(deepReadInput, { now: "2026-07-08T00:00:00.000Z" });
+
+assert.equal(fallbackArticleA.runnerKind, "deterministic_fallback", "network-free smoke should use fallback article");
+assert.deepEqual(fallbackArticleA, fallbackArticleB, "deep-read fallback should be deterministic for identical input");
+assert.ok(fallbackArticleA.discardedMaterials.length > 0, "fallback article should persist discard list");
+assert.ok(
+  Array.isArray(fallbackArticleA.deletedParagraphLog),
+  "fallback article should persist deleted paragraph log field"
+);
+
+// The en fallback templates must survive the literal fact gate: template words
+// extracted as proper nouns once wiped every chapter into a gap chapter.
+const fallbackArticleEn = await createDeepReadArticle(
+  { ...deepReadInput, contentLanguage: "en" },
+  { now: "2026-07-08T00:00:00.000Z" }
+);
+
+assert.ok(
+  fallbackArticleEn.chapters.some((chapter) => chapter.status === "complete"),
+  "en deterministic fallback should keep material-backed chapters complete"
+);
+assert.equal(
+  fallbackArticleEn.deletedParagraphLog.length,
+  0,
+  "en deterministic fallback should not have paragraphs deleted by its own gates"
 );
 
 console.log(

@@ -510,6 +510,12 @@ export interface KnowledgePostAgentRunner {
 
 export type ConceptBriefRunnerKind = "deterministic" | "model";
 
+export type DeepReadArticleRunnerKind = "deterministic_fallback" | "model";
+
+export type DeepReadParagraphKind = "fact" | "synthesis";
+
+export type DeepReadChapterStatus = "complete" | "gap";
+
 export interface ConceptBriefSentence {
   id: string;
   text: string;
@@ -533,6 +539,163 @@ export interface ConceptBrief {
   sourceCardIds: string[];
   adjacentConcepts: ConceptBriefAdjacentConcept[];
   sentences: ConceptBriefSentence[];
+}
+
+export interface DeepReadMaterialPointer {
+  cardId: string;
+  sourceId: string;
+  chunkId: string;
+}
+
+export interface DeepReadKeyFact {
+  id: string;
+  kind: "number" | "date" | "version" | "proper_noun";
+  value: string;
+  normalizedValue: string;
+  fieldKey: string;
+  sourceId: string;
+  chunkId: string;
+  cardId?: string;
+}
+
+export interface DeepReadConflictPair {
+  id: string;
+  fieldKey: string;
+  kind: DeepReadKeyFact["kind"];
+  left: DeepReadKeyFact;
+  right: DeepReadKeyFact;
+}
+
+export interface DeepReadDiscardedMaterial {
+  cardId?: string;
+  sourceId?: string;
+  chunkId?: string;
+  title?: string;
+  score: number;
+  reasons: string[];
+}
+
+export interface DeepReadChapterContract {
+  id: string;
+  title: string;
+  question: string;
+  materialPointers: DeepReadMaterialPointer[];
+  keyFacts: DeepReadKeyFact[];
+  gapStatement?: string;
+  conflictInstructions: string[];
+  singleSource: boolean;
+  readerPositioning: {
+    masteredConcepts: string[];
+    gapConcepts: string[];
+  };
+}
+
+export interface DeepReadCitation {
+  sourceId: string;
+  chunkId: string;
+  cardId?: string;
+}
+
+export interface DeepReadParagraphGateReport {
+  passed: boolean;
+  issues: string[];
+  checkedAt: string;
+}
+
+export interface DeepReadParagraph {
+  id: string;
+  kind: DeepReadParagraphKind;
+  text: string;
+  citations: DeepReadCitation[];
+  gate?: DeepReadParagraphGateReport;
+}
+
+export interface DeepReadDeletedParagraphLog {
+  chapterId: string;
+  paragraphId: string;
+  kind: DeepReadParagraphKind;
+  text: string;
+  reasons: string[];
+  deletedAt: string;
+}
+
+export interface DeepReadChapterSource {
+  sourceId: string;
+  sourceTitle: string;
+  chunkIds: string[];
+  cardIds: string[];
+}
+
+export interface DeepReadChapter {
+  id: string;
+  title: string;
+  question: string;
+  status: DeepReadChapterStatus;
+  singleSource: boolean;
+  gapStatement?: string;
+  contract: DeepReadChapterContract;
+  paragraphs: DeepReadParagraph[];
+  sources: DeepReadChapterSource[];
+}
+
+export interface DeepReadArticleSource {
+  sourceId: string;
+  title: string;
+  url: string;
+  type: SourceType;
+  chunkIds: string[];
+  cardIds: string[];
+}
+
+export interface DeepReadQualityReport {
+  runnerKind: DeepReadArticleRunnerKind;
+  generatedAt: string;
+  newReaderTest: {
+    runnerKind: DeepReadArticleRunnerKind;
+    answers: Array<{
+      chapterId: string;
+      question: string;
+      answer: string;
+    }>;
+    contradictions: string[];
+    ambiguities: string[];
+  };
+  density: {
+    atomicPointCount: number;
+    characterCount: number;
+    pointsPerThousandChars: number;
+  };
+  notes: string[];
+}
+
+export interface DeepReadArticleRecord {
+  id: string;
+  version: "deep-read-article-v0";
+  status: "ready" | "failed";
+  runnerKind: DeepReadArticleRunnerKind;
+  topic: string;
+  topicKey: string;
+  goalId?: string;
+  userId: string;
+  title: string;
+  introduction: string;
+  conclusion: string;
+  chapters: DeepReadChapter[];
+  sources: DeepReadArticleSource[];
+  sourceCardIds: string[];
+  sourceChunkIds: string[];
+  discardedMaterials: DeepReadDiscardedMaterial[];
+  conflicts: DeepReadConflictPair[];
+  deletedParagraphLog: DeepReadDeletedParagraphLog[];
+  qualityReport: DeepReadQualityReport;
+  libraryVersion: string;
+  budget: {
+    maxTokens: number;
+    truncated: boolean;
+    notes: string[];
+  };
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface ConceptNode {

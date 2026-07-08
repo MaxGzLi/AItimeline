@@ -8,6 +8,7 @@ import type {
   ConceptAliasRecord,
   ConceptMergeSuggestion,
   DailyAutoJobBudgetRecord,
+  DeepReadArticleRecord,
   HarnessValidationResult,
   InteractionSignal,
   KnowledgePost,
@@ -176,6 +177,7 @@ export interface AITimelinePersistenceSnapshot {
   mergedSources: MergedSourceRecord[];
   autoJobBudget: DailyAutoJobBudgetRecord[];
   conceptBriefs: ConceptBrief[];
+  deepReadArticles: DeepReadArticleRecord[];
   weeklyRecaps: WeeklyRecapRecord[];
   subscriptions: SubscriptionRecord[];
   learningGoals: LearningGoalRecord[];
@@ -198,6 +200,7 @@ export interface AITimelinePersistenceStore {
     savedAt?: string | Date
   ): AITimelinePersistenceSnapshot;
   saveConceptBriefs(records: ConceptBrief[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
+  saveDeepReadArticles(records: DeepReadArticleRecord[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
   saveWeeklyRecaps(records: WeeklyRecapRecord[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
   saveSubscriptions(records: SubscriptionRecord[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
   deleteSubscription(id: string, savedAt?: string | Date): AITimelinePersistenceSnapshot;
@@ -344,6 +347,16 @@ export function createAITimelinePersistenceStore(
         ...snapshot,
         updatedAt: normalizeDate(savedAt).toISOString(),
         conceptBriefs: upsertConceptBriefs(snapshot.conceptBriefs, records)
+      };
+      persist(storage, snapshot);
+
+      return cloneSnapshot(snapshot);
+    },
+    saveDeepReadArticles(records, savedAt = new Date()) {
+      snapshot = {
+        ...snapshot,
+        updatedAt: normalizeDate(savedAt).toISOString(),
+        deepReadArticles: upsertDeepReadArticles(snapshot.deepReadArticles, records)
       };
       persist(storage, snapshot);
 
@@ -564,6 +577,7 @@ function createSnapshot(input: AITimelinePersistenceSnapshotInput = {}): AITimel
     mergedSources: normalizeMergedSourceRecords(input.mergedSources ?? []),
     autoJobBudget: normalizeDailyAutoJobBudgetRecords(input.autoJobBudget ?? []),
     conceptBriefs: normalizeConceptBriefs(input.conceptBriefs ?? []),
+    deepReadArticles: normalizeDeepReadArticles(input.deepReadArticles ?? []),
     weeklyRecaps: normalizeWeeklyRecaps(input.weeklyRecaps ?? []),
     subscriptions: normalizeSubscriptions(input.subscriptions ?? []),
     learningGoals: normalizeLearningGoals(input.learningGoals ?? [])
@@ -1153,6 +1167,88 @@ function normalizeLearningGoalStatus(value: unknown): LearningGoalRecord["status
   return value === "achieved" || value === "archived" ? value : "active";
 }
 
+function normalizeDeepReadArticles(value: unknown): DeepReadArticleRecord[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const byId = new Map<string, DeepReadArticleRecord>();
+
+  for (const record of value) {
+    if (
+      !isRecord(record) ||
+      typeof record.id !== "string" ||
+      typeof record.topic !== "string" ||
+      typeof record.createdAt !== "string"
+    ) {
+      continue;
+    }
+
+    const id = record.id.trim();
+
+    if (!id) {
+      continue;
+    }
+
+    const createdAt = record.createdAt;
+    const updatedAt = typeof record.updatedAt === "string" ? record.updatedAt : createdAt;
+
+    byId.set(id, {
+      ...(record as unknown as DeepReadArticleRecord),
+      id,
+      version: record.version === "deep-read-article-v0" ? record.version : "deep-read-article-v0",
+      status: record.status === "failed" ? "failed" : "ready",
+      runnerKind: record.runnerKind === "model" ? "model" : "deterministic_fallback",
+      userId: typeof record.userId === "string" && record.userId.trim() ? record.userId : "local-user",
+      topic: record.topic.trim(),
+      topicKey:
+        typeof record.topicKey === "string" && record.topicKey.trim()
+          ? record.topicKey
+          : normalizeConceptKey(record.topic),
+      title: typeof record.title === "string" && record.title.trim() ? record.title : record.topic.trim(),
+      introduction: typeof record.introduction === "string" ? record.introduction : "",
+      conclusion: typeof record.conclusion === "string" ? record.conclusion : "",
+      chapters: Array.isArray(record.chapters) ? (record.chapters as DeepReadArticleRecord["chapters"]) : [],
+      sources: Array.isArray(record.sources) ? (record.sources as DeepReadArticleRecord["sources"]) : [],
+      sourceCardIds: normalizeStringArray(record.sourceCardIds),
+      sourceChunkIds: normalizeStringArray(record.sourceChunkIds),
+      discardedMaterials: Array.isArray(record.discardedMaterials)
+        ? (record.discardedMaterials as DeepReadArticleRecord["discardedMaterials"])
+        : [],
+      conflicts: Array.isArray(record.conflicts) ? (record.conflicts as DeepReadArticleRecord["conflicts"]) : [],
+      deletedParagraphLog: Array.isArray(record.deletedParagraphLog)
+        ? (record.deletedParagraphLog as DeepReadArticleRecord["deletedParagraphLog"])
+        : [],
+      qualityReport: isRecord(record.qualityReport)
+        ? (record.qualityReport as unknown as DeepReadArticleRecord["qualityReport"])
+        : {
+            runnerKind: "deterministic_fallback",
+            generatedAt: createdAt,
+            newReaderTest: {
+              runnerKind: "deterministic_fallback",
+              answers: [],
+              contradictions: [],
+              ambiguities: []
+            },
+            density: {
+              atomicPointCount: 0,
+              characterCount: 0,
+              pointsPerThousandChars: 0
+            },
+            notes: []
+          },
+      libraryVersion: typeof record.libraryVersion === "string" ? record.libraryVersion : updatedAt,
+      budget: isRecord(record.budget)
+        ? (record.budget as unknown as DeepReadArticleRecord["budget"])
+        : { maxTokens: 100000, truncated: false, notes: [] },
+      createdAt,
+      updatedAt
+    });
+  }
+
+  return Array.from(byId.values()).sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+}
+
 function normalizeSourceCandidateRecords(value: unknown): SourceCandidateRecord[] {
   if (!Array.isArray(value)) {
     return [];
@@ -1456,6 +1552,13 @@ function upsertConceptBriefs(items: ConceptBrief[], nextItems: ConceptBrief[]): 
   }
 
   return Array.from(byConcept.values()).sort((left, right) => left.concept.localeCompare(right.concept));
+}
+
+function upsertDeepReadArticles(
+  items: DeepReadArticleRecord[],
+  nextItems: DeepReadArticleRecord[]
+): DeepReadArticleRecord[] {
+  return normalizeDeepReadArticles(upsertManyById(items, nextItems));
 }
 
 function upsertWeeklyRecaps(items: WeeklyRecapRecord[], nextItems: WeeklyRecapRecord[]): WeeklyRecapRecord[] {

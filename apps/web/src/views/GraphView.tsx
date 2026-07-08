@@ -5,7 +5,7 @@ import type {
   KnowledgeCard,
   LinkedKnowledgeGraph
 } from "@aitimeline/core";
-import { AlertTriangle, Archive, CheckCircle2, Download, Pause, Play, RotateCcw, Target, X } from "lucide-react";
+import { AlertTriangle, Archive, BookOpen, CheckCircle2, Download, Loader2, Pause, Play, RotateCcw, Target, X } from "lucide-react";
 import { Fragment, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { GraphReplayCanvas } from "../components/GraphReplayCanvas";
 import { LinkedGraphCanvas, type LinkedGraphLayout } from "../components/LinkedGraphCanvas";
@@ -20,7 +20,7 @@ import {
 } from "../lib/graphTimeline";
 import { t } from "../lib/i18n";
 import { downloadDataUrl, renderElementToPng } from "../lib/shareImage";
-import type { LearningGoalWithTree, SkillTreeView } from "../lib/types";
+import type { DeepReadArticleRecord, LearningGoalWithTree, SkillTreeView } from "../lib/types";
 
 const zones: Array<{
   key: keyof Pick<KnowledgeBoundaryView, "inside" | "learning" | "frontier">;
@@ -46,9 +46,14 @@ export function GraphView({
   isSavingLearningGoal,
   learningGoalMessage,
   learningGoals,
+  deepReadArticles,
+  deepReadGeneratingGoalId,
+  deepReadMessage,
   linkedGraph,
   onArchiveLearningGoal,
   onCreateLearningGoal,
+  onGenerateDeepRead,
+  onOpenDeepRead,
   onOpenCardId,
   onOpenConcept,
   onResolveConceptSuggestion
@@ -63,9 +68,14 @@ export function GraphView({
   isSavingLearningGoal: boolean;
   learningGoalMessage: string;
   learningGoals: LearningGoalWithTree[];
+  deepReadArticles: DeepReadArticleRecord[];
+  deepReadGeneratingGoalId: string | null;
+  deepReadMessage: string;
   linkedGraph: LinkedKnowledgeGraph;
   onArchiveLearningGoal: (id: string) => Promise<void>;
   onCreateLearningGoal: (concept: string) => Promise<void>;
+  onGenerateDeepRead: (goal: LearningGoalWithTree) => Promise<void>;
+  onOpenDeepRead: (articleId: string) => void;
   onOpenCardId: (cardId: string) => void;
   onOpenConcept: (concept: string) => void;
   onResolveConceptSuggestion: (suggestion: ConceptMergeSuggestion, decision: "merge" | "separate") => Promise<void>;
@@ -404,9 +414,14 @@ export function GraphView({
           goalConcept={goalConcept}
           isSaving={isSavingLearningGoal}
           message={learningGoalMessage}
+          deepReadArticles={deepReadArticles}
+          deepReadGeneratingGoalId={deepReadGeneratingGoalId}
+          deepReadMessage={deepReadMessage}
           onArchiveLearningGoal={onArchiveLearningGoal}
+          onGenerateDeepRead={onGenerateDeepRead}
           onGoalConceptChange={setGoalConcept}
           onGoalSubmit={handleGoalSubmit}
+          onOpenDeepRead={onOpenDeepRead}
           onOpenConcept={onOpenConcept}
           onSelectGoal={setSelectedGoalId}
           selectedGoal={selectedGoal}
@@ -422,9 +437,14 @@ function SkillTreeGoalPanel({
   goalConcept,
   isSaving,
   message,
+  deepReadArticles,
+  deepReadGeneratingGoalId,
+  deepReadMessage,
   onArchiveLearningGoal,
+  onGenerateDeepRead,
   onGoalConceptChange,
   onGoalSubmit,
+  onOpenDeepRead,
   onOpenConcept,
   onSelectGoal,
   selectedGoal
@@ -434,9 +454,14 @@ function SkillTreeGoalPanel({
   goalConcept: string;
   isSaving: boolean;
   message: string;
+  deepReadArticles: DeepReadArticleRecord[];
+  deepReadGeneratingGoalId: string | null;
+  deepReadMessage: string;
   onArchiveLearningGoal: (id: string) => Promise<void>;
+  onGenerateDeepRead: (goal: LearningGoalWithTree) => Promise<void>;
   onGoalConceptChange: (value: string) => void;
   onGoalSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onOpenDeepRead: (articleId: string) => void;
   onOpenConcept: (concept: string) => void;
   onSelectGoal: (id: string) => void;
   selectedGoal: LearningGoalWithTree | null;
@@ -468,35 +493,58 @@ function SkillTreeGoalPanel({
         </button>
       </form>
       {message ? <p className="x-goal-message">{message}</p> : null}
+      {deepReadMessage ? <p className="x-goal-message">{deepReadMessage}</p> : null}
 
       {activeGoals.length ? (
         <div className="x-goal-list" role="list" aria-label={t("goals.activeLabel")}>
-          {activeGoals.map((goal) => (
-            <div className={`x-goal-row${selectedGoal?.id === goal.id ? " active" : ""}`} key={goal.id} role="listitem">
-              <button
-                aria-pressed={selectedGoal?.id === goal.id}
-                className="x-goal-pick"
-                onClick={() => onSelectGoal(goal.id)}
-                type="button"
-              >
-                <span>
-                  <strong>#{goal.concept}</strong>
-                  <em>{formatGoalProgress(goal)}</em>
-                </span>
-              </button>
-              <button
-                aria-label={t("goals.archive")}
-                className="x-iconbtn"
-                onClick={() => {
-                  void onArchiveLearningGoal(goal.id);
-                }}
-                title={t("goals.archive")}
-                type="button"
-              >
-                <Archive size={15} />
-              </button>
-            </div>
-          ))}
+          {activeGoals.map((goal) => {
+            const article = findLatestDeepReadArticleForGoal(goal, deepReadArticles);
+            const isGenerating = deepReadGeneratingGoalId === goal.id;
+
+            return (
+              <div className={`x-goal-row${selectedGoal?.id === goal.id ? " active" : ""}`} key={goal.id} role="listitem">
+                <button
+                  aria-pressed={selectedGoal?.id === goal.id}
+                  className="x-goal-pick"
+                  onClick={() => onSelectGoal(goal.id)}
+                  type="button"
+                >
+                  <span>
+                    <strong>#{goal.concept}</strong>
+                    <em>{formatGoalProgress(goal)}</em>
+                  </span>
+                </button>
+                <button
+                  aria-label={article ? t("deepread.open") : t("deepread.generate")}
+                  className="x-iconbtn"
+                  disabled={isGenerating}
+                  onClick={() => {
+                    if (article) {
+                      onOpenDeepRead(article.id);
+                      return;
+                    }
+
+                    void onGenerateDeepRead(goal);
+                  }}
+                  title={article ? t("deepread.open") : t("deepread.generate")}
+                  type="button"
+                >
+                  {isGenerating ? <Loader2 className="x-spin" size={15} /> : <BookOpen size={15} />}
+                </button>
+                <button
+                  aria-label={t("goals.archive")}
+                  className="x-iconbtn"
+                  onClick={() => {
+                    void onArchiveLearningGoal(goal.id);
+                  }}
+                  title={t("goals.archive")}
+                  type="button"
+                >
+                  <Archive size={15} />
+                </button>
+              </div>
+            );
+          })}
         </div>
       ) : (
         <p className="x-empty">{t("goals.empty")}</p>
@@ -593,6 +641,17 @@ function formatGoalProgress(goal: LearningGoalWithTree): string {
   const progress = goal.tree?.progress;
 
   return progress ? t("goals.progress", { mastered: progress.mastered, total: progress.total }) : t("goals.pending");
+}
+
+function findLatestDeepReadArticleForGoal(
+  goal: LearningGoalWithTree,
+  articles: DeepReadArticleRecord[]
+): DeepReadArticleRecord | undefined {
+  const goalKey = goal.tree?.goalId ?? normalizeGoalInput(goal.concept).toLowerCase();
+
+  return articles
+    .filter((article) => article.goalId === goal.id || article.topicKey === goalKey || article.topic === goal.concept)
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
 }
 
 function normalizeGoalInput(value: string): string {

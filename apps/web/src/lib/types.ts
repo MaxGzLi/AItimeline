@@ -5,6 +5,7 @@ import type {
   ConceptAliasRecord,
   ConceptMergeSuggestion,
   DailyAutoJobBudgetRecord,
+  DeepReadArticleRecord,
   InteractionSignal,
   KnowledgeCard,
   KnowledgeChunk,
@@ -27,6 +28,7 @@ import type {
 
 export type { DailyAutoJobBudgetRecord };
 export type { ConceptBrief };
+export type { DeepReadArticleRecord };
 export type { SubscriptionRecord };
 export type { LearningGoalRecord };
 export type { SkillTreeView };
@@ -146,6 +148,7 @@ export type ApiSnapshot = {
   mergedSources?: MergedSourceRecord[];
   autoJobBudget?: DailyAutoJobBudgetRecord[];
   conceptBriefs?: ConceptBrief[];
+  deepReadArticles?: DeepReadArticleRecord[];
   subscriptions?: SubscriptionRecord[];
   learningGoals?: LearningGoalRecord[];
   userMemories?: Array<{ userId: string; memory: UserMemory; updatedAt?: string }>;
@@ -167,6 +170,15 @@ export type ApiConceptBriefResponse = {
   brief: ConceptBrief;
   queued: boolean;
   records: Array<{ id: string; status: string }>;
+};
+
+export type ApiDeepReadListResponse = {
+  records: DeepReadArticleRecord[];
+};
+
+export type ApiDeepReadQueueResponse = {
+  queued: boolean;
+  records: Array<{ id: string; status: string; job?: { kind: string; topicId: string } }>;
 };
 
 export type ApiSettings = {
@@ -250,6 +262,7 @@ export type ApiCurationRunResponse = {
     status: string;
     result?: {
       sourceImport?: ApiImportResponse;
+      deepReadArticle?: DeepReadArticleRecord;
     };
   }>;
   supplyRefill?: ApiSupplyRefillResponse;

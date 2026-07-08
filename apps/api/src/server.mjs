@@ -22,6 +22,7 @@ import {
   DISCOVERY_AGGREGATE_DOMAINS,
   createConceptMergeSuggestion,
   createConnectionNoteForImport,
+  createDeepReadArticle,
   createEmptyUserMemory,
   createInitialReviewState,
   createOpenAICompatibleModelClientFromEnv,
@@ -89,6 +90,7 @@ export function createApiServer(options = {}) {
   const sourceImportWorker = createConfiguredSourceImportWorker(process.env);
   const importRunner = sourceImportWorker.runner;
   const askModelClient = createConfiguredAskModelClient(process.env);
+  const deepReadModelClients = createConfiguredDeepReadModelClients(process.env);
   const searchProvider = options.searchProvider ?? createConfiguredSearchProvider(process.env);
   const feedFetch = options.feedFetch ?? globalThis.fetch;
 
@@ -224,6 +226,46 @@ export function createApiServer(options = {}) {
           id: goalId,
           snapshotSummary: summarizeSnapshot(nextSnapshot)
         });
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/deepread") {
+        const snapshot = persistenceStore.getSnapshot();
+        const topic = url.searchParams.get("topic");
+        const topicKey = topic ? normalizeConceptKey(topic) : "";
+        const goalId = url.searchParams.get("goalId");
+        const records = snapshot.deepReadArticles
+          .filter((record) => !topicKey || normalizeConceptKey(record.topic) === topicKey || record.topicKey === topicKey)
+          .filter((record) => !goalId || record.goalId === goalId);
+
+        sendJson(response, 200, { records });
+        return;
+      }
+
+      if (request.method === "GET" && /^\/api\/deepread\/[^/]+$/.test(url.pathname)) {
+        const articleId = decodeURIComponent(url.pathname.replace(/^\/api\/deepread\//, ""));
+        const record = persistenceStore.getSnapshot().deepReadArticles.find((item) => item.id === articleId);
+
+        if (!record) {
+          sendJson(response, 404, { error: "Deep-read article not found." });
+          return;
+        }
+
+        sendJson(response, 200, { record });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/deepread") {
+        const body = await readJsonBody(request);
+        const result = handleDeepReadRequest({
+          body,
+          persistenceStore,
+          curationStore,
+          contentLanguage: resolveContentLanguage(persistenceStore, process.env),
+          now: typeof body.now === "string" ? body.now : new Date().toISOString()
+        });
+
+        sendJson(response, 200, result);
         return;
       }
 
@@ -799,21 +841,34 @@ export function createApiServer(options = {}) {
         const body = await readJsonBody(request);
         const contentLanguage = resolveContentLanguage(persistenceStore, process.env);
         const runNow = body.now ?? new Date().toISOString();
-        const goalProductionGuarantee = queueDailyLearningGoalProductionGuarantee({
-          persistenceStore,
-          curationStore,
-          userId: typeof body.userId === "string" && body.userId.trim() ? body.userId : "local-user",
-          contentLanguage,
-          now: runNow
-        });
-        const subscriptionPolling = await pollDueSubscriptions({
-          persistenceStore,
-          curationStore,
-          fetchImpl: feedFetch,
-          contentLanguage,
-          now: runNow
-        });
         const runKinds = Array.isArray(body.kinds) ? body.kinds : undefined;
+        const deepReadOnlyRun =
+          Array.isArray(runKinds) && runKinds.length > 0 && runKinds.every((kind) => kind === "deep_read_article");
+        const goalProductionGuarantee = deepReadOnlyRun
+          ? {
+              snapshot: persistenceStore.getSnapshot(),
+              queued: false,
+              records: [],
+              budget: getDailyAutoJobBudgetRecord(persistenceStore.getSnapshot(), runNow),
+              discardedJobIds: [],
+              skippedConcepts: []
+            }
+          : queueDailyLearningGoalProductionGuarantee({
+              persistenceStore,
+              curationStore,
+              userId: typeof body.userId === "string" && body.userId.trim() ? body.userId : "local-user",
+              contentLanguage,
+              now: runNow
+            });
+        const subscriptionPolling = deepReadOnlyRun
+          ? { checked: 0, skipped: 0, queued: 0, pending: 0, errors: [] }
+          : await pollDueSubscriptions({
+              persistenceStore,
+              curationStore,
+              fetchImpl: feedFetch,
+              contentLanguage,
+              now: runNow
+            });
         const shouldRefillForDrought = !runKinds || runKinds.includes("import_source");
         const supplyStatus = getSupplyStatus(persistenceStore.getSnapshot(), curationStore, runNow);
         const droughtNotification = maybeCreateSupplyDroughtNotification({
@@ -866,6 +921,14 @@ export function createApiServer(options = {}) {
                 job,
                 persistenceStore,
                 askModelClient,
+                contentLanguage,
+                runNow
+              ),
+            deepReadArticle: (job) =>
+              handleDeepReadArticleJob(
+                job,
+                persistenceStore,
+                deepReadModelClients,
                 contentLanguage,
                 runNow
               ),
@@ -950,6 +1013,11 @@ export function createApiServer(options = {}) {
           if (record.result?.conceptBrief) {
             const completedAt = record.completedAt ?? filteredBatch.completedAt;
             snapshot = persistenceStore.saveConceptBriefs([record.result.conceptBrief], completedAt);
+          }
+
+          if (record.result?.deepReadArticle) {
+            const completedAt = record.completedAt ?? filteredBatch.completedAt;
+            snapshot = persistenceStore.saveDeepReadArticles([record.result.deepReadArticle], completedAt);
           }
         }
 
@@ -1849,6 +1917,47 @@ function createConfiguredAskModelClient(env) {
   const modelName = env.AITIMELINE_MODEL_NAME ?? env.OPENAI_MODEL;
 
   return modelName ? createOpenAICompatibleModelClientFromEnv(env) : undefined;
+}
+
+function createConfiguredDeepReadModelClients(env) {
+  const deepReadModelName = env.AITIMELINE_MODEL_DEEPREAD_NAME;
+  const defaultModelName = env.AITIMELINE_MODEL_NAME ?? env.OPENAI_MODEL;
+  // Per-request output cap and whole-article token budget are different numbers:
+  // passing the 50k-150k article budget as request max_tokens would make every
+  // call fail on providers with lower output limits.
+  const requestMaxTokens = Number.parseInt(env.AITIMELINE_MODEL_DEEPREAD_MAX_TOKENS ?? "", 10);
+  const articleTokenBudget = getDeepReadArticleTokenBudget(env);
+  const defaultClient = defaultModelName ? createOpenAICompatibleModelClientFromEnv(env) : undefined;
+  const deepReadClient = deepReadModelName
+    ? createOpenAICompatibleModelClientFromEnv(env, {
+        model: deepReadModelName,
+        apiKey: env.AITIMELINE_MODEL_DEEPREAD_API_KEY ?? env.AITIMELINE_MODEL_API_KEY ?? env.OPENAI_API_KEY,
+        baseUrl: env.AITIMELINE_MODEL_DEEPREAD_BASE_URL ?? env.AITIMELINE_MODEL_BASE_URL ?? env.OPENAI_BASE_URL,
+        ...(Number.isFinite(requestMaxTokens) ? { maxTokens: requestMaxTokens } : {})
+      })
+    : undefined;
+
+  if (deepReadClient) {
+    console.log(`[aitimeline] deep-read articles using model runner (${deepReadModelName}).`);
+  } else if (defaultClient) {
+    console.log(`[aitimeline] deep-read articles falling back to default model runner (${defaultModelName}).`);
+  }
+
+  return {
+    deepReadClient,
+    defaultClient,
+    maxTokens: articleTokenBudget
+  };
+}
+
+function getDeepReadArticleTokenBudget(env) {
+  const parsed = Number.parseInt(env.AITIMELINE_DEEPREAD_ARTICLE_TOKEN_BUDGET ?? "", 10);
+
+  if (!Number.isFinite(parsed)) {
+    return 100000;
+  }
+
+  return Math.max(50000, Math.min(150000, parsed));
 }
 
 async function handleAgentAsk(body, userId, persistenceStore, client, searchProvider, contentLanguage) {
@@ -4434,6 +4543,162 @@ function handleConceptBriefRequest(concept, body, persistenceStore, curationStor
   };
 }
 
+function handleDeepReadRequest({ body, persistenceStore, curationStore, contentLanguage, now }) {
+  if (!body || typeof body !== "object") {
+    throw new HttpError(400, "Request body must be an object.");
+  }
+
+  const snapshot = persistenceStore.getSnapshot();
+  const userId = typeof body.userId === "string" && body.userId.trim() ? body.userId.trim() : "local-user";
+  const goalId = typeof body.goalId === "string" && body.goalId.trim() ? body.goalId.trim() : undefined;
+  const goal = goalId ? snapshot.learningGoals.find((record) => record.id === goalId) : undefined;
+  const topic = normalizeDeepReadTopic(typeof body.topic === "string" ? body.topic : goal?.concept);
+
+  if (!topic) {
+    throw new HttpError(400, "topic or goalId is required.");
+  }
+
+  if (goalId && !goal) {
+    throw new HttpError(404, "Learning goal not found.");
+  }
+
+  const nowIso = normalizeIsoDate(now);
+  const date = nowIso.slice(0, 10);
+  const existingForDay = findDeepReadForDay(snapshot, curationStore, userId, date);
+
+  if (existingForDay) {
+    throw new HttpError(429, "Deep-read article generation is limited to one article per day.");
+  }
+
+  const activeJob = curationStore
+    .list()
+    .find(
+      (record) =>
+        (record.status === "queued" || record.status === "running") &&
+        record.job.kind === "deep_read_article" &&
+        normalizeConceptKey(record.job.topicId) === normalizeConceptKey(topic)
+    );
+
+  if (activeJob) {
+    return {
+      queued: true,
+      records: [activeJob],
+      snapshotSummary: summarizeSnapshot(snapshot)
+    };
+  }
+
+  // Same-day retries need a distinct job id: enqueuePlan returns an existing
+  // record on id collision (including failed ones) without re-queueing it.
+  const failedAttempts = curationStore
+    .list()
+    .filter(
+      (record) =>
+        record.job.kind === "deep_read_article" &&
+        record.status === "failed" &&
+        record.job.deepReadArticle?.userId === userId &&
+        normalizeConceptKey(record.job.topicId) === normalizeConceptKey(topic) &&
+        [record.createdAt, record.updatedAt, record.completedAt].some((value) => value?.slice(0, 10) === date)
+    ).length;
+  const job = createDeepReadArticleJob({
+    topic,
+    goalId,
+    userId,
+    contentLanguage,
+    now: nowIso,
+    attempt: failedAttempts
+  });
+  const records = curationStore.enqueuePlan(createSingleJobPlan(job, nowIso), nowIso);
+  const nextSnapshot = persistenceStore.saveCurationJobRecords(records, nowIso);
+
+  return {
+    queued: records.length > 0,
+    records,
+    snapshotSummary: summarizeSnapshot(nextSnapshot)
+  };
+}
+
+async function handleDeepReadArticleJob(job, persistenceStore, modelClients, contentLanguage, now) {
+  const snapshot = persistenceStore.getSnapshot();
+  const userId = job.deepReadArticle?.userId ?? "local-user";
+  const memory = getSnapshotUserMemory(snapshot, userId);
+  const topic = normalizeDeepReadTopic(job.topicId || job.conceptIds?.[0]);
+
+  if (!topic) {
+    return {
+      kind: job.kind,
+      message: "Skipped: deep-read article job is missing a topic."
+    };
+  }
+
+  const article = await createDeepReadArticle(
+    {
+      topic,
+      goalId: job.deepReadArticle?.goalId,
+      userId,
+      cards: snapshot.posts,
+      sourceRegistries: snapshot.sourceRegistries,
+      conceptAliases: snapshot.conceptAliases,
+      sourceQualityVerdicts: snapshot.sourceQualityVerdicts,
+      knownConcepts: memory.knowledge.knownConcepts,
+      libraryVersion: snapshot.updatedAt,
+      contentLanguage: job.deepReadArticle?.contentLanguage ?? contentLanguage,
+      maxTokens: modelClients.maxTokens
+    },
+    {
+      deepReadClient: modelClients.deepReadClient,
+      defaultClient: modelClients.defaultClient,
+      now
+    }
+  );
+
+  return {
+    kind: job.kind,
+    deepReadArticle: article,
+    message: `Generated deep-read article for ${article.topic}.`
+  };
+}
+
+function createDeepReadArticleJob({ topic, goalId, userId, contentLanguage, now, attempt = 0 }) {
+  const date = now.slice(0, 10);
+  const attemptSuffix = attempt > 0 ? `|retry-${attempt}` : "";
+
+  return {
+    id: `deep-read-${hashText(`${userId}|${normalizeConceptKey(topic)}|${date}${attemptSuffix}`)}`,
+    kind: "deep_read_article",
+    topicId: topic,
+    conceptIds: [topic],
+    priority: 0.7,
+    reason: `Generate a sourced deep-read article for ${topic}.`,
+    createdAt: now,
+    runAfter: now,
+    deepReadArticle: {
+      userId,
+      goalId,
+      contentLanguage
+    }
+  };
+}
+
+function findDeepReadForDay(snapshot, curationStore, userId, date) {
+  if (snapshot.deepReadArticles.some((record) => record.userId === userId && record.createdAt.slice(0, 10) === date)) {
+    return true;
+  }
+
+  return curationStore
+    .list()
+    .some(
+      (record) =>
+        record.job.kind === "deep_read_article" &&
+        record.status !== "failed" &&
+        record.job.deepReadArticle?.userId === userId &&
+        [record.createdAt, record.updatedAt, record.completedAt].some((value) => value?.slice(0, 10) === date)
+    );
+}
+
+function normalizeDeepReadTopic(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
 async function handleConceptBriefJob(job, persistenceStore, client, contentLanguage, now) {
   const concept = job.conceptIds[0] ?? job.topicId;
   const snapshot = persistenceStore.getSnapshot();
@@ -5129,6 +5394,7 @@ function summarizeSnapshot(snapshot) {
     mergedSources: snapshot.mergedSources.length,
     autoJobBudget: snapshot.autoJobBudget,
     conceptBriefs: snapshot.conceptBriefs.length,
+    deepReadArticles: snapshot.deepReadArticles.length,
     weeklyRecaps: snapshot.weeklyRecaps.length,
     subscriptions: snapshot.subscriptions.length,
     learningGoals: snapshot.learningGoals.length

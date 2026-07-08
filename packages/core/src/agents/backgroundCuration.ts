@@ -13,6 +13,7 @@ import type {
 
 export type BackgroundCurationJobKind =
   | "generate_followup"
+  | "deep_read_article"
   | "concept_brief"
   | "discover_sources"
   | "research_question"
@@ -48,6 +49,7 @@ export interface BackgroundCurationJob {
   sourceCandidate?: BackgroundSourceCandidate;
   researchQuestion?: BackgroundResearchQuestion;
   researchIdea?: BackgroundResearchIdea;
+  deepReadArticle?: BackgroundDeepReadArticleJob;
 }
 
 export interface BackgroundResearchQuestion {
@@ -67,6 +69,12 @@ export interface BackgroundResearchIdea {
   ideaPostId?: string;
   supportQueries: string[];
   challengeQueries: string[];
+  contentLanguage?: ContentLanguage;
+}
+
+export interface BackgroundDeepReadArticleJob {
+  userId: string;
+  goalId?: string;
   contentLanguage?: ContentLanguage;
 }
 
