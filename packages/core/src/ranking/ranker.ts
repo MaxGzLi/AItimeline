@@ -7,6 +7,7 @@ import type {
   UserMemory,
   UserProfile
 } from "../types.js";
+import type { ContentLanguage } from "../harness/contentLanguage.js";
 import {
   createConceptAliasResolver,
   normalizeConceptKey,
@@ -29,6 +30,8 @@ export interface PersonalizedTimelineRankingInput {
   seenReadCounts?: Record<string, number>;
   dueReviewPostIds?: string[];
   conceptAliases?: ConceptAliasRecord[];
+  learningGoalConcepts?: string[];
+  contentLanguage?: ContentLanguage;
   now?: string | Date;
 }
 
@@ -97,8 +100,10 @@ export function rankPersonalizedTimeline(input: PersonalizedTimelineRankingInput
   const knownSet = createConceptSet(memory?.knowledge.knownConcepts ?? [], resolver);
   const savedSet = createConceptSet(memory?.knowledge.savedConcepts ?? [], resolver);
   const weakSet = createConceptSet(memory?.knowledge.weakConcepts ?? [], resolver);
+  const learningGoalSet = createConceptSet(input.learningGoalConcepts ?? [], resolver);
   const recentCardSet = new Set(memory?.interaction.recentCardIds ?? []);
   const dueReviewPostIds = new Set(input.dueReviewPostIds ?? []);
+  const contentLanguage = input.contentLanguage ?? "en";
 
   return input.cards
     .map((card) => {
@@ -117,6 +122,7 @@ export function rankPersonalizedTimeline(input: PersonalizedTimelineRankingInput
       const interestHits = findConceptHits(cardConcepts, interestSet, resolver);
       const savedHits = findConceptHits(cardConcepts, savedSet, resolver);
       const weakHits = findConceptHits(cardConcepts, weakSet, resolver);
+      const learningGoalHits = findConceptHits(cardConcepts, learningGoalSet, resolver);
       const knownHits = findConceptHits(cardConcepts, knownSet, resolver);
 
       if (card.kind === "connection_note") {
@@ -137,6 +143,11 @@ export function rankPersonalizedTimeline(input: PersonalizedTimelineRankingInput
       if (weakHits.length > 0) {
         score += weakHits.length * 20;
         reasons.push(`Review weak concept: ${weakHits.slice(0, 2).join(", ")}`);
+      }
+
+      if (learningGoalHits.length > 0) {
+        score += Math.min(learningGoalHits.length * 18, 36);
+        reasons.push(formatLearningGoalReason(learningGoalHits, contentLanguage));
       }
 
       if (knownHits.length > 0) {
@@ -230,6 +241,12 @@ export function rankPersonalizedTimeline(input: PersonalizedTimelineRankingInput
 
       return normalizeDate(right.createdAt).getTime() - normalizeDate(left.createdAt).getTime();
     });
+}
+
+function formatLearningGoalReason(concepts: string[], contentLanguage: ContentLanguage): string {
+  const labels = concepts.slice(0, 2).join(", ");
+
+  return contentLanguage === "zh" ? `在你的学习路径上:${labels}` : `On your learning path: ${labels}`;
 }
 
 function scoreRecentSignals(signals: InteractionSignal[]): { score: number; reasons: string[]; positive: number; negative: number } {

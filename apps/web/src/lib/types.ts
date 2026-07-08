@@ -8,6 +8,7 @@ import type {
   InteractionSignal,
   KnowledgeCard,
   KnowledgeChunk,
+  LearningGoalRecord,
   LearningFeedback,
   MergedSourceRecord,
   RankedKnowledgeCard,
@@ -15,6 +16,7 @@ import type {
   SourceImport,
   SourceRegistry,
   SourceQualityVerdict,
+  SkillTreeView,
   SubscriptionRecord,
   TopicState,
   UserMemory,
@@ -24,6 +26,13 @@ import type {
 export type { DailyAutoJobBudgetRecord };
 export type { ConceptBrief };
 export type { SubscriptionRecord };
+export type { LearningGoalRecord };
+export type { SkillTreeView };
+
+export type LearningGoalWithTree = LearningGoalRecord & {
+  tree?: SkillTreeView | null;
+  treeReason?: string;
+};
 
 export type AiMessage = {
   id: string;
@@ -130,7 +139,20 @@ export type ApiSnapshot = {
   autoJobBudget?: DailyAutoJobBudgetRecord[];
   conceptBriefs?: ConceptBrief[];
   subscriptions?: SubscriptionRecord[];
+  learningGoals?: LearningGoalRecord[];
   userMemories?: Array<{ userId: string; memory: UserMemory; updatedAt?: string }>;
+};
+
+export type ApiGoalsResponse = {
+  records: LearningGoalWithTree[];
+  achieved?: LearningGoalRecord[];
+  gapProduction?: {
+    queued: boolean;
+    records: Array<{ id: string; status: string; job?: { kind: string; topicId: string } }>;
+    budget?: DailyAutoJobBudgetRecord;
+    discardedJobIds?: string[];
+    skippedConcepts?: string[];
+  };
 };
 
 export type ApiConceptBriefResponse = {
@@ -252,7 +274,7 @@ export type AgentConfirmApiResponse = {
 
 export type AgentNotification = {
   id: string;
-  kind: "agent_answer" | "research_progress" | "mastery_promotion";
+  kind: "agent_answer" | "research_progress" | "mastery_promotion" | "learning_goal_achieved";
   turnId: string;
   postIds: string[];
   body: string;

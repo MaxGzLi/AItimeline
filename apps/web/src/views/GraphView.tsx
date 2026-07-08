@@ -5,10 +5,11 @@ import type {
   KnowledgeCard,
   LinkedKnowledgeGraph
 } from "@aitimeline/core";
-import { Download, Pause, Play, RotateCcw, X } from "lucide-react";
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { AlertTriangle, Archive, CheckCircle2, Circle, Download, Pause, Play, RotateCcw, Target, X } from "lucide-react";
+import { Fragment, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { GraphReplayCanvas } from "../components/GraphReplayCanvas";
 import { LinkedGraphCanvas, type LinkedGraphLayout } from "../components/LinkedGraphCanvas";
+import type { WikilinkAutocompleteCandidate } from "../components/WikilinkAutocomplete";
 import { formatDueDate } from "../lib/format";
 import { getCurrentGraphTheme, renderGraphSnapshotDataUrl } from "../lib/graphSnapshot";
 import {
@@ -19,6 +20,7 @@ import {
 } from "../lib/graphTimeline";
 import { t } from "../lib/i18n";
 import { downloadDataUrl, renderElementToPng } from "../lib/shareImage";
+import type { LearningGoalWithTree, SkillTreeView } from "../lib/types";
 
 const zones: Array<{
   key: keyof Pick<KnowledgeBoundaryView, "inside" | "learning" | "frontier">;
@@ -31,15 +33,22 @@ const zones: Array<{
   { key: "frontier", title: "graph.zone.frontier.title", detail: "graph.zone.frontier.detail", color: "var(--x-warn)" }
 ];
 
-type GraphTab = "graph" | "boundary";
+type GraphTab = "graph" | "boundary" | "skillTree";
 
 export function GraphView({
   boundary,
   cards,
   cardCountByConcept,
   conceptAliases,
+  conceptCandidates,
   conceptMergeSuggestions,
+  initialTab,
+  isSavingLearningGoal,
+  learningGoalMessage,
+  learningGoals,
   linkedGraph,
+  onArchiveLearningGoal,
+  onCreateLearningGoal,
   onOpenCardId,
   onOpenConcept,
   onResolveConceptSuggestion
@@ -48,21 +57,36 @@ export function GraphView({
   cards: KnowledgeCard[];
   cardCountByConcept: Record<string, number>;
   conceptAliases: ConceptAliasRecord[];
+  conceptCandidates: WikilinkAutocompleteCandidate[];
   conceptMergeSuggestions: ConceptMergeSuggestion[];
+  initialTab?: GraphTab;
+  isSavingLearningGoal: boolean;
+  learningGoalMessage: string;
+  learningGoals: LearningGoalWithTree[];
   linkedGraph: LinkedKnowledgeGraph;
+  onArchiveLearningGoal: (id: string) => Promise<void>;
+  onCreateLearningGoal: (concept: string) => Promise<void>;
   onOpenCardId: (cardId: string) => void;
   onOpenConcept: (concept: string) => void;
   onResolveConceptSuggestion: (suggestion: ConceptMergeSuggestion, decision: "merge" | "separate") => Promise<void>;
 }) {
-  const [tab, setTab] = useState<GraphTab>("graph");
+  const [tab, setTab] = useState<GraphTab>(initialTab ?? "graph");
   const [layout, setLayout] = useState<LinkedGraphLayout | null>(null);
   const [replayActive, setReplayActive] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportNotice, setExportNotice] = useState("");
+  const [goalConcept, setGoalConcept] = useState("");
+  const [selectedGoalId, setSelectedGoalId] = useState<string | null>(null);
   const timeline = useMemo(
     () => buildGraphGrowthTimeline({ cards, conceptAliases, graph: linkedGraph }),
     [cards, conceptAliases, linkedGraph]
+  );
+  const activeGoals = useMemo(() => learningGoals.filter((goal) => goal.status === "active"), [learningGoals]);
+  const selectedGoal = activeGoals.find((goal) => goal.id === selectedGoalId) ?? activeGoals[0] ?? null;
+  const conceptOptions = useMemo(
+    () => conceptCandidates.filter((candidate) => candidate.kind === "concept").map((candidate) => candidate.label),
+    [conceptCandidates]
   );
   const [currentMs, setCurrentMs] = useState(timeline.startMs);
   const currentMsRef = useRef(timeline.startMs);
@@ -70,6 +94,20 @@ export function GraphView({
   const suggestion = conceptMergeSuggestions[0];
   const sliderValue = Math.round(timeToProgress(timeline, currentMs) * 1000);
   const replayFinished = replayActive && !playing && currentMs >= timeline.endMs - 1;
+
+  useEffect(() => {
+    if (initialTab) {
+      setTab(initialTab);
+    }
+  }, [initialTab]);
+
+  useEffect(() => {
+    if (selectedGoalId && activeGoals.some((goal) => goal.id === selectedGoalId)) {
+      return;
+    }
+
+    setSelectedGoalId(activeGoals[0]?.id ?? null);
+  }, [activeGoals, selectedGoalId]);
 
   useEffect(() => {
     currentMsRef.current = currentMs;
@@ -203,13 +241,26 @@ export function GraphView({
     }
   }
 
+  async function handleGoalSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const concept = normalizeGoalInput(goalConcept);
+
+    if (!concept) {
+      return;
+    }
+
+    await onCreateLearningGoal(concept);
+    setGoalConcept("");
+  }
+
   return (
     <>
       <div className="x-tabs" role="tablist" aria-label={t("graph.viewLabel")}>
         {(
           [
             ["graph", t("graph.tab")],
-            ["boundary", t("graph.boundaryTab")]
+            ["boundary", t("graph.boundaryTab")],
+            ["skillTree", t("goals.tab")]
           ] as const
         ).map(([key, label]) => (
           <button
@@ -320,7 +371,7 @@ export function GraphView({
             )}
           </>
         )
-      ) : (
+      ) : tab === "boundary" ? (
         zones.map((zone) => {
           const concepts = boundary[zone.key];
 
@@ -346,7 +397,189 @@ export function GraphView({
             </Fragment>
           );
         })
+      ) : (
+        <SkillTreeGoalPanel
+          activeGoals={activeGoals}
+          conceptOptions={conceptOptions}
+          goalConcept={goalConcept}
+          isSaving={isSavingLearningGoal}
+          message={learningGoalMessage}
+          onArchiveLearningGoal={onArchiveLearningGoal}
+          onGoalConceptChange={setGoalConcept}
+          onGoalSubmit={handleGoalSubmit}
+          onOpenConcept={onOpenConcept}
+          onSelectGoal={setSelectedGoalId}
+          selectedGoal={selectedGoal}
+        />
       )}
     </>
   );
+}
+
+function SkillTreeGoalPanel({
+  activeGoals,
+  conceptOptions,
+  goalConcept,
+  isSaving,
+  message,
+  onArchiveLearningGoal,
+  onGoalConceptChange,
+  onGoalSubmit,
+  onOpenConcept,
+  onSelectGoal,
+  selectedGoal
+}: {
+  activeGoals: LearningGoalWithTree[];
+  conceptOptions: string[];
+  goalConcept: string;
+  isSaving: boolean;
+  message: string;
+  onArchiveLearningGoal: (id: string) => Promise<void>;
+  onGoalConceptChange: (value: string) => void;
+  onGoalSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onOpenConcept: (concept: string) => void;
+  onSelectGoal: (id: string) => void;
+  selectedGoal: LearningGoalWithTree | null;
+}) {
+  const tree = selectedGoal?.tree ?? null;
+
+  return (
+    <section className="x-skilltree" aria-label={t("goals.label")}>
+      <form className="x-goal-form" onSubmit={onGoalSubmit}>
+        <label>
+          <span>{t("goals.inputLabel")}</span>
+          <input
+            autoComplete="off"
+            disabled={isSaving}
+            list="skill-tree-goal-concepts"
+            onChange={(event) => onGoalConceptChange(event.currentTarget.value)}
+            placeholder={t("goals.placeholder")}
+            value={goalConcept}
+          />
+        </label>
+        <datalist id="skill-tree-goal-concepts">
+          {conceptOptions.map((concept) => (
+            <option key={concept} value={concept} />
+          ))}
+        </datalist>
+        <button className="x-cand-run" disabled={isSaving} type="submit">
+          <Target size={16} />
+          {isSaving ? t("goals.creating") : t("goals.create")}
+        </button>
+      </form>
+      {message ? <p className="x-goal-message">{message}</p> : null}
+
+      {activeGoals.length ? (
+        <div className="x-goal-list" role="list" aria-label={t("goals.activeLabel")}>
+          {activeGoals.map((goal) => (
+            <div className={`x-goal-row${selectedGoal?.id === goal.id ? " active" : ""}`} key={goal.id} role="listitem">
+              <button
+                aria-pressed={selectedGoal?.id === goal.id}
+                className="x-goal-pick"
+                onClick={() => onSelectGoal(goal.id)}
+                type="button"
+              >
+                <span>
+                  <strong>#{goal.concept.replace(/\s+/g, "")}</strong>
+                  <em>{formatGoalProgress(goal)}</em>
+                </span>
+              </button>
+              <button
+                aria-label={t("goals.archive")}
+                className="x-iconbtn"
+                onClick={() => {
+                  void onArchiveLearningGoal(goal.id);
+                }}
+                title={t("goals.archive")}
+                type="button"
+              >
+                <Archive size={15} />
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="x-empty">{t("goals.empty")}</p>
+      )}
+
+      {tree ? (
+        <SkillTreeViewPanel onOpenConcept={onOpenConcept} tree={tree} />
+      ) : selectedGoal ? (
+        <p className="x-empty">{t("goals.treeUnavailable")}</p>
+      ) : null}
+    </section>
+  );
+}
+
+function SkillTreeViewPanel({
+  onOpenConcept,
+  tree
+}: {
+  onOpenConcept: (concept: string) => void;
+  tree: SkillTreeView;
+}) {
+  const nodeById = new Map(tree.nodes.map((node) => [node.id, node]));
+  const reversedLayers = [...tree.layers].sort((left, right) => right.index - left.index);
+
+  return (
+    <section className="x-skill-layers" aria-label={t("goals.treeLabel", { concept: tree.goalConcept })}>
+      <header className="x-skill-summary">
+        <span>{t("goals.progress", { mastered: tree.progress.mastered, total: tree.progress.total })}</span>
+        <span>{t("goals.gaps", { count: tree.gapConcepts.length })}</span>
+      </header>
+      {reversedLayers.map((layer) => (
+        <div className={`x-skill-layer${layer.completed ? " completed" : ""}`} key={layer.index}>
+          <div className="x-skill-layer-head">
+            <span>{t("goals.layer", { index: layer.index })}</span>
+            {layer.completed ? <em>{t("goals.layerComplete")}</em> : null}
+          </div>
+          <div className="x-skill-nodes">
+            {layer.nodeIds
+              .map((nodeId) => nodeById.get(nodeId))
+              .filter((node): node is SkillTreeView["nodes"][number] => !!node)
+              .map((node) => (
+                <button
+                  className={`x-skill-node ${node.status} ${node.importance}`}
+                  key={node.id}
+                  onClick={() => onOpenConcept(node.concept)}
+                  type="button"
+                >
+                  <span className="x-skill-status">{renderSkillStatusIcon(node.status)}</span>
+                  <span className="x-skill-main">
+                    <strong>#{node.concept.replace(/\s+/g, "")}</strong>
+                    <em>{t(node.importance === "required" ? "goals.required" : "goals.optional")}</em>
+                  </span>
+                  <span className="x-skill-meta">{t(`goals.status.${node.status}`)}</span>
+                </button>
+              ))}
+          </div>
+        </div>
+      ))}
+    </section>
+  );
+}
+
+function renderSkillStatusIcon(status: string) {
+  if (status === "mastered") {
+    return <CheckCircle2 size={16} />;
+  }
+
+  if (status === "gap") {
+    return <AlertTriangle size={16} />;
+  }
+
+  return <Circle size={16} />;
+}
+
+function formatGoalProgress(goal: LearningGoalWithTree): string {
+  const progress = goal.tree?.progress;
+
+  return progress ? t("goals.progress", { mastered: progress.mastered, total: progress.total }) : t("goals.pending");
+}
+
+function normalizeGoalInput(value: string): string {
+  const trimmed = value.trim();
+  const match = trimmed.match(/^\[\[(.+)\]\]$/);
+
+  return (match?.[1] ?? trimmed).trim();
 }

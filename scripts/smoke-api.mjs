@@ -102,6 +102,10 @@ try {
     Array.isArray(settingsSnapshot.weeklyRecaps),
     "old snapshots should expose weeklyRecaps as an empty compatible field"
   );
+  assert.ok(
+    Array.isArray(settingsSnapshot.learningGoals),
+    "old snapshots should expose learningGoals as an empty compatible field"
+  );
 
   const settingsReloadedServer = createApiServer({
     dataPath,
@@ -278,6 +282,14 @@ try {
       version: 1,
       updatedAt: "2026-06-10T00:00:00.000Z",
       posts: masteryPosts,
+      learningGoals: [
+        {
+          id: "learning-goal-mastery-loop",
+          concept: masteryConcept,
+          createdAt: "2026-06-09T00:00:00.000Z",
+          status: "active"
+        }
+      ],
       reviewStates: [
         {
           postId: masteryPosts[0].id,
@@ -334,8 +346,15 @@ try {
       (record) => record.event.kind === "auto_mastery_promotion" && record.event.field === "knowledge.knownConcepts"
     );
     const promotionNotification = promotedSnapshot.notifications.find((record) => record.kind === "mastery_promotion");
+    const goalRecord = promotedSnapshot.learningGoals.find((record) => record.id === "learning-goal-mastery-loop");
+    const goalNotification = promotedSnapshot.notifications.find((record) => record.kind === "learning_goal_achieved");
 
     assert.equal(promoted.masteryPromotions.length, 1, "complete should auto-promote a concept that meets mastery rules");
+    assert.equal(
+      promoted.learningGoalAchievements.length,
+      1,
+      "auto-promoted active goal concepts should be marked achieved in the review response"
+    );
     assert.ok(
       promotedMemory?.knowledge.knownConcepts.includes(masteryConcept),
       "auto-promoted concept should enter knownConcepts"
@@ -348,6 +367,17 @@ try {
     );
     assert.ok(promotionNotification, "auto promotion should create a mastery notification");
     assert.match(promotionNotification?.body ?? "", /已进入已掌握/, "mastery notification should use the zh template");
+    assert.equal(goalRecord?.status, "achieved", "auto-promoted active goal should persist as achieved");
+    assert.ok(goalRecord?.achievedAt, "achieved learning goals should persist achievedAt");
+    assert.ok(goalNotification, "auto-promoted learning goal should create a goal notification");
+
+    await requestJsonFromServer(masteryServer, "/api/goals?userId=local-user&now=2026-06-10T00:00:00.000Z");
+    const repeatedGoalSnapshot = await requestJsonFromServer(masteryServer, "/api/snapshot");
+    assert.equal(
+      repeatedGoalSnapshot.notifications.filter((record) => record.kind === "learning_goal_achieved").length,
+      1,
+      "learning goal achieved notification should be idempotent across lazy checks"
+    );
 
     await requestJsonFromServer(masteryServer, "/api/memory", {
       method: "POST",
@@ -408,6 +438,192 @@ try {
     );
   } finally {
     await closeServer(masteryServer);
+  }
+
+  const goalDataPath = join(tempDir, "learning-goals.json");
+  const goalCurationPath = join(tempDir, "learning-goals-curation.json");
+  const goalPosts = [
+    makeApiSmokePost({
+      id: "goal-foundation",
+      title: "Goal Foundation",
+      concepts: ["Foundation"],
+      createdAt: "2026-07-01T00:00:00.000Z"
+    }),
+    {
+      ...makeApiSmokePost({
+        id: "goal-prerequisite",
+        title: "Goal Prerequisite",
+        concepts: ["Prerequisite"],
+        createdAt: "2026-07-02T00:00:00.000Z"
+      }),
+      graphEdges: [
+        {
+          id: "goal-prereq-requires-foundation",
+          sourceConcept: "Prerequisite",
+          relation: "requires",
+          targetConcept: "Foundation",
+          evidence: "Prerequisite requires Foundation.",
+          weight: 0.8
+        }
+      ]
+    },
+    {
+      ...makeApiSmokePost({
+        id: "goal-target",
+        title: "Goal Topic",
+        concepts: ["Goal Topic"],
+        createdAt: "2026-07-03T00:00:00.000Z"
+      }),
+      graphEdges: [
+        {
+          id: "goal-topic-requires-prerequisite",
+          sourceConcept: "Goal Topic",
+          relation: "requires",
+          targetConcept: "Prerequisite",
+          evidence: "Goal Topic requires Prerequisite.",
+          weight: 0.9
+        },
+        {
+          id: "goal-topic-requires-gap",
+          sourceConcept: "Goal Topic",
+          relation: "requires",
+          targetConcept: "Gap Concept",
+          evidence: "Goal Topic requires an uncovered gap concept.",
+          weight: 0.7
+        }
+      ]
+    },
+    makeApiSmokePost({
+      id: "goal-other",
+      title: "Other Goal",
+      concepts: ["Other Goal"],
+      createdAt: "2026-07-04T00:00:00.000Z"
+    })
+  ];
+
+  await writeFile(
+    goalDataPath,
+    JSON.stringify({
+      version: 1,
+      updatedAt: "2026-07-08T00:00:00.000Z",
+      posts: goalPosts
+    })
+  );
+
+  const goalServer = createApiServer({
+    dataPath: goalDataPath,
+    curationDataPath: goalCurationPath,
+    mediaRootDir,
+    enableFixtures: true,
+    searchProvider: fakeSearchProvider
+  });
+
+  try {
+    const createdGoal = await requestJsonFromServer(goalServer, "/api/goals", {
+      method: "POST",
+      body: {
+        concept: "Goal Topic",
+        now: "2026-07-08T00:00:00.000Z"
+      }
+    });
+    const queuedGapTopics = createdGoal.gapProduction.records.map((record) => record.job.topicId);
+
+    assert.equal(createdGoal.record.status, "active", "POST /api/goals should create an active learning goal");
+    assert.ok(createdGoal.record.tree, "created active goals should include a realtime skill tree");
+    assert.ok(
+      createdGoal.record.tree.nodes.some((node) => node.concept === "Gap Concept" && node.gap),
+      "created goal tree should expose uncovered gap concepts"
+    );
+    assert.ok(
+      queuedGapTopics.includes("Gap Concept"),
+      "creating a learning goal should enqueue gap concepts as concept_brief jobs"
+    );
+    assert.ok(
+      createdGoal.gapProduction.records.length > 0 && createdGoal.gapProduction.records.length <= 3,
+      "gap production should enqueue at most 3 concept_brief jobs per call"
+    );
+    assert.equal(
+      createdGoal.gapProduction.budget.used,
+      createdGoal.gapProduction.records.length,
+      "goal gap production should consume the daily auto-job budget"
+    );
+
+    const goalsAfterFirstGet = await requestJsonFromServer(
+      goalServer,
+      "/api/goals?userId=local-user&now=2026-07-08T00:00:00.000Z"
+    );
+    const snapshotAfterFirstGet = await requestJsonFromServer(goalServer, "/api/snapshot");
+    const usedAfterFirstGet = snapshotAfterFirstGet.autoJobBudget[0]?.used ?? 0;
+    const queuedAfterFirstGet = snapshotAfterFirstGet.curationJobs.filter((record) => record.job.kind === "concept_brief").length;
+
+    await requestJsonFromServer(goalServer, "/api/goals?userId=local-user&now=2026-07-08T00:00:00.000Z");
+    const snapshotAfterRepeatGet = await requestJsonFromServer(goalServer, "/api/snapshot");
+    const queuedAfterRepeatGet = snapshotAfterRepeatGet.curationJobs.filter(
+      (record) => record.job.kind === "concept_brief"
+    ).length;
+
+    assert.equal(goalsAfterFirstGet.records.length, 1, "GET /api/goals should list active goals");
+    assert.equal(
+      snapshotAfterRepeatGet.autoJobBudget[0]?.used,
+      usedAfterFirstGet,
+      "repeated GET /api/goals should not consume budget for duplicate gap jobs"
+    );
+    assert.equal(
+      queuedAfterRepeatGet,
+      queuedAfterFirstGet,
+      "repeated GET /api/goals should not duplicate concept_brief queue records"
+    );
+
+    const goalTimeline = await requestJsonFromServer(
+      goalServer,
+      "/api/timeline?userId=local-user&now=2026-07-08T00:00:00.000Z"
+    );
+
+    assert.ok(
+      goalTimeline.posts.some((post) => post.scoreReasons.some((reason) => reason.includes("在你的学习路径上"))),
+      "timeline ranking should expose the learning path reason when a card concept hits an active goal path"
+    );
+
+    await requestJsonFromServer(goalServer, "/api/goals", {
+      method: "POST",
+      body: { concept: "Prerequisite", now: "2026-07-08T00:01:00.000Z" }
+    });
+    await requestJsonFromServer(goalServer, "/api/goals", {
+      method: "POST",
+      body: { concept: "Foundation", now: "2026-07-08T00:02:00.000Z" }
+    });
+    const overLimitResponse = await dispatchToServer(goalServer, `${baseUrl}/api/goals`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ concept: "Other Goal", now: "2026-07-08T00:03:00.000Z" })
+    });
+    const overLimitPayload = await overLimitResponse.json();
+
+    assert.equal(overLimitResponse.status, 400, "POST /api/goals should reject more than 3 active goals");
+    assert.match(overLimitPayload.error, /3 active learning goals/, "active goal limit error should explain the cap");
+
+    const archivedGoal = await requestJsonFromServer(
+      goalServer,
+      `/api/goals/${encodeURIComponent(createdGoal.record.id)}`,
+      {
+        method: "POST",
+        body: { status: "archived" }
+      }
+    );
+
+    assert.equal(archivedGoal.record.status, "archived", "POST /api/goals/:id should archive a goal");
+
+    const deletedGoal = await requestJsonFromServer(
+      goalServer,
+      `/api/goals/${encodeURIComponent(createdGoal.record.id)}`,
+      {
+        method: "DELETE"
+      }
+    );
+
+    assert.equal(deletedGoal.deleted, true, "DELETE /api/goals/:id should delete a goal");
+  } finally {
+    await closeServer(goalServer);
   }
 
   const lowIntervalDataPath = join(tempDir, "mastery-low-interval.json");

@@ -96,6 +96,7 @@ import type {
   ApiConceptBriefResponse,
   ApiDismissedPostsResponse,
   ApiEvidenceResponse,
+  ApiGoalsResponse,
   ApiImportResponse,
   ApiNotificationsResponse,
   ApiReviewDueResponse,
@@ -112,6 +113,7 @@ import type {
   EvidenceLedger,
   InteractionSignals,
   LearningFeedbackByPost,
+  LearningGoalWithTree,
   MemoryAction,
   NoteApiResponse,
   ReviewDueItem,
@@ -176,6 +178,7 @@ export function App() {
   const [dismissedPosts, setDismissedPosts] = useState<DismissedPostSummary[]>([]);
   const [agentTurns, setAgentTurns] = useState<AgentTurnSummary[]>([]);
   const [notifications, setNotifications] = useState<AgentNotification[]>([]);
+  const [learningGoals, setLearningGoals] = useState<LearningGoalWithTree[]>([]);
   const [selectedNotificationId, setSelectedNotificationId] = useState<string | null>(null);
   const [dismissToast, setDismissToast] = useState<{ postId: string; title: string } | null>(null);
   const [aiThreads, setAiThreads] = useState<AiThreads>({});
@@ -208,9 +211,11 @@ export function App() {
   const [memoryMessage, setMemoryMessage] = useState(() => t("memory.default"));
   const [candidateMessage, setCandidateMessage] = useState(() => t("candidate.message.default"));
   const [subscriptionMessage, setSubscriptionMessage] = useState(() => t("subscription.message.default"));
+  const [learningGoalMessage, setLearningGoalMessage] = useState(() => t("goals.message.default"));
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
   const [conceptView, setConceptView] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<ViewKey>("timeline");
+  const [graphRequestedTab, setGraphRequestedTab] = useState<"graph" | "boundary" | "skillTree">("graph");
   const [feedTab, setFeedTab] = useState<"foryou" | "latest" | "saved">("foryou");
   const [agentAskedQuestion, setAgentAskedQuestion] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
@@ -228,6 +233,7 @@ export function App() {
   const [isImporting, setIsImporting] = useState(false);
   const [isSavingCandidate, setIsSavingCandidate] = useState(false);
   const [isSavingSubscription, setIsSavingSubscription] = useState(false);
+  const [isSavingLearningGoal, setIsSavingLearningGoal] = useState(false);
   const [updatingSubscriptionIds, setUpdatingSubscriptionIds] = useState<string[]>([]);
   const [deletingSubscriptionIds, setDeletingSubscriptionIds] = useState<string[]>([]);
   const [isRunningCuration, setIsRunningCuration] = useState(false);
@@ -1054,7 +1060,7 @@ export function App() {
     const now = new Date().toISOString();
 
     try {
-      const [timeline, snapshot, queuedJobs, reviewDue, dismissed, notificationsResult, weeklyRecapResult] = await Promise.all([
+      const [timeline, snapshot, queuedJobs, reviewDue, dismissed, notificationsResult, weeklyRecapResult, goalsResult] = await Promise.all([
         apiRequest<ApiTimelineResponse>(
           `/api/timeline?userId=local-user&now=${encodeURIComponent(now)}`
         ),
@@ -1063,7 +1069,8 @@ export function App() {
         apiRequest<ApiReviewDueResponse>(`/api/review/due?now=${encodeURIComponent(now)}`),
         apiRequest<ApiDismissedPostsResponse>(`/api/dismissed?now=${encodeURIComponent(now)}`),
         apiRequest<ApiNotificationsResponse>("/api/notifications"),
-        apiRequest<ApiWeeklyRecapResponse>(`/api/recap/weekly?now=${encodeURIComponent(now)}`)
+        apiRequest<ApiWeeklyRecapResponse>(`/api/recap/weekly?now=${encodeURIComponent(now)}`),
+        apiRequest<ApiGoalsResponse>(`/api/goals?userId=local-user&now=${encodeURIComponent(now)}`)
       ]);
 
       // A newer refresh started while this one was in flight; drop the stale result.
@@ -1109,9 +1116,12 @@ export function App() {
       setDismissedPosts(dismissed.records);
       setAgentTurns(snapshot.agentTurns);
       setNotifications(notificationsResult.records);
+      setLearningGoals(goalsResult.records);
       setReviewDueItems(reviewDue.due);
       setWeeklyRecap(weeklyRecapResult.recap && !weeklyRecapResult.recap.dismissedAt ? weeklyRecapResult.recap : null);
-      setAutoJobBudget(snapshot.autoJobBudget?.find((record) => record.date === now.slice(0, 10)) ?? null);
+      setAutoJobBudget(
+        goalsResult.gapProduction?.budget ?? snapshot.autoJobBudget?.find((record) => record.date === now.slice(0, 10)) ?? null
+      );
       setQueuedJobCount(queuedJobs.jobs.length);
       productionPeakRef.current =
         queuedJobs.jobs.length === 0 ? 0 : Math.max(productionPeakRef.current, queuedJobs.jobs.length);
@@ -1406,6 +1416,57 @@ export function App() {
       setSubscriptionMessage(error instanceof Error ? error.message : t("subscription.error"));
     } finally {
       setDeletingSubscriptionIds((ids) => ids.filter((value) => value !== id));
+    }
+  }
+
+  async function handleCreateLearningGoal(concept: string) {
+    const trimmedConcept = concept.trim();
+
+    if (!trimmedConcept) {
+      setLearningGoalMessage(t("goals.error.empty"));
+      return;
+    }
+
+    setIsSavingLearningGoal(true);
+
+    try {
+      const result = await apiRequest<ApiGoalsResponse & { record: LearningGoalWithTree }>("/api/goals", {
+        method: "POST",
+        body: {
+          concept: trimmedConcept,
+          userId: "local-user"
+        }
+      });
+
+      setLearningGoals(result.records);
+      if (result.gapProduction?.budget) {
+        setAutoJobBudget(result.gapProduction.budget);
+      }
+      setLearningGoalMessage(t("goals.message.created", { concept: result.record.concept }));
+      setApiStatus("connected");
+      setApiMessage(t("api.connected"));
+    } catch (error) {
+      setApiStatus("offline");
+      setLearningGoalMessage(error instanceof Error ? error.message : t("goals.error.create"));
+    } finally {
+      setIsSavingLearningGoal(false);
+    }
+  }
+
+  async function handleArchiveLearningGoal(id: string) {
+    try {
+      const result = await apiRequest<ApiGoalsResponse>(`/api/goals/${encodeURIComponent(id)}`, {
+        method: "POST",
+        body: { status: "archived" }
+      });
+
+      setLearningGoals(result.records);
+      setLearningGoalMessage(t("goals.message.archived"));
+      setApiStatus("connected");
+      setApiMessage(t("api.connected"));
+    } catch (error) {
+      setApiStatus("offline");
+      setLearningGoalMessage(error instanceof Error ? error.message : t("goals.error.archive"));
     }
   }
 
@@ -2255,8 +2316,15 @@ export function App() {
             cards={allCards}
             cardCountByConcept={cardCountByConcept}
             conceptAliases={conceptAliases}
+            conceptCandidates={wikilinkCandidates}
             conceptMergeSuggestions={conceptMergeSuggestions.filter((suggestion) => suggestion.status === "pending")}
+            initialTab={graphRequestedTab}
+            isSavingLearningGoal={isSavingLearningGoal}
+            learningGoalMessage={learningGoalMessage}
+            learningGoals={learningGoals}
             linkedGraph={linkedGraph}
+            onArchiveLearningGoal={handleArchiveLearningGoal}
+            onCreateLearningGoal={handleCreateLearningGoal}
             onOpenCardId={handleOpenCardId}
             onOpenConcept={handleOpenConcept}
             onResolveConceptSuggestion={resolveConceptSuggestion}
@@ -2357,9 +2425,17 @@ export function App() {
           detailCard={selectedCard}
           detailGraph={selectedLocalGraph}
           graph={graph}
+          learningGoals={learningGoals}
           onOpenCardId={handleOpenCardId}
           onOpenConcept={handleOpenConcept}
-          onOpenGraph={() => setActiveView("graph")}
+          onOpenGraph={() => {
+            setGraphRequestedTab("graph");
+            setActiveView("graph");
+          }}
+          onOpenSkillTree={() => {
+            setGraphRequestedTab("skillTree");
+            setActiveView("graph");
+          }}
           onOpenReview={() => setActiveView("review")}
           onSearchChange={setSearchQuery}
           reviewQueue={reviewQueue}

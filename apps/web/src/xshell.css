@@ -949,6 +949,172 @@ body:has(.x-frame) {
 .x-trend:hover { background: var(--x-hover); }
 .x-trend .x-tmeta { font-size: 13px; color: var(--x-muted); margin: 0; }
 .x-trend .x-tname { font-size: 15px; font-weight: 700; margin: 1px 0; }
+.x-skilltree {
+  display: grid;
+  gap: 0;
+  border-top: 1px solid var(--x-line);
+}
+.x-goal-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--x-line);
+}
+.x-goal-form label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--x-muted);
+}
+.x-goal-form input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--x-line);
+  border-radius: 8px;
+  background: var(--x-bg);
+  color: var(--x-ink);
+  font: inherit;
+  font-size: 15px;
+  padding: 9px 11px;
+}
+.x-goal-form input:focus-visible { outline: 2px solid var(--x-blue); outline-offset: 1px; }
+.x-goal-message {
+  margin: 0;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--x-line);
+  color: var(--x-muted);
+  font-size: 13px;
+}
+.x-goal-list {
+  display: grid;
+  border-bottom: 1px solid var(--x-line);
+}
+.x-goal-row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  padding: 6px 10px 6px 16px;
+  border-top: 1px solid var(--x-line);
+}
+.x-goal-row:first-child { border-top: none; }
+.x-goal-row.active { background: var(--x-hover); }
+.x-goal-pick {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: none;
+  background: none;
+  color: var(--x-ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.x-goal-pick span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.x-goal-pick strong {
+  overflow-wrap: anywhere;
+  font-size: 15px;
+}
+.x-goal-pick em {
+  color: var(--x-muted);
+  font-size: 13px;
+  font-style: normal;
+}
+.x-skill-layers {
+  display: grid;
+  gap: 12px;
+  padding: 14px 16px 24px;
+}
+.x-skill-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--x-muted);
+  font-size: 13px;
+}
+.x-skill-summary span {
+  border: 1px solid var(--x-line);
+  border-radius: 999px;
+  padding: 2px 9px;
+}
+.x-skill-layer {
+  display: grid;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--x-line);
+}
+.x-skill-layer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--x-muted);
+  font-size: 13px;
+}
+.x-skill-layer-head em {
+  color: var(--x-repost);
+  font-style: normal;
+  font-weight: 700;
+}
+.x-skill-nodes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+.x-skill-node {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  min-height: 72px;
+  padding: 10px;
+  border: 1px solid var(--x-line);
+  border-radius: 8px;
+  background: none;
+  color: var(--x-ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.x-skill-node.required { background: var(--x-module); }
+.x-skill-node.optional { background: transparent; }
+.x-skill-node.mastered { border-color: color-mix(in srgb, var(--x-repost) 55%, var(--x-line)); }
+.x-skill-node.gap { border-style: dashed; border-color: color-mix(in srgb, var(--x-warn) 70%, var(--x-line)); }
+.x-skill-node:hover { background: var(--x-hover); }
+.x-skill-status {
+  display: grid;
+  place-items: center;
+  color: var(--x-muted);
+}
+.x-skill-node.mastered .x-skill-status { color: var(--x-repost); }
+.x-skill-node.gap .x-skill-status { color: var(--x-warn); }
+.x-skill-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.x-skill-main strong {
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.x-skill-main em, .x-skill-meta {
+  color: var(--x-muted);
+  font-size: 12px;
+  font-style: normal;
+}
+.x-skill-meta {
+  grid-column: 2;
+  justify-self: start;
+}
 .x-graph-actions {
   display: flex;
   align-items: center;
@@ -2188,4 +2354,9 @@ button.x-chip {
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 8px;
+}
+
+@media (max-width: 700px) {
+  .x-goal-form { grid-template-columns: minmax(0, 1fr); }
+  .x-skill-nodes { grid-template-columns: minmax(0, 1fr); }
 }

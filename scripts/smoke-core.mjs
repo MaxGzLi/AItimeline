@@ -61,6 +61,7 @@ const {
 } = await import("../packages/core/dist/graph/connectionNotes.js");
 const { buildConceptDigest } = await import("../packages/core/dist/graph/conceptDigest.js");
 const { buildKnowledgeGraph } = await import("../packages/core/dist/graph/knowledgeGraph.js");
+const { buildSkillTree } = await import("../packages/core/dist/graph/skillTree.js");
 const { createOpenAICompatibleModelClient, createOpenAICompatibleModelClientFromEnv } = await import(
   "../packages/core/dist/model/openaiCompatibleClient.js"
 );
@@ -3585,6 +3586,200 @@ const ghostCards = [
 ];
 const ghostGraph = buildLinkedKnowledgeGraph({ cards: ghostCards, signals: [] });
 assert.ok(ghostGraph.nodes.some((node) => node.kind === "ghost"), "an unresolved wikilink target becomes a ghost node");
+
+function createSkillTreeCard({ id, concept, createdAt, graphEdges = [], kind = "knowledge" }) {
+  return {
+    id,
+    kind,
+    title: concept,
+    summary: `${concept} summary`,
+    keyTakeaway: `${concept} takeaway`,
+    concepts: [concept],
+    sources: [],
+    recommendedBecause: "Skill tree fixture.",
+    trustState: "supported",
+    createdAt,
+    estimatedReadMinutes: 2,
+    graphEdges,
+    reviewPrompts: [],
+    thread: [],
+    nextActions: [],
+    hook: `${concept} hook`,
+    thesis: `${concept} thesis`,
+    shortBody: `${concept} body`,
+    difficulty: "intermediate",
+    confidence: "high",
+    harnessVersion: "smoke"
+  };
+}
+
+const skillTreeCards = [
+  createSkillTreeCard({ id: "skill-linear", concept: "Linear Algebra", createdAt: "2026-01-01T00:00:00.000Z" }),
+  createSkillTreeCard({
+    id: "skill-transformer",
+    concept: "Transformer",
+    createdAt: "2026-01-02T00:00:00.000Z",
+    graphEdges: [
+      {
+        id: "requires-transformer-linear",
+        sourceConcept: "Transformer",
+        relation: "requires",
+        targetConcept: "Linear Algebra",
+        evidence: "Transformer requires Linear Algebra.",
+        weight: 0.7
+      }
+    ]
+  }),
+  createSkillTreeCard({
+    id: "skill-moe",
+    concept: "Mixture-of-Experts",
+    createdAt: "2026-01-03T00:00:00.000Z",
+    graphEdges: [
+      {
+        id: "requires-moe-transformer",
+        sourceConcept: "Mixture-of-Experts",
+        relation: "requires",
+        targetConcept: "Transformer",
+        evidence: "MoE requires Transformer.",
+        weight: 0.8
+      },
+      {
+        id: "requires-moe-routing",
+        sourceConcept: "Mixture-of-Experts",
+        relation: "requires",
+        targetConcept: "Routing",
+        evidence: "MoE requires Routing.",
+        weight: 0.6
+      },
+      {
+        id: "requires-moe-deepdive",
+        sourceConcept: "Mixture-of-Experts",
+        relation: "requires",
+        targetConcept: "DeepDive",
+        evidence: "MoE requires DeepDive.",
+        weight: 0.9
+      }
+    ]
+  }),
+  createSkillTreeCard({
+    id: "skill-goal",
+    concept: "deepseek-v3",
+    createdAt: "2026-01-04T00:00:00.000Z",
+    graphEdges: [
+      {
+        id: "requires-goal-moe",
+        sourceConcept: "deepseek-v3",
+        relation: "requires",
+        targetConcept: "Mixture-of-Experts",
+        evidence: "DeepSeek-V3 requires MoE.",
+        weight: 0.9
+      },
+      {
+        id: "requires-goal-transformer",
+        sourceConcept: "deepseek-v3",
+        relation: "requires",
+        targetConcept: "Transformer",
+        evidence: "DeepSeek-V3 requires Transformer.",
+        weight: 0.8
+      }
+    ]
+  }),
+  createSkillTreeCard({
+    id: "skill-deepdive",
+    concept: "DeepDive",
+    createdAt: "2026-01-05T00:00:00.000Z",
+    graphEdges: [
+      {
+        id: "cycle-deepdive-mindtagger",
+        sourceConcept: "DeepDive",
+        relation: "requires",
+        targetConcept: "Mindtagger",
+        evidence: "DeepDive requires Mindtagger.",
+        weight: 0.6
+      }
+    ]
+  }),
+  createSkillTreeCard({
+    id: "skill-mindtagger",
+    concept: "Mindtagger",
+    createdAt: "2026-01-06T00:00:00.000Z",
+    graphEdges: [
+      {
+        id: "cycle-mindtagger-deepdive",
+        sourceConcept: "Mindtagger",
+        relation: "requires",
+        targetConcept: "DeepDive",
+        evidence: "Mindtagger requires DeepDive.",
+        weight: 0.1
+      }
+    ]
+  }),
+  createSkillTreeCard({
+    id: "skill-routing-note",
+    concept: "Routing",
+    createdAt: "2026-01-07T00:00:00.000Z",
+    kind: "connection_note"
+  })
+];
+const skillTreeResult = buildSkillTree({
+  goalConcept: "DeepSeek-V3",
+  cards: skillTreeCards,
+  conceptAliases: [
+    {
+      canonical: "DeepSeek-V3",
+      aliases: ["deepseek-v3"],
+      decidedBy: "user",
+      decidedAt: "2026-01-01T00:00:00.000Z"
+    }
+  ],
+  knownConcepts: ["linear algebra"]
+});
+assert.ok(skillTreeResult.tree, "skill tree should build for a concept present in graph cards and edges");
+const skillTree = skillTreeResult.tree;
+const skillNode = (concept) => {
+  const node = skillTree.nodes.find((candidate) => candidate.concept === concept);
+  assert.ok(node, `skill tree should contain ${concept}`);
+  return node;
+};
+assert.equal(skillTree.goalConcept, "DeepSeek-V3", "skill tree should canonicalize aliases and casing");
+assert.deepEqual(
+  skillTree.nodes.map((node) => node.concept).sort(),
+  ["DeepDive", "DeepSeek-V3", "Linear Algebra", "Mindtagger", "Mixture-of-Experts", "Routing", "Transformer"].sort(),
+  "skill tree closure should include direct and second-order prerequisites"
+);
+assert.equal(skillNode("Linear Algebra").layer, 0, "foundational prerequisites should be in layer 0");
+assert.ok(skillNode("DeepSeek-V3").layer > skillNode("Mixture-of-Experts").layer, "goal should be above its prerequisites");
+assert.ok(skillNode("Mixture-of-Experts").layer > skillNode("Transformer").layer, "topological layers should follow requires edges");
+assert.deepEqual(
+  skillTree.droppedEdges.map((edge) => edge.id),
+  ["cycle-mindtagger-deepdive"],
+  "cycle breaker should drop the lowest-weight edge in the reachable cycle"
+);
+assert.equal(skillNode("Linear Algebra").mastered, true, "knownConcepts should mark mastered nodes without removing them");
+assert.equal(skillNode("Mixture-of-Experts").importance, "required", "direct goal prerequisites should be required");
+assert.equal(skillNode("Transformer").importance, "required", "concepts referenced by at least two requires edges should be required");
+assert.equal(skillNode("Routing").importance, "optional", "single-reference non-direct prerequisites should be optional");
+assert.equal(skillNode("Routing").gap, true, "concepts with no non-connection-note cards should be marked as gaps");
+assert.equal(
+  skillNode("Mindtagger").gap,
+  true,
+  "single-card concepts with no known prerequisites should be marked as shallow gaps"
+);
+assert.equal(skillNode("DeepDive").gap, false, "single-card concepts with known prerequisites are not shallow gaps");
+assert.equal(skillNode("Linear Algebra").gap, false, "mastered concepts should not be flagged as gaps");
+const missingSkillTree = buildSkillTree({ goalConcept: "Ghost Concept", cards: skillTreeCards, conceptAliases: [] });
+assert.equal(missingSkillTree.tree, null, "unknown goal concepts should return null instead of throwing");
+const shallowSkillTree = buildSkillTree({
+  goalConcept: "Solo Goal",
+  cards: [createSkillTreeCard({ id: "skill-solo", concept: "Solo Goal", createdAt: "2026-01-08T00:00:00.000Z" })],
+  conceptAliases: [],
+  knownConcepts: []
+});
+assert.equal(
+  shallowSkillTree.tree?.nodes[0]?.gap,
+  true,
+  "single-card goals with no known prerequisites should be marked as shallow gaps"
+);
 
 console.log(
   JSON.stringify(
