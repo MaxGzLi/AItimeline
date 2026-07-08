@@ -5,7 +5,7 @@ import type {
   KnowledgeCard,
   LinkedKnowledgeGraph
 } from "@aitimeline/core";
-import { AlertTriangle, Archive, CheckCircle2, Circle, Download, Pause, Play, RotateCcw, Target, X } from "lucide-react";
+import { AlertTriangle, Archive, CheckCircle2, Download, Pause, Play, RotateCcw, Target, X } from "lucide-react";
 import { Fragment, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { GraphReplayCanvas } from "../components/GraphReplayCanvas";
 import { LinkedGraphCanvas, type LinkedGraphLayout } from "../components/LinkedGraphCanvas";
@@ -480,7 +480,7 @@ function SkillTreeGoalPanel({
                 type="button"
               >
                 <span>
-                  <strong>#{goal.concept.replace(/\s+/g, "")}</strong>
+                  <strong>#{goal.concept}</strong>
                   <em>{formatGoalProgress(goal)}</em>
                 </span>
               </button>
@@ -518,57 +518,75 @@ function SkillTreeViewPanel({
   onOpenConcept: (concept: string) => void;
   tree: SkillTreeView;
 }) {
+  type SkillNode = SkillTreeView["nodes"][number];
   const nodeById = new Map(tree.nodes.map((node) => [node.id, node]));
-  const reversedLayers = [...tree.layers].sort((left, right) => right.index - left.index);
+  const goalNode =
+    tree.nodes.find((node) => node.dependentIds.length === 0) ??
+    tree.nodes.find((node) => node.concept === tree.goalConcept) ??
+    null;
+  const rendered = new Set<string>();
+
+  const renderRow = (node: SkillNode, isGoal: boolean, isRepeat: boolean) => (
+    <button
+      className={`x-tree-row ${node.status} ${node.importance}${isGoal ? " goal" : ""}${isRepeat ? " repeat" : ""}`}
+      key={node.id}
+      onClick={() => onOpenConcept(node.concept)}
+      type="button"
+    >
+      <span className="x-tree-name">{node.concept}</span>
+      <span className="x-tree-tags">
+        <em>{isGoal ? t("goals.goalTag") : t(node.importance === "required" ? "goals.required" : "goals.optional")}</em>
+        {node.mastered ? (
+          <em className="x-tree-state mastered">
+            <CheckCircle2 size={13} />
+            {t("goals.status.mastered")}
+          </em>
+        ) : node.gap ? (
+          <em className="x-tree-state gap">
+            <AlertTriangle size={13} />
+            {t("goals.status.gap")}
+          </em>
+        ) : null}
+      </span>
+    </button>
+  );
+
+  const renderBranch = (node: SkillNode, isGoal: boolean) => {
+    rendered.add(node.id);
+    const prerequisites = node.prerequisiteIds
+      .map((id) => nodeById.get(id))
+      .filter((child): child is SkillNode => !!child)
+      .sort((left, right) =>
+        left.importance === right.importance
+          ? left.concept.localeCompare(right.concept)
+          : left.importance === "required"
+            ? -1
+            : 1
+      );
+
+    return (
+      <div className="x-tree-branch" key={node.id}>
+        {renderRow(node, isGoal, false)}
+        {prerequisites.length ? (
+          <div className="x-tree-children">
+            {prerequisites.map((child) =>
+              rendered.has(child.id) ? renderRow(child, false, true) : renderBranch(child, false)
+            )}
+          </div>
+        ) : null}
+      </div>
+    );
+  };
 
   return (
-    <section className="x-skill-layers" aria-label={t("goals.treeLabel", { concept: tree.goalConcept })}>
+    <section className="x-skill-tree" aria-label={t("goals.treeLabel", { concept: tree.goalConcept })}>
       <header className="x-skill-summary">
         <span>{t("goals.progress", { mastered: tree.progress.mastered, total: tree.progress.total })}</span>
         <span>{t("goals.gaps", { count: tree.gapConcepts.length })}</span>
       </header>
-      {reversedLayers.map((layer) => (
-        <div className={`x-skill-layer${layer.completed ? " completed" : ""}`} key={layer.index}>
-          <div className="x-skill-layer-head">
-            <span>{t("goals.layer", { index: layer.index })}</span>
-            {layer.completed ? <em>{t("goals.layerComplete")}</em> : null}
-          </div>
-          <div className="x-skill-nodes">
-            {layer.nodeIds
-              .map((nodeId) => nodeById.get(nodeId))
-              .filter((node): node is SkillTreeView["nodes"][number] => !!node)
-              .map((node) => (
-                <button
-                  className={`x-skill-node ${node.status} ${node.importance}`}
-                  key={node.id}
-                  onClick={() => onOpenConcept(node.concept)}
-                  type="button"
-                >
-                  <span className="x-skill-status">{renderSkillStatusIcon(node.status)}</span>
-                  <span className="x-skill-main">
-                    <strong>#{node.concept.replace(/\s+/g, "")}</strong>
-                    <em>{t(node.importance === "required" ? "goals.required" : "goals.optional")}</em>
-                  </span>
-                  <span className="x-skill-meta">{t(`goals.status.${node.status}`)}</span>
-                </button>
-              ))}
-          </div>
-        </div>
-      ))}
+      {goalNode ? renderBranch(goalNode, true) : <p className="x-empty">{t("goals.treeUnavailable")}</p>}
     </section>
   );
-}
-
-function renderSkillStatusIcon(status: string) {
-  if (status === "mastered") {
-    return <CheckCircle2 size={16} />;
-  }
-
-  if (status === "gap") {
-    return <AlertTriangle size={16} />;
-  }
-
-  return <Circle size={16} />;
 }
 
 function formatGoalProgress(goal: LearningGoalWithTree): string {
