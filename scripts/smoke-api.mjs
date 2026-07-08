@@ -587,6 +587,15 @@ try {
       goalTimeline.posts.some((post) => post.scoreReasons.some((reason) => reason.includes("在你的学习路径上"))),
       "timeline ranking should expose the learning path reason when a card concept hits an active goal path"
     );
+    assert.ok(Array.isArray(goalTimeline.timelineBlocks), "timeline API should expose block structure");
+    assert.ok(
+      goalTimeline.timelineBlocks.some((block) => block.divider?.topicLabel),
+      "timeline blocks should expose divider metadata"
+    );
+    assert.ok(
+      goalTimeline.posts.some((post) => post.blockTopic?.source === "learning_goal"),
+      "timeline posts should expose their computed blockTopic"
+    );
 
     await requestJsonFromServer(goalServer, "/api/goals", {
       method: "POST",
@@ -628,6 +637,360 @@ try {
     assert.equal(deletedGoal.deleted, true, "DELETE /api/goals/:id should delete a goal");
   } finally {
     await closeServer(goalServer);
+  }
+
+  const topicBlocksDataPath = join(tempDir, "topic-blocks-timeline.json");
+  const topicBlocksCurationPath = join(tempDir, "topic-blocks-curation.json");
+  const topicBlocksNow = "2026-07-08T10:00:00.000Z";
+  const topicBlockPosts = [
+    makeApiSmokePost({
+      id: "alpha-block-1",
+      title: "Alpha block 1",
+      concepts: ["Alpha"],
+      createdAt: "2026-07-08T08:00:00.000Z"
+    }),
+    makeApiSmokePost({
+      id: "alpha-block-2",
+      title: "Alpha block 2",
+      concepts: ["Alpha"],
+      createdAt: "2026-07-08T08:01:00.000Z"
+    }),
+    makeApiSmokePost({
+      id: "alpha-block-3",
+      title: "Alpha block 3",
+      concepts: ["Alpha"],
+      createdAt: "2026-07-08T08:02:00.000Z"
+    }),
+    makeApiSmokePost({
+      id: "beta-block-1",
+      title: "Beta block 1",
+      concepts: ["Beta"],
+      createdAt: "2026-07-08T09:00:00.000Z"
+    }),
+    makeApiSmokePost({
+      id: "beta-block-2",
+      title: "Beta block 2",
+      concepts: ["Beta"],
+      createdAt: "2026-07-08T09:01:00.000Z"
+    }),
+    makeApiSmokePost({
+      id: "beta-block-3",
+      title: "Beta block 3",
+      concepts: ["Beta"],
+      createdAt: "2026-07-08T09:02:00.000Z"
+    })
+  ];
+
+  await writeFile(
+    topicBlocksDataPath,
+    JSON.stringify({
+      version: 1,
+      updatedAt: topicBlocksNow,
+      posts: topicBlockPosts,
+      userMemories: [
+        {
+          userId: "local-user",
+          updatedAt: topicBlocksNow,
+          memory: {
+            profile: { interests: ["Beta"], goals: [] },
+            knowledge: { knownConcepts: [], weakConcepts: [], savedConcepts: [] },
+            interaction: { recentCardIds: [], recentQuestions: [] },
+            agent: { topicAgents: [], preferredSourceTypes: [] }
+          }
+        }
+      ]
+    })
+  );
+
+  const topicBlocksServer = createApiServer({
+    dataPath: topicBlocksDataPath,
+    curationDataPath: topicBlocksCurationPath,
+    mediaRootDir,
+    enableFixtures: true,
+    searchProvider: fakeSearchProvider
+  });
+
+  try {
+    const initialTopicBlocksTimeline = await requestJsonFromServer(
+      topicBlocksServer,
+      `/api/timeline?userId=local-user&now=${encodeURIComponent(topicBlocksNow)}`
+    );
+
+    assert.equal(
+      initialTopicBlocksTimeline.timelineBlocks[0]?.topic.label,
+      "Beta",
+      "timeline blocks should initially follow the highest-ranked topic block"
+    );
+
+    await requestJsonFromServer(topicBlocksServer, "/api/signals", {
+      method: "POST",
+      body: {
+        generatedAt: topicBlocksNow,
+        signal: {
+          postId: "alpha-block-1",
+          topicId: "Alpha",
+          conceptIds: ["Alpha"],
+          impression: true,
+          dwellTimeMs: 300000,
+          openedThread: false,
+          liked: false,
+          saved: false,
+          askedQuestion: false,
+          reviewed: false,
+          skippedQuickly: false,
+          createdAt: topicBlocksNow
+        }
+      }
+    });
+
+    const dwellBoostedTimeline = await requestJsonFromServer(
+      topicBlocksServer,
+      `/api/timeline?userId=local-user&now=${encodeURIComponent(topicBlocksNow)}`
+    );
+
+    assert.equal(
+      dwellBoostedTimeline.timelineBlocks[0]?.topic.label,
+      "Alpha",
+      "same-day dwell aggregation should change the timeline block order"
+    );
+
+    // Dwell reports are cumulative per card and re-sent as they grow: two
+    // records for the same post must aggregate as max, not sum.
+    for (const dwellTimeMs of [60000, 90000]) {
+      await requestJsonFromServer(topicBlocksServer, "/api/signals", {
+        method: "POST",
+        body: {
+          generatedAt: topicBlocksNow,
+          signal: {
+            postId: "alpha-block-2",
+            topicId: "Alpha",
+            conceptIds: ["Alpha"],
+            impression: true,
+            dwellTimeMs,
+            openedThread: false,
+            liked: false,
+            saved: false,
+            askedQuestion: false,
+            reviewed: false,
+            skippedQuickly: false,
+            createdAt: topicBlocksNow
+          }
+        }
+      });
+    }
+
+    const cumulativeDwellTimeline = await requestJsonFromServer(
+      topicBlocksServer,
+      `/api/timeline?userId=local-user&now=${encodeURIComponent(topicBlocksNow)}`
+    );
+    const alphaBlock = cumulativeDwellTimeline.timelineBlocks.find((block) => block.topic.label === "Alpha");
+
+    // alpha-block-1 max 300000 clamped to 120000, alpha-block-2 max(60000, 90000)
+    // = 90000 -> 210000ms = 3.5 min * 6 = 21. A sum would give 27.
+    assert.equal(
+      alphaBlock?.dwellBoost,
+      21,
+      "cumulative dwell re-sends for the same post should aggregate as per-post max, not sum"
+    );
+  } finally {
+    await closeServer(topicBlocksServer);
+  }
+
+  const guaranteeDataPath = join(tempDir, "goal-production-guarantee.json");
+  const guaranteeCurationPath = join(tempDir, "goal-production-guarantee-curation.json");
+  const guaranteeNow = "2026-07-08T09:00:00.000Z";
+  const guaranteePosts = [
+    {
+      ...makeApiSmokePost({
+        id: "guarantee-goal-a-post",
+        title: "Guarantee Goal A",
+        concepts: ["Guarantee Goal A"],
+        createdAt: guaranteeNow
+      }),
+      graphEdges: [
+        {
+          id: "guarantee-a-requires-gap",
+          sourceConcept: "Guarantee Goal A",
+          relation: "requires",
+          targetConcept: "Guarantee Gap A",
+          evidence: "Guarantee Goal A requires Guarantee Gap A.",
+          weight: 0.9
+        }
+      ]
+    },
+    {
+      ...makeApiSmokePost({
+        id: "guarantee-goal-b-post",
+        title: "Guarantee Goal B",
+        concepts: ["Guarantee Goal B"],
+        createdAt: guaranteeNow
+      }),
+      graphEdges: [
+        {
+          id: "guarantee-b-requires-gap",
+          sourceConcept: "Guarantee Goal B",
+          relation: "requires",
+          targetConcept: "Guarantee Gap B",
+          evidence: "Guarantee Goal B requires Guarantee Gap B.",
+          weight: 0.9
+        }
+      ]
+    }
+  ];
+  const previousBudgetForGuarantee = process.env.AITIMELINE_DAILY_AUTO_JOB_BUDGET;
+  process.env.AITIMELINE_DAILY_AUTO_JOB_BUDGET = "2";
+
+  await writeFile(
+    guaranteeDataPath,
+    JSON.stringify({
+      version: 1,
+      updatedAt: guaranteeNow,
+      posts: guaranteePosts,
+      learningGoals: [
+        {
+          id: "guarantee-goal-a",
+          concept: "Guarantee Goal A",
+          createdAt: guaranteeNow,
+          status: "active"
+        },
+        {
+          id: "guarantee-goal-b",
+          concept: "Guarantee Goal B",
+          createdAt: guaranteeNow,
+          status: "active"
+        }
+      ]
+    })
+  );
+
+  const guaranteeServer = createApiServer({
+    dataPath: guaranteeDataPath,
+    curationDataPath: guaranteeCurationPath,
+    mediaRootDir,
+    enableFixtures: true,
+    searchProvider: fakeSearchProvider
+  });
+
+  try {
+    const firstGuaranteeRun = await requestJsonFromServer(guaranteeServer, "/api/curation/run", {
+      method: "POST",
+      body: { now: guaranteeNow, kinds: ["concept_brief"] }
+    });
+    const firstGuaranteeSnapshot = await requestJsonFromServer(guaranteeServer, "/api/snapshot");
+    const firstGuaranteeJobs = firstGuaranteeSnapshot.curationJobs.filter(
+      (record) => record.job.kind === "concept_brief"
+    );
+
+    assert.equal(
+      firstGuaranteeRun.goalProductionGuarantee.records.length,
+      2,
+      "daily production guarantee should reserve one production slot per active goal"
+    );
+    assert.deepEqual(
+      firstGuaranteeRun.goalProductionGuarantee.records.map((record) => record.job.topicId).sort(),
+      ["Guarantee Gap A", "Guarantee Gap B"],
+      "daily production guarantee should use existing gap concept_brief demand"
+    );
+    assert.equal(
+      firstGuaranteeSnapshot.autoJobBudget.find((record) => record.date === "2026-07-08")?.used,
+      2,
+      "daily production guarantee should consume slots inside the existing budget"
+    );
+    assert.equal(firstGuaranteeJobs.length, 2, "daily production guarantee should persist queued jobs");
+
+    const repeatedGuaranteeRun = await requestJsonFromServer(guaranteeServer, "/api/curation/run", {
+      method: "POST",
+      body: { now: "2026-07-08T09:05:00.000Z", kinds: ["concept_brief"] }
+    });
+    const repeatedGuaranteeSnapshot = await requestJsonFromServer(guaranteeServer, "/api/snapshot");
+
+    assert.equal(
+      repeatedGuaranteeRun.goalProductionGuarantee.records.length,
+      0,
+      "daily production guarantee should be idempotent for a goal already produced today"
+    );
+    assert.equal(
+      repeatedGuaranteeSnapshot.curationJobs.filter((record) => record.job.kind === "concept_brief").length,
+      firstGuaranteeJobs.length,
+      "daily production guarantee should not duplicate jobs on repeated runs"
+    );
+    assert.equal(
+      repeatedGuaranteeSnapshot.autoJobBudget.find((record) => record.date === "2026-07-08")?.used,
+      2,
+      "daily production guarantee should not consume more budget on repeated runs"
+    );
+  } finally {
+    await closeServer(guaranteeServer);
+    if (previousBudgetForGuarantee === undefined) {
+      delete process.env.AITIMELINE_DAILY_AUTO_JOB_BUDGET;
+    } else {
+      process.env.AITIMELINE_DAILY_AUTO_JOB_BUDGET = previousBudgetForGuarantee;
+    }
+  }
+
+  const noDemandDataPath = join(tempDir, "goal-production-no-demand.json");
+  const noDemandCurationPath = join(tempDir, "goal-production-no-demand-curation.json");
+  const noDemandNow = "2026-07-08T11:00:00.000Z";
+
+  await writeFile(
+    noDemandDataPath,
+    JSON.stringify({
+      version: 1,
+      updatedAt: noDemandNow,
+      posts: [
+        makeApiSmokePost({
+          id: "no-demand-goal-post",
+          title: "No Demand Goal",
+          concepts: ["No Demand Goal"],
+          createdAt: noDemandNow
+        })
+      ],
+      learningGoals: [
+        {
+          id: "no-demand-goal",
+          concept: "No Demand Goal",
+          createdAt: noDemandNow,
+          status: "active"
+        }
+      ],
+      userMemories: [
+        {
+          userId: "local-user",
+          updatedAt: noDemandNow,
+          memory: {
+            profile: { interests: [], goals: [] },
+            knowledge: { knownConcepts: ["No Demand Goal"], weakConcepts: [], savedConcepts: [] },
+            interaction: { recentCardIds: [], recentQuestions: [] },
+            agent: { topicAgents: [], preferredSourceTypes: [] }
+          }
+        }
+      ]
+    })
+  );
+
+  const noDemandServer = createApiServer({
+    dataPath: noDemandDataPath,
+    curationDataPath: noDemandCurationPath,
+    mediaRootDir,
+    enableFixtures: true,
+    searchProvider: fakeSearchProvider
+  });
+
+  try {
+    const noDemandRun = await requestJsonFromServer(noDemandServer, "/api/curation/run", {
+      method: "POST",
+      body: { now: noDemandNow, kinds: ["concept_brief"] }
+    });
+    const noDemandSnapshot = await requestJsonFromServer(noDemandServer, "/api/snapshot");
+
+    assert.equal(
+      noDemandRun.goalProductionGuarantee.records.length,
+      0,
+      "daily production guarantee should not force production when a goal has no existing demand"
+    );
+    assert.equal(noDemandSnapshot.curationJobs.length, 0, "no-demand goals should not create curation jobs");
+  } finally {
+    await closeServer(noDemandServer);
   }
 
   const lowIntervalDataPath = join(tempDir, "mastery-low-interval.json");

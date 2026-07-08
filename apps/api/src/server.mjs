@@ -7,6 +7,8 @@ import {
   askGrounded,
   advanceReviewState,
   addConceptAliasDecision,
+  arrangeTimelineBlocks,
+  assignCardBlockTopics,
   buildConceptDigest,
   buildDiscoveryConfirmationQuestions,
   buildSkillTree,
@@ -797,6 +799,13 @@ export function createApiServer(options = {}) {
         const body = await readJsonBody(request);
         const contentLanguage = resolveContentLanguage(persistenceStore, process.env);
         const runNow = body.now ?? new Date().toISOString();
+        const goalProductionGuarantee = queueDailyLearningGoalProductionGuarantee({
+          persistenceStore,
+          curationStore,
+          userId: typeof body.userId === "string" && body.userId.trim() ? body.userId : "local-user",
+          contentLanguage,
+          now: runNow
+        });
         const subscriptionPolling = await pollDueSubscriptions({
           persistenceStore,
           curationStore,
@@ -959,6 +968,7 @@ export function createApiServer(options = {}) {
           ...filteredBatch,
           subscriptionPolling,
           supplyRefill,
+          goalProductionGuarantee: omitSnapshotFromProductionResult(goalProductionGuarantee),
           droughtNotification,
           snapshotSummary: summarizeSnapshot(snapshot)
         });
@@ -3820,6 +3830,215 @@ function queueGapConceptBriefsForSkillTrees({
   };
 }
 
+function queueDailyLearningGoalProductionGuarantee({
+  persistenceStore,
+  curationStore,
+  userId,
+  contentLanguage,
+  now
+}) {
+  const nowIso = normalizeIsoDate(now);
+  const date = nowIso.slice(0, 10);
+  const snapshot = persistenceStore.getSnapshot();
+  const jobs = [];
+  // Goals with overlapping closures must not pick the same demand twice in one
+  // run, or one piece of work would consume two budget slots.
+  const selectedBriefKeys = new Set();
+  const selectedFollowupKeys = new Set();
+
+  for (const goal of snapshot.learningGoals.filter((record) => record.status === "active")) {
+    const treeResult = buildLearningGoalTree(snapshot, goal.concept, userId);
+    const tree = treeResult.tree;
+
+    if (!tree || hasGoalProductionForDate({ snapshot, curationStore, tree, date })) {
+      continue;
+    }
+
+    const closureKeys = createTreeConceptKeySet(tree);
+
+    if (jobs.some((job) => jobOverlapsTree(job, closureKeys))) {
+      continue;
+    }
+
+    const demand =
+      selectGoalGapConceptBriefDemand({ snapshot, curationStore, tree, contentLanguage, now: nowIso, selectedBriefKeys }) ??
+      selectGoalFollowupDemand({ snapshot, curationStore, tree, goal, now: nowIso, date, selectedFollowupKeys });
+
+    if (demand) {
+      if (demand.kind === "concept_brief") {
+        selectedBriefKeys.add(normalizeCoreConceptKey(demand.topicId));
+      } else {
+        selectedFollowupKeys.add(`${demand.postId}|${demand.nextAction}`);
+      }
+
+      jobs.push(demand);
+    }
+  }
+
+  if (!jobs.length) {
+    return {
+      snapshot,
+      queued: false,
+      records: [],
+      budget: getDailyAutoJobBudgetRecord(snapshot, nowIso),
+      discardedJobIds: [],
+      skippedConcepts: []
+    };
+  }
+
+  const rawPlan = createSingleJobPlan(jobs, nowIso);
+  const budgetResult = applyDailyAutoJobBudget({
+    plan: rawPlan,
+    budget: getDailyAutoJobBudgetRecord(snapshot, nowIso),
+    limit: getDailyAutoJobBudgetLimit(process.env),
+    now: nowIso
+  });
+  const records = curationStore.enqueuePlan(budgetResult.plan, nowIso);
+  const queuedJobIds = new Set(records.map((record) => record.job.id));
+  let nextSnapshot = persistenceStore.saveDailyAutoJobBudgetRecords([budgetResult.budget], nowIso);
+
+  if (records.length) {
+    nextSnapshot = persistenceStore.saveCurationJobRecords(records, nowIso);
+  }
+
+  return {
+    snapshot: nextSnapshot,
+    queued: records.length > 0,
+    records,
+    budget: budgetResult.budget,
+    discardedJobIds: budgetResult.discardedJobIds,
+    skippedConcepts: jobs.filter((job) => !queuedJobIds.has(job.id)).map((job) => job.topicId)
+  };
+}
+
+function hasGoalProductionForDate({ snapshot, curationStore, tree, date }) {
+  const closureKeys = createTreeConceptKeySet(tree);
+
+  if (
+    snapshot.conceptBriefs.some(
+      (brief) => brief.generatedAt?.slice(0, 10) === date && closureKeys.has(normalizeCoreConceptKey(brief.concept))
+    )
+  ) {
+    return true;
+  }
+
+  return curationStore
+    .list()
+    .some(
+      (record) =>
+        record.status !== "failed" &&
+        [record.createdAt, record.completedAt, record.updatedAt].some((value) => value?.slice(0, 10) === date) &&
+        isLearningGoalProductionJob(record.job) &&
+        jobOverlapsTree(record.job, closureKeys)
+    );
+}
+
+function selectGoalGapConceptBriefDemand({ snapshot, curationStore, tree, contentLanguage, now, selectedBriefKeys }) {
+  const existingBriefKeys = new Set(snapshot.conceptBriefs.map((brief) => normalizeCoreConceptKey(brief.concept)));
+  const existingJobKeys = new Set(
+    curationStore
+      .list()
+      .filter((record) => record.job.kind === "concept_brief" && record.status !== "failed")
+      .map((record) => normalizeCoreConceptKey(record.job.topicId))
+  );
+
+  for (const node of tree.nodes) {
+    const key = normalizeCoreConceptKey(node.concept);
+
+    if (
+      !node.gap ||
+      node.mastered ||
+      !key ||
+      existingBriefKeys.has(key) ||
+      existingJobKeys.has(key) ||
+      selectedBriefKeys?.has(key)
+    ) {
+      continue;
+    }
+
+    const input = buildConceptBriefInput(snapshot, node.concept, contentLanguage, now);
+
+    return createConceptBriefJob(input.concept, input.cards.length, now);
+  }
+
+  return null;
+}
+
+function selectGoalFollowupDemand({ snapshot, curationStore, tree, goal, now, date, selectedFollowupKeys }) {
+  const closureKeys = createTreeConceptKeySet(tree);
+  const existingFollowupKeys = new Set(
+    curationStore
+      .list()
+      .filter((record) => record.job.kind === "generate_followup" && record.status !== "failed")
+      .map((record) => `${record.job.postId ?? ""}|${record.job.nextAction ?? ""}`)
+  );
+
+  for (const key of selectedFollowupKeys ?? []) {
+    existingFollowupKeys.add(key);
+  }
+  const candidates = snapshot.posts
+    .filter((post) => post.kind !== "connection_note")
+    .map((post) => {
+      const overlap = post.concepts.filter((concept) => closureKeys.has(normalizeCoreConceptKey(concept)));
+      const nextAction = selectFollowupNextAction(post.nextActions ?? []);
+
+      return { post, overlap, nextAction };
+    })
+    .filter(({ post, overlap, nextAction }) => {
+      if (!overlap.length || !nextAction) {
+        return false;
+      }
+
+      return !existingFollowupKeys.has(`${post.id}|${nextAction}`);
+    })
+    .sort(
+      (left, right) =>
+        right.overlap.length - left.overlap.length ||
+        right.post.createdAt.localeCompare(left.post.createdAt) ||
+        left.post.id.localeCompare(right.post.id)
+    );
+  const selected = candidates[0];
+
+  if (!selected) {
+    return null;
+  }
+
+  return {
+    id: `daily-goal-followup-${hashText(`${goal.id}|${selected.post.id}|${selected.nextAction}|${date}`)}`,
+    kind: "generate_followup",
+    postId: selected.post.id,
+    topicId: tree.goalConcept,
+    conceptIds: Array.from(new Set([...selected.overlap, tree.goalConcept])),
+    nextAction: selected.nextAction,
+    priority: 0.62,
+    reason: `Reserve one daily production slot for the active learning goal ${tree.goalConcept}.`,
+    createdAt: now,
+    runAfter: now
+  };
+}
+
+function selectFollowupNextAction(nextActions) {
+  for (const action of ["continue_deeper", "expand_broader", "reframe_simpler"]) {
+    if (nextActions.includes(action)) {
+      return action;
+    }
+  }
+
+  return null;
+}
+
+function isLearningGoalProductionJob(job) {
+  return job.kind === "concept_brief" || job.kind === "generate_followup";
+}
+
+function jobOverlapsTree(job, closureKeys) {
+  return [job.topicId, ...(job.conceptIds ?? [])].some((concept) => closureKeys.has(normalizeCoreConceptKey(concept)));
+}
+
+function createTreeConceptKeySet(tree) {
+  return new Set(tree.nodes.map((node) => normalizeCoreConceptKey(node.concept)).filter(Boolean));
+}
+
 function omitSnapshotFromProductionResult(result) {
   return {
     queued: result.queued,
@@ -4612,6 +4831,7 @@ function getTimelineResponse(snapshot, nowValue, userId = "local-user", contentL
     now
   });
   const memoryRecord = snapshot.userMemories.find((record) => record.userId === userId);
+  const activeGoalBlockTopics = collectActiveLearningGoalBlockTopics(snapshot, userId);
   const rankedPosts = rankPersonalizedTimeline({
     cards: lifecyclePosts,
     memory: memoryRecord?.memory,
@@ -4628,9 +4848,31 @@ function getTimelineResponse(snapshot, nowValue, userId = "local-user", contentL
 
     return dueReviewState ? { ...post, reviewDueAt: dueReviewState.dueAt } : post;
   });
+  const blockTopicsByPostId = assignCardBlockTopics(rankedPosts, activeGoalBlockTopics, snapshot.conceptAliases);
+  const topicDwellMs = aggregateTodayDwellMsByBlockTopic({
+    snapshot,
+    now,
+    activeGoalBlockTopics
+  });
+  const timelineArrangement = arrangeTimelineBlocks({
+    cards: rankedPosts,
+    blockTopicsByPostId,
+    topicDwellMs,
+    interleavedPostIds: dueReviewPostIds
+  });
+  const arrangedPosts = flattenTimelineArrangement(timelineArrangement);
 
   return {
-    posts: enrichPostsMedia(snapshot, rankedPosts),
+    posts: enrichPostsMedia(snapshot, arrangedPosts),
+    timelineBlocks: timelineArrangement.blocks.map((block) => ({
+      id: block.id,
+      topic: block.topic,
+      divider: block.divider,
+      postIds: block.postIds,
+      score: block.score,
+      highestScore: block.highestScore,
+      dwellBoost: block.dwellBoost
+    })),
     sourceImports: snapshot.sourceImports,
     releasePlans,
     topicStates: snapshot.topicStates,
@@ -4638,6 +4880,97 @@ function getTimelineResponse(snapshot, nowValue, userId = "local-user", contentL
     recommendationSummary: summarizeRecommendation(rankedPosts),
     snapshotSummary: summarizeSnapshot(snapshot)
   };
+}
+
+function collectActiveLearningGoalBlockTopics(snapshot, userId = "local-user") {
+  return snapshot.learningGoals
+    .filter((record) => record.status === "active")
+    .flatMap((record) => {
+      const treeResult = buildLearningGoalTree(snapshot, record.concept, userId);
+
+      if (!treeResult.tree) {
+        return [];
+      }
+
+      return [
+        {
+          id: record.id,
+          label: treeResult.tree.goalConcept || record.concept,
+          conceptIds: treeResult.tree.nodes.map((node) => node.concept),
+          progressPercent: treeResult.tree.progress.percent,
+          createdAt: record.createdAt
+        }
+      ];
+    });
+}
+
+function aggregateTodayDwellMsByBlockTopic({ snapshot, now, activeGoalBlockTopics }) {
+  const date = normalizeIsoDate(now).slice(0, 10);
+  const postById = new Map(snapshot.posts.map((post) => [post.id, post]));
+  // Dwell reports are cumulative per card and re-sent as they grow, so take the
+  // per-post daily maximum before summing by topic; summing raw records would
+  // count the same reading time many times over.
+  const dwellByPost = new Map();
+
+  for (const record of snapshot.interactionSignals) {
+    const signal = record.signal;
+    const createdAt = signal.createdAt ?? record.createdAt;
+
+    if (!createdAt || normalizeIsoDate(createdAt).slice(0, 10) !== date) {
+      continue;
+    }
+
+    const dwellTimeMs = Number.isFinite(signal.dwellTimeMs)
+      ? Math.min(120000, Math.max(0, signal.dwellTimeMs))
+      : 0;
+
+    if (dwellTimeMs <= 0) {
+      continue;
+    }
+
+    const previous = dwellByPost.get(signal.postId);
+
+    if (!previous || dwellTimeMs > previous.dwellTimeMs) {
+      dwellByPost.set(signal.postId, { dwellTimeMs, fallbackTopicId: signal.topicId || "general" });
+    }
+  }
+
+  const dwellMsByTopic = {};
+
+  for (const [postId, { dwellTimeMs, fallbackTopicId }] of dwellByPost) {
+    const post = postById.get(postId);
+    const topic = post
+      ? assignCardBlockTopics([post], activeGoalBlockTopics, snapshot.conceptAliases)[post.id]
+      : {
+          id: fallbackTopicId,
+          label: fallbackTopicId,
+          source: "card_topic"
+        };
+
+    dwellMsByTopic[topic.id] = (dwellMsByTopic[topic.id] ?? 0) + dwellTimeMs;
+  }
+
+  return dwellMsByTopic;
+}
+
+function flattenTimelineArrangement(arrangement) {
+  return arrangement.items.flatMap((item) => {
+    if (item.kind === "card") {
+      return [
+        {
+          ...item.card,
+          blockTopic: item.blockTopic
+        }
+      ];
+    }
+
+    return item.block.cards.map((card, index) => ({
+      ...card,
+      blockTopic: item.block.topic,
+      timelineBlockId: item.block.id,
+      timelineDivider: index === 0 ? item.block.divider : undefined
+    }));
+  });
 }
 
 function getDismissedPostsResponse(snapshot, nowValue) {

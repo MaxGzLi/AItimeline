@@ -26,6 +26,7 @@ import {
   type ReviewItem,
   type SourceAsset,
   type SourceImport,
+  type TimelineBlockTopic,
   type TopicState,
   type UserMemory,
   type WeeklyRecapRecord
@@ -46,7 +47,7 @@ import {
   Settings,
   XCircle
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   AgentReplyThread,
   type AgentReplyAction,
@@ -126,6 +127,7 @@ import type {
 } from "./lib/types";
 
 type ViewKey = "timeline" | "discover" | "graph" | "review" | "notifications" | "agent" | "settings";
+type TopicFilterKey = "all" | "__other__" | string;
 
 const languageStorageKey = "aitl-language";
 const autoScoutStorageKey = "aitl-auto-scout";
@@ -149,6 +151,74 @@ const viewTitleKeys: Record<ViewKey, { title: string; sub?: string }> = {
   agent: { title: "nav.agent", sub: "nav.agentSub" },
   settings: { title: "nav.settings" }
 };
+
+const otherTopicFilterKey = "__other__";
+const maxTopicFilterPillCount = 5;
+
+type TopicFilterOption = {
+  topic: TimelineBlockTopic;
+  count: number;
+  firstIndex: number;
+};
+
+function getTimelineCardBlockTopic(card: RankedKnowledgeCard): TimelineBlockTopic {
+  const timelineCard = card as TimelineCard;
+
+  if (timelineCard.blockTopic) {
+    return timelineCard.blockTopic;
+  }
+
+  const fallbackLabel = card.concepts[0] ?? t("common.concept");
+
+  return {
+    id: getTopicId(card),
+    label: fallbackLabel,
+    source: "card_topic"
+  };
+}
+
+function buildTopicFilterOptions(cards: RankedKnowledgeCard[]): {
+  topics: TopicFilterOption[];
+  otherTopicIds: Set<string>;
+  hasOther: boolean;
+} {
+  const byTopicId = new Map<string, TopicFilterOption>();
+
+  cards.forEach((card, index) => {
+    const topic = getTimelineCardBlockTopic(card);
+    const existing = byTopicId.get(topic.id);
+
+    if (existing) {
+      existing.count += 1;
+      return;
+    }
+
+    byTopicId.set(topic.id, {
+      topic,
+      count: 1,
+      firstIndex: index
+    });
+  });
+
+  const sortedTopics = Array.from(byTopicId.values()).sort(
+    (left, right) =>
+      Number(right.topic.source === "learning_goal") - Number(left.topic.source === "learning_goal") ||
+      left.firstIndex - right.firstIndex ||
+      left.topic.label.localeCompare(right.topic.label)
+  );
+  const topicSlotsWithoutOther = maxTopicFilterPillCount - 1;
+  const topicSlotsWithOther = maxTopicFilterPillCount - 2;
+  const visibleTopicCount =
+    sortedTopics.length > topicSlotsWithoutOther ? topicSlotsWithOther : topicSlotsWithoutOther;
+  const topics = sortedTopics.slice(0, Math.max(0, visibleTopicCount));
+  const otherTopicIds = new Set(sortedTopics.slice(topics.length).map((option) => option.topic.id));
+
+  return {
+    topics,
+    otherTopicIds,
+    hasOther: otherTopicIds.size > 0
+  };
+}
 
 export function App() {
   const [language, setLanguageState] = useState<Language>(() => {
@@ -222,6 +292,7 @@ export function App() {
   const [activeView, setActiveView] = useState<ViewKey>("timeline");
   const [graphRequestedTab, setGraphRequestedTab] = useState<"graph" | "boundary" | "skillTree">("graph");
   const [feedTab, setFeedTab] = useState<"foryou" | "latest" | "saved">("foryou");
+  const [topicFilter, setTopicFilter] = useState<TopicFilterKey>("all");
   const [agentAskedQuestion, setAgentAskedQuestion] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [focusedIndex, setFocusedIndex] = useState(-1);
@@ -435,12 +506,24 @@ export function App() {
 
     return rankedCards;
   }, [feedTab, interactionSignals, rankedCards]);
+  const topicFilterOptions = useMemo(() => buildTopicFilterOptions(displayedCards), [displayedCards]);
+  const topicFilteredCards = useMemo(() => {
+    if (topicFilter === "all") {
+      return displayedCards;
+    }
+
+    if (topicFilter === otherTopicFilterKey) {
+      return displayedCards.filter((card) => topicFilterOptions.otherTopicIds.has(getTimelineCardBlockTopic(card).id));
+    }
+
+    return displayedCards.filter((card) => getTimelineCardBlockTopic(card).id === topicFilter);
+  }, [displayedCards, topicFilter, topicFilterOptions]);
   // Free-text filter over the active tab's cards so the rail search narrows
   // the feed in place instead of leaving the page.
   const visibleCards = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    if (!q) return displayedCards;
-    return displayedCards.filter((card) => {
+    if (!q) return topicFilteredCards;
+    return topicFilteredCards.filter((card) => {
       const haystack = [
         card.title,
         card.summary,
@@ -455,7 +538,22 @@ export function App() {
         .toLowerCase();
       return haystack.includes(q);
     });
-  }, [displayedCards, searchQuery]);
+  }, [searchQuery, topicFilteredCards]);
+  useEffect(() => {
+    if (topicFilter === "all") {
+      return;
+    }
+
+    if (topicFilter === otherTopicFilterKey && topicFilterOptions.hasOther) {
+      return;
+    }
+
+    if (topicFilterOptions.topics.some((option) => option.topic.id === topicFilter)) {
+      return;
+    }
+
+    setTopicFilter("all");
+  }, [topicFilter, topicFilterOptions]);
   const allCards = useMemo(() => rankedCards, [rankedCards]);
   const wikilinkCandidates = useMemo(() => buildWikilinkAutocompleteCandidates(allCards), [allCards]);
   const connectionsByCard = useMemo(() => {
@@ -1017,7 +1115,11 @@ export function App() {
 
     for (const card of pending) {
       // Impression analytics are best-effort and capped to one send per card.
+      // Impressions must stay pure-exposure (dwellTimeMs 0) so the server keeps
+      // treating them as exposure-only; dwell reaches the server via the
+      // onDwell -> signal sync path instead.
       impressionReportedIds.current.add(card.id);
+
       void apiRequest<unknown>("/api/signals", {
         method: "POST",
         keepalive: true,
@@ -2247,6 +2349,43 @@ export function App() {
 
         {activeView === "timeline" && !selectedCard ? (
           <>
+            <div className="x-topic-tabs" role="tablist" aria-label={t("feed.topicFilters")}>
+              <button
+                aria-selected={topicFilter === "all"}
+                className={`x-tab${topicFilter === "all" ? " active" : ""}`}
+                onClick={() => setTopicFilter("all")}
+                role="tab"
+                type="button"
+              >
+                {t("feed.topic.all")}
+              </button>
+              {topicFilterOptions.topics.map((option) => (
+                <button
+                  aria-selected={topicFilter === option.topic.id}
+                  className={`x-tab${topicFilter === option.topic.id ? " active" : ""}`}
+                  key={option.topic.id}
+                  onClick={() => setTopicFilter(option.topic.id)}
+                  role="tab"
+                  title={option.topic.label}
+                  type="button"
+                >
+                  <span>{option.topic.label}</span>
+                  <em>{option.count}</em>
+                </button>
+              ))}
+              {topicFilterOptions.hasOther ? (
+                <button
+                  aria-selected={topicFilter === otherTopicFilterKey}
+                  className={`x-tab${topicFilter === otherTopicFilterKey ? " active" : ""}`}
+                  onClick={() => setTopicFilter(otherTopicFilterKey)}
+                  role="tab"
+                  type="button"
+                >
+                  {t("feed.topic.other")}
+                </button>
+              ) : null}
+            </div>
+
             <AskComposer
               isAsking={isAgentAsking}
               mode={composerMode}
@@ -2325,32 +2464,49 @@ export function App() {
                       : t("feed.empty")}
                 </p>
               ) : (
-                visibleCards.map((card, index) => (
-                  <PostView
-                    card={card}
-                    cards={allCards}
-                    connections={connectionsByCard[card.id] ?? []}
-                    dismissedPostIds={activeDismissedPostIds}
-                    graph={linkedGraph}
-                    isFocused={index === focusedIndex}
-                    key={card.id}
-                    onDwell={handleDwell}
-                    onImpression={handleImpression}
-                    onLike={handleLike}
-                    onOpen={handleOpenCard}
-                    onOpenCardId={handleOpenCardId}
-                    onOpenConcept={handleOpenConcept}
-                    onReply={handleReply}
-                    onRestorePost={restoreDismissedPost}
-                    onReviewComplete={handleReviewComplete}
-                    onSave={handleSave}
-                    onSkip={handleSkip}
-                    quoteText={quoteByCard[card.id]}
-                    reviewDueAt={(card as TimelineCard).reviewDueAt}
-                    signal={interactionSignals[card.id]}
-                    wikilinkCandidates={wikilinkCandidates}
-                  />
-                ))
+                visibleCards.map((card, index) => {
+                  const timelineCard = card as TimelineCard;
+                  const previousCard = visibleCards[index - 1] as TimelineCard | undefined;
+                  const showDivider =
+                    feedTab === "foryou" &&
+                    !!timelineCard.timelineBlockId &&
+                    timelineCard.timelineBlockId !== previousCard?.timelineBlockId;
+                  const dividerLabel =
+                    timelineCard.timelineDivider?.topicLabel ?? getTimelineCardBlockTopic(timelineCard).label;
+
+                  return (
+                    <Fragment key={card.id}>
+                      {showDivider ? (
+                        <div className="x-block-divider">
+                          <span>{t("feed.topicDivider", { topic: dividerLabel })}</span>
+                        </div>
+                      ) : null}
+                      <PostView
+                        card={card}
+                        cards={allCards}
+                        connections={connectionsByCard[card.id] ?? []}
+                        dismissedPostIds={activeDismissedPostIds}
+                        graph={linkedGraph}
+                        isFocused={index === focusedIndex}
+                        onDwell={handleDwell}
+                        onImpression={handleImpression}
+                        onLike={handleLike}
+                        onOpen={handleOpenCard}
+                        onOpenCardId={handleOpenCardId}
+                        onOpenConcept={handleOpenConcept}
+                        onReply={handleReply}
+                        onRestorePost={restoreDismissedPost}
+                        onReviewComplete={handleReviewComplete}
+                        onSave={handleSave}
+                        onSkip={handleSkip}
+                        quoteText={quoteByCard[card.id]}
+                        reviewDueAt={timelineCard.reviewDueAt}
+                        signal={interactionSignals[card.id]}
+                        wikilinkCandidates={wikilinkCandidates}
+                      />
+                    </Fragment>
+                  );
+                })
               )}
               {visibleCards.length > 0 ? (
                 <p className="x-empty" role="status">

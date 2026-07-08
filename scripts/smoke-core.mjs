@@ -66,6 +66,9 @@ const { createOpenAICompatibleModelClient, createOpenAICompatibleModelClientFrom
   "../packages/core/dist/model/openaiCompatibleClient.js"
 );
 const { createSourcePostReleasePlan } = await import("../packages/core/dist/ranking/postReleasePlan.js");
+const { arrangeTimelineBlocks, resolveCardBlockTopic } = await import(
+  "../packages/core/dist/ranking/arrangeTimelineBlocks.js"
+);
 const { buildWeeklyRecap, buildWeeklyRecapId } = await import("../packages/core/dist/recap/weeklyRecap.js");
 const {
   countSeenReadSignalsByPostId,
@@ -172,6 +175,20 @@ function makeSmokePost({
   };
 }
 
+function makeRankedSmokePost({ id, concept, score, createdAt = "2026-07-08T00:00:00.000Z", kind }) {
+  return {
+    ...makeSmokePost({
+      id,
+      title: id,
+      concepts: [concept],
+      createdAt
+    }),
+    kind,
+    score,
+    scoreReasons: [`score ${score}`]
+  };
+}
+
 function makeSourceQualityInput(fixture, sourceId, url, concepts, title = fixture.title) {
   return {
     source: {
@@ -238,6 +255,167 @@ const atomSubscriptionFixture = `
 const parsedRssSubscription = parseSubscriptionFeed(rssSubscriptionFixture, "https://example.com/rss.xml");
 const parsedAtomSubscription = parseSubscriptionFeed(atomSubscriptionFixture, "https://example.org/atom.xml");
 const parsedBadSubscription = parseSubscriptionFeed("<rss><channel><item></channel></rss>", "https://example.com/bad.xml");
+
+const blockTopicA = { id: "topic-a", label: "Topic A", source: "card_topic" };
+const blockTopicB = { id: "topic-b", label: "Topic B", source: "card_topic" };
+const blockTopicC = { id: "topic-c", label: "Topic C", source: "card_topic" };
+const blockArrangementFixture = [
+  makeRankedSmokePost({ id: "a-1", concept: "Topic A", score: 90 }),
+  makeRankedSmokePost({ id: "a-2", concept: "Topic A", score: 89 }),
+  makeRankedSmokePost({ id: "a-3", concept: "Topic A", score: 88 }),
+  makeRankedSmokePost({ id: "review-due", concept: "Review", score: 87 }),
+  makeRankedSmokePost({ id: "b-1", concept: "Topic B", score: 95 }),
+  makeRankedSmokePost({ id: "b-2", concept: "Topic B", score: 94 }),
+  makeRankedSmokePost({ id: "connection-note", concept: "Connection", score: 93, kind: "connection_note" }),
+  makeRankedSmokePost({ id: "c-1", concept: "Topic C", score: 86 }),
+  makeRankedSmokePost({ id: "c-2", concept: "Topic C", score: 85 }),
+  makeRankedSmokePost({ id: "c-3", concept: "Topic C", score: 84 }),
+  makeRankedSmokePost({ id: "c-4", concept: "Topic C", score: 83 })
+];
+const blockTopicsByPostId = Object.fromEntries(
+  blockArrangementFixture.map((post) => [
+    post.id,
+    post.id.startsWith("a-")
+      ? blockTopicA
+      : post.id.startsWith("b-")
+        ? blockTopicB
+        : post.id.startsWith("c-")
+          ? blockTopicC
+          : { id: post.concepts[0], label: post.concepts[0], source: "card_topic" }
+  ])
+);
+const blockArrangement = arrangeTimelineBlocks({
+  cards: blockArrangementFixture,
+  blockTopicsByPostId,
+  interleavedPostIds: ["review-due"]
+});
+
+assert.deepEqual(
+  blockArrangement.items.map((item) => (item.kind === "block" ? item.block.topic.id : item.card.id)),
+  ["topic-a", "review-due", "topic-b", "connection-note", "topic-c"],
+  "timeline blocks should keep due review and connection_note cards in their original interleaved positions"
+);
+assert.deepEqual(
+  blockArrangement.blocks.map((block) => block.postIds.length),
+  [3, 2, 4],
+  "timeline blocks should group new cards into 3-4 card blocks and keep short same-topic blocks short"
+);
+const fiveCardShortBlockArrangement = arrangeTimelineBlocks({
+  cards: [1, 2, 3, 4, 5].map((index) =>
+    makeRankedSmokePost({ id: `five-card-${index}`, concept: "Five Card Topic", score: 90 - index })
+  ),
+  blockTopicsByPostId: Object.fromEntries(
+    [1, 2, 3, 4, 5].map((index) => [
+      `five-card-${index}`,
+      { id: "five-card-topic", label: "Five Card Topic", source: "card_topic" }
+    ])
+  )
+});
+
+assert.deepEqual(
+  fiveCardShortBlockArrangement.blocks.map((block) => block.postIds.length),
+  [3, 2],
+  "a five-card topic should prefer a 3+2 split instead of leaving a singleton short block"
+);
+assert.equal(blockArrangement.blocks[0].divider.topicLabel, "Topic A", "blocks should expose divider metadata");
+
+const baseOrderArrangement = arrangeTimelineBlocks({
+  cards: [
+    makeRankedSmokePost({ id: "cold-1", concept: "Cold", score: 70 }),
+    makeRankedSmokePost({ id: "cold-2", concept: "Cold", score: 69 }),
+    makeRankedSmokePost({ id: "cold-3", concept: "Cold", score: 68 }),
+    makeRankedSmokePost({ id: "hot-1", concept: "Hot", score: 86 }),
+    makeRankedSmokePost({ id: "hot-2", concept: "Hot", score: 85 }),
+    makeRankedSmokePost({ id: "hot-3", concept: "Hot", score: 84 })
+  ],
+  blockTopicsByPostId: {
+    "cold-1": { id: "cold", label: "Cold", source: "card_topic" },
+    "cold-2": { id: "cold", label: "Cold", source: "card_topic" },
+    "cold-3": { id: "cold", label: "Cold", source: "card_topic" },
+    "hot-1": { id: "hot", label: "Hot", source: "card_topic" },
+    "hot-2": { id: "hot", label: "Hot", source: "card_topic" },
+    "hot-3": { id: "hot", label: "Hot", source: "card_topic" }
+  }
+});
+const dwellOrderArrangement = arrangeTimelineBlocks({
+  cards: baseOrderArrangement.blocks.flatMap((block) => block.cards),
+  blockTopicsByPostId: {
+    "cold-1": { id: "cold", label: "Cold", source: "card_topic" },
+    "cold-2": { id: "cold", label: "Cold", source: "card_topic" },
+    "cold-3": { id: "cold", label: "Cold", source: "card_topic" },
+    "hot-1": { id: "hot", label: "Hot", source: "card_topic" },
+    "hot-2": { id: "hot", label: "Hot", source: "card_topic" },
+    "hot-3": { id: "hot", label: "Hot", source: "card_topic" }
+  },
+  topicDwellMs: {
+    cold: 300000
+  }
+});
+
+assert.equal(baseOrderArrangement.blocks[0].topic.id, "hot", "block order should start from the highest block score");
+assert.equal(dwellOrderArrangement.blocks[0].topic.id, "cold", "same-day dwell should boost a topic block forward");
+assert.deepEqual(
+  arrangeTimelineBlocks({
+    cards: blockArrangementFixture,
+    blockTopicsByPostId,
+    interleavedPostIds: ["review-due"]
+  }),
+  blockArrangement,
+  "arranging timeline blocks should be deterministic for identical input"
+);
+
+const alternatingArrangement = arrangeTimelineBlocks({
+  cards: [
+    makeRankedSmokePost({ id: "alt-a-1", concept: "Alt A", score: 99 }),
+    makeRankedSmokePost({ id: "alt-a-2", concept: "Alt A", score: 98 }),
+    makeRankedSmokePost({ id: "alt-a-3", concept: "Alt A", score: 97 }),
+    makeRankedSmokePost({ id: "alt-a-4", concept: "Alt A", score: 96 }),
+    makeRankedSmokePost({ id: "alt-a-5", concept: "Alt A", score: 95 }),
+    makeRankedSmokePost({ id: "alt-a-6", concept: "Alt A", score: 94 }),
+    makeRankedSmokePost({ id: "alt-a-7", concept: "Alt A", score: 93 }),
+    makeRankedSmokePost({ id: "alt-a-8", concept: "Alt A", score: 92 }),
+    makeRankedSmokePost({ id: "alt-b-1", concept: "Alt B", score: 70 }),
+    makeRankedSmokePost({ id: "alt-b-2", concept: "Alt B", score: 69 }),
+    makeRankedSmokePost({ id: "alt-b-3", concept: "Alt B", score: 68 })
+  ],
+  blockTopicsByPostId: Object.fromEntries(
+    ["alt-a-1", "alt-a-2", "alt-a-3", "alt-a-4", "alt-a-5", "alt-a-6", "alt-a-7", "alt-a-8", "alt-b-1", "alt-b-2", "alt-b-3"].map(
+      (id) => [
+        id,
+        id.startsWith("alt-a")
+          ? { id: "alt-a", label: "Alt A", source: "card_topic" }
+          : { id: "alt-b", label: "Alt B", source: "card_topic" }
+      ]
+    )
+  )
+});
+
+assert.deepEqual(
+  alternatingArrangement.blocks.map((block) => block.topic.id),
+  ["alt-a", "alt-b", "alt-a"],
+  "blocks should alternate topics when another topic block is available"
+);
+
+const aliasGoalTopic = resolveCardBlockTopic(
+  makeSmokePost({ id: "alias-hit", title: "Alias Hit", concepts: ["ML"] }),
+  [{ id: "goal-ml", label: "Machine Learning", conceptIds: ["Machine Learning"], progressPercent: 60 }],
+  [{ canonical: "Machine Learning", aliases: ["ML"], decidedBy: "user", decidedAt: "2026-07-08T00:00:00.000Z" }]
+);
+const fallbackTopic = resolveCardBlockTopic({
+  ...makeSmokePost({ id: "fallback-hit", title: "Fallback Hit", concepts: ["No Goal"] }),
+  topicId: "explicit-topic"
+});
+const laggingGoalTopic = resolveCardBlockTopic(
+  makeSmokePost({ id: "multi-hit", title: "Multi Hit", concepts: ["Shared"] }),
+  [
+    { id: "goal-a", label: "Goal A", conceptIds: ["Shared"], progressPercent: 70, createdAt: "2026-07-01T00:00:00.000Z" },
+    { id: "goal-b", label: "Goal B", conceptIds: ["Shared"], progressPercent: 20, createdAt: "2026-07-02T00:00:00.000Z" }
+  ]
+);
+
+assert.equal(aliasGoalTopic.goalId, "goal-ml", "blockTopic should hit an active goal closure through aliases");
+assert.equal(fallbackTopic.id, "explicit-topic", "blockTopic should fall back to the card topicId when no goal matches");
+assert.equal(laggingGoalTopic.goalId, "goal-b", "blockTopic should choose the least-progressed goal on multiple matches");
 
 assert.equal(parsedRssSubscription.error, undefined, "RSS subscription fixture should parse without error");
 assert.equal(parsedRssSubscription.entries.length, 2, "RSS subscription fixture should keep CDATA and missing-field items");
