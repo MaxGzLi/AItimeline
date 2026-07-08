@@ -56,6 +56,7 @@ import {
 import { AskComposer } from "./components/AskComposer";
 import { ConceptDigestPanel } from "./components/ConceptDigestPanel";
 import { ContextRail } from "./components/ContextRail";
+import { DeepReadArticleView } from "./components/DeepReadArticleView";
 import { PostDetailView } from "./components/PostDetailView";
 import { PostView } from "./components/PostView";
 import { SupplyDroughtCard, type SupplyRefillState } from "./components/SupplyDroughtCard";
@@ -97,6 +98,7 @@ import type {
   ApiCurationRunResponse,
   ApiConceptBriefResponse,
   ApiDismissedPostsResponse,
+  ApiDeepReadQueueResponse,
   ApiEvidenceResponse,
   ApiGoalsResponse,
   ApiImportResponse,
@@ -113,6 +115,7 @@ import type {
   ConceptBrief,
   DailyAutoJobBudgetRecord,
   DismissedPostSummary,
+  DeepReadArticleRecord,
   EvidenceLedger,
   InteractionSignals,
   LearningFeedbackByPost,
@@ -126,7 +129,7 @@ import type {
   TimelineCard
 } from "./lib/types";
 
-type ViewKey = "timeline" | "discover" | "graph" | "review" | "notifications" | "agent" | "settings";
+type ViewKey = "timeline" | "discover" | "graph" | "review" | "notifications" | "agent" | "settings" | "deepread";
 type TopicFilterKey = "all" | "__other__" | string;
 
 const languageStorageKey = "aitl-language";
@@ -149,7 +152,8 @@ const viewTitleKeys: Record<ViewKey, { title: string; sub?: string }> = {
   review: { title: "nav.review", sub: "nav.reviewSub" },
   notifications: { title: "nav.notifications", sub: "nav.notificationsSub" },
   agent: { title: "nav.agent", sub: "nav.agentSub" },
-  settings: { title: "nav.settings" }
+  settings: { title: "nav.settings" },
+  deepread: { title: "deepread.title", sub: "deepread.subtitle" }
 };
 
 const otherTopicFilterKey = "__other__";
@@ -254,6 +258,10 @@ export function App() {
   const [agentTurns, setAgentTurns] = useState<AgentTurnSummary[]>([]);
   const [notifications, setNotifications] = useState<AgentNotification[]>([]);
   const [learningGoals, setLearningGoals] = useState<LearningGoalWithTree[]>([]);
+  const [deepReadArticles, setDeepReadArticles] = useState<DeepReadArticleRecord[]>([]);
+  const [selectedDeepReadArticleId, setSelectedDeepReadArticleId] = useState<string | null>(null);
+  const [deepReadGeneratingGoalId, setDeepReadGeneratingGoalId] = useState<string | null>(null);
+  const [deepReadMessage, setDeepReadMessage] = useState("");
   const [selectedNotificationId, setSelectedNotificationId] = useState<string | null>(null);
   const [dismissToast, setDismissToast] = useState<{ postId: string; title: string } | null>(null);
   const [aiThreads, setAiThreads] = useState<AiThreads>({});
@@ -1224,6 +1232,7 @@ export function App() {
       setConceptAliases(snapshot.conceptAliases ?? []);
       setConceptMergeSuggestions(snapshot.conceptMergeSuggestions ?? []);
       setConceptBriefs(snapshot.conceptBriefs ?? []);
+      setDeepReadArticles(snapshot.deepReadArticles ?? []);
       setDismissedPosts(dismissed.records);
       setAgentTurns(snapshot.agentTurns);
       setNotifications(notificationsResult.records);
@@ -1581,6 +1590,65 @@ export function App() {
     }
   }
 
+  async function handleGenerateDeepRead(goal: LearningGoalWithTree) {
+    if (deepReadGeneratingGoalId || curationRunInFlight.current) {
+      return;
+    }
+
+    const now = new Date().toISOString();
+    setDeepReadGeneratingGoalId(goal.id);
+    setDeepReadMessage(t("deepread.generating"));
+    setIsRunningCuration(true);
+    curationRunInFlight.current = true;
+
+    try {
+      await apiRequest<ApiDeepReadQueueResponse>("/api/deepread", {
+        method: "POST",
+        body: {
+          goalId: goal.id,
+          topic: goal.concept,
+          userId: "local-user",
+          now
+        }
+      });
+      const result = await apiRequest<ApiCurationRunResponse>("/api/curation/run", {
+        method: "POST",
+        body: {
+          now,
+          limit: 1,
+          kinds: ["deep_read_article"]
+        }
+      });
+      const article = result.records.flatMap((record) => record.result?.deepReadArticle ?? [])[0];
+
+      if (article) {
+        setDeepReadArticles((records) => upsertById(records, [article]));
+        setSelectedDeepReadArticleId(article.id);
+        setActiveView("deepread");
+        setDeepReadMessage(t("deepread.ready"));
+      } else {
+        setDeepReadMessage(t("deepread.queued"));
+      }
+
+      setApiStatus("connected");
+      setApiMessage(t("api.connected"));
+      await refreshFromApi({ silent: true, mode: "buffer" });
+    } catch (error) {
+      // A rejected request (e.g. the daily frequency cap) is not a lost API.
+      setDeepReadMessage(error instanceof Error ? error.message : t("deepread.failed"));
+    } finally {
+      curationRunInFlight.current = false;
+      setIsRunningCuration(false);
+      setDeepReadGeneratingGoalId(null);
+    }
+  }
+
+  function handleOpenDeepRead(articleId: string) {
+    setSelectedDeepReadArticleId(articleId);
+    setSelectedCardId(null);
+    setActiveView("deepread");
+  }
+
   async function runCuration(trigger: "manual" | "auto" = "manual") {
     if (curationRunInFlight.current) {
       return;
@@ -1603,6 +1671,7 @@ export function App() {
             "research_idea",
             "generate_followup",
             "concept_brief",
+            "deep_read_article",
             "schedule_review",
             "cooldown_topic"
           ]
@@ -2188,6 +2257,8 @@ export function App() {
   const activeDismissedPostIds = new Set(
     dismissedPosts.filter((record) => record.isActive).map((record) => record.postId)
   );
+  const selectedDeepReadArticle =
+    deepReadArticles.find((article) => article.id === selectedDeepReadArticleId) ?? deepReadArticles[0] ?? null;
   const agentTurnStatusRank = {
     pending_confirmation: 0,
     researching: 1,
@@ -2539,12 +2610,27 @@ export function App() {
             isSavingLearningGoal={isSavingLearningGoal}
             learningGoalMessage={learningGoalMessage}
             learningGoals={learningGoals}
+            deepReadArticles={deepReadArticles}
+            deepReadGeneratingGoalId={deepReadGeneratingGoalId}
+            deepReadMessage={deepReadMessage}
             linkedGraph={linkedGraph}
             onArchiveLearningGoal={handleArchiveLearningGoal}
             onCreateLearningGoal={handleCreateLearningGoal}
+            onGenerateDeepRead={handleGenerateDeepRead}
+            onOpenDeepRead={handleOpenDeepRead}
             onOpenCardId={handleOpenCardId}
             onOpenConcept={handleOpenConcept}
             onResolveConceptSuggestion={resolveConceptSuggestion}
+          />
+        ) : null}
+
+        {activeView === "deepread" ? (
+          <DeepReadArticleView
+            article={selectedDeepReadArticle}
+            onBack={() => {
+              setActiveView("graph");
+              setGraphRequestedTab("skillTree");
+            }}
           />
         ) : null}
 

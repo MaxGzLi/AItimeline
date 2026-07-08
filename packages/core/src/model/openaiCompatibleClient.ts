@@ -21,6 +21,10 @@ export interface OpenAICompatibleModelClientOptions {
 export interface OpenAICompatibleModelClientEnv {
   AITIMELINE_MODEL_API_KEY?: string;
   AITIMELINE_MODEL_BASE_URL?: string;
+  AITIMELINE_MODEL_DEEPREAD_API_KEY?: string;
+  AITIMELINE_MODEL_DEEPREAD_BASE_URL?: string;
+  AITIMELINE_MODEL_DEEPREAD_MAX_TOKENS?: string;
+  AITIMELINE_MODEL_DEEPREAD_NAME?: string;
   AITIMELINE_MODEL_MAX_TOKENS?: string;
   AITIMELINE_MODEL_NAME?: string;
   OPENAI_API_KEY?: string;

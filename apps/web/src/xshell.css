@@ -1223,6 +1223,162 @@ body:has(.x-frame) {
 }
 .x-tree-state.mastered { color: var(--x-repost); }
 .x-tree-state.gap { color: var(--x-warn); }
+
+/* ---------- 深读文章 ---------- */
+.x-deepread,
+.x-deepread-empty {
+  display: grid;
+  gap: 0;
+}
+.x-deepread-hero {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px 22px;
+  border-bottom: 1px solid var(--x-line);
+}
+.x-deepread-hero .x-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.x-deepread-hero h1 {
+  margin: 0;
+  font-size: 24px;
+  line-height: 1.15;
+  letter-spacing: 0;
+}
+.x-deepread-meta,
+.x-deepread-intro {
+  margin: 0;
+  color: var(--x-muted);
+  line-height: 1.55;
+}
+.x-deepread-intro { color: var(--x-ink); }
+.x-deepread-notice {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--x-line);
+  color: var(--x-warn);
+}
+.x-deepread-notice p { margin: 0; color: var(--x-ink); line-height: 1.45; }
+.x-deepread-chapter {
+  display: grid;
+  gap: 0;
+  border-bottom: 1px solid var(--x-line);
+}
+.x-deepread-chapter.gap {
+  background: color-mix(in srgb, var(--x-warn) 5%, var(--x-bg));
+}
+.x-deepread-chapter-head {
+  display: grid;
+  gap: 7px;
+  padding: 18px 16px 8px;
+}
+.x-deepread-chapter-head h2 {
+  margin: 0;
+  font-size: 19px;
+  line-height: 1.25;
+}
+.x-deepread-chapter-head p {
+  margin: 0;
+  color: var(--x-muted);
+  line-height: 1.45;
+}
+.x-deepread-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+.x-deepread-tags span {
+  border: 1px solid var(--x-line);
+  border-radius: 999px;
+  padding: 1px 9px;
+  color: var(--x-muted);
+  font-size: 12px;
+}
+.x-deepread-gap {
+  margin: 0;
+  padding: 8px 16px;
+  color: var(--x-warn);
+  line-height: 1.45;
+}
+.x-deepread-paragraphs {
+  display: grid;
+  gap: 0;
+}
+.x-deepread-p {
+  margin: 0;
+  padding: 11px 16px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+.x-deepread-p.synthesis {
+  color: color-mix(in srgb, var(--x-ink) 78%, var(--x-muted));
+  border-left: 3px solid color-mix(in srgb, var(--x-blue) 45%, transparent);
+  padding-left: 13px;
+}
+.x-deepread-p.synthesis span {
+  display: inline-flex;
+  margin-right: 8px;
+  color: var(--x-blue);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+.x-deepread-chapter-sources,
+.x-deepread-footer section {
+  display: grid;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--x-line);
+}
+.x-deepread-chapter-sources h3,
+.x-deepread-footer h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 800;
+}
+.x-deepread-chapter-sources ul,
+.x-deepread-footer ul,
+.x-deepread-source-list {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding-left: 18px;
+}
+.x-deepread-chapter-sources li,
+.x-deepread-source-list li {
+  line-height: 1.4;
+}
+.x-deepread-chapter-sources small,
+.x-deepread-source-list small {
+  display: block;
+  color: var(--x-muted);
+  font-size: 12px;
+}
+.x-deepread-footer {
+  display: grid;
+}
+.x-deepread-footer p {
+  margin: 0;
+  line-height: 1.55;
+}
+.x-deepread-source-list li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 8px;
+  align-items: start;
+}
+.x-deepread-source-list a {
+  color: var(--x-ink);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+.x-deepread-source-list a:hover { text-decoration: underline; }
+.x-deepread-source-list small { grid-column: 2; }
+.x-deepread-quality { color: var(--x-muted); }
 .x-graph-actions {
   display: flex;
   align-items: center;

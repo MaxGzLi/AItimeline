@@ -110,6 +110,10 @@ try {
     Array.isArray(settingsSnapshot.learningGoals),
     "old snapshots should expose learningGoals as an empty compatible field"
   );
+  assert.ok(
+    Array.isArray(settingsSnapshot.deepReadArticles),
+    "old snapshots should expose deepReadArticles as an empty compatible field"
+  );
 
   const settingsReloadedServer = createApiServer({
     dataPath,
@@ -2086,6 +2090,83 @@ try {
     "persisted concept brief should keep every sentence sourced to a card id"
   );
 
+  const deepReadQueue = await requestJson("/api/deepread", {
+    method: "POST",
+    body: {
+      topic: firstConcept,
+      userId: "local-user",
+      now: "2026-06-10T00:07:00.000Z"
+    }
+  });
+
+  assert.equal(deepReadQueue.queued, true, "deep-read endpoint should enqueue a background job");
+  assert.ok(
+    deepReadQueue.records.some((record) => record.job.kind === "deep_read_article"),
+    "deep-read queue response should expose the deep_read_article job"
+  );
+
+  let deepReadFrequencyBlocked = false;
+
+  try {
+    await requestJson("/api/deepread", {
+      method: "POST",
+      body: {
+        topic: firstConcept,
+        userId: "local-user",
+        now: "2026-06-10T00:08:00.000Z"
+      }
+    });
+  } catch {
+    deepReadFrequencyBlocked = true;
+  }
+
+  assert.equal(deepReadFrequencyBlocked, true, "deep-read endpoint should frequency-control to one article per day");
+
+  const deepReadBatch = await requestJson("/api/curation/run", {
+    method: "POST",
+    body: {
+      now: "2026-06-10T00:09:00.000Z",
+      limit: 1,
+      kinds: ["deep_read_article"]
+    }
+  });
+  const generatedDeepRead = deepReadBatch.records.flatMap((record) => record.result?.deepReadArticle ?? [])[0];
+
+  assert.ok(generatedDeepRead, "deep-read worker should generate a fallback article without model config");
+  assert.equal(
+    generatedDeepRead.runnerKind,
+    "deterministic_fallback",
+    "network-isolated deep-read worker should use deterministic fallback"
+  );
+  assert.ok(Array.isArray(generatedDeepRead.discardedMaterials), "deep-read article should include discard list field");
+  assert.ok(Array.isArray(generatedDeepRead.deletedParagraphLog), "deep-read article should include deletion log field");
+
+  const deepReadList = await requestJson("/api/deepread");
+  const deepReadGet = await requestJson(`/api/deepread/${encodeURIComponent(generatedDeepRead.id)}`);
+
+  assert.ok(
+    deepReadList.records.some((record) => record.id === generatedDeepRead.id),
+    "deep-read list endpoint should return generated articles"
+  );
+  assert.equal(deepReadGet.record.id, generatedDeepRead.id, "deep-read detail endpoint should return one article");
+
+  const deepReadSnapshot = await requestJson("/api/snapshot");
+  const deepReadRegistryCitations = new Set(
+    deepReadSnapshot.sourceRegistries.flatMap((record) =>
+      record.registry.chunks.map((chunk) => `${chunk.sourceId}|${chunk.id}`)
+    )
+  );
+  const deepReadParagraphCitations = generatedDeepRead.chapters.flatMap((chapter) =>
+    chapter.paragraphs.flatMap((paragraph) => paragraph.citations)
+  );
+
+  assert.ok(
+    deepReadParagraphCitations.every((citation) =>
+      deepReadRegistryCitations.has(`${citation.sourceId}|${citation.chunkId}`)
+    ),
+    "every deep-read paragraph citation should resolve to a source registry chunk"
+  );
+
   const dismissResult = await requestJson(`/api/posts/${encodeURIComponent(dismissedPost.id)}/dismiss`, {
     method: "POST"
   });
@@ -2639,6 +2720,7 @@ try {
   assert.equal(snapshot.reviewStates.length, 2, "snapshot should persist review states");
   assert.equal(snapshot.sourceCandidates.length, 1, "snapshot should persist source candidates");
   assert.equal(snapshot.sourceCandidates[0].status, "imported", "imported source candidate should be marked imported");
+  assert.ok(snapshot.deepReadArticles.length >= 1, "snapshot should persist deep-read articles");
 
   // --- Background source discovery: interest without candidates -> discover job -> pending inbox ---
   const secondPost = importResult.posts.find((post) => post.id !== firstPost.id) ?? firstPost;

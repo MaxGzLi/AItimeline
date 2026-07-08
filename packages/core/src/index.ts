@@ -4,6 +4,7 @@ export * from "./agents/backgroundCurationQueue.js";
 export * from "./agents/conceptBrief.js";
 export * from "./agents/conversationAgent.js";
 export * from "./agents/ideaFlow.js";
+export * from "./deepread/index.js";
 export * from "./discovery/searchProvider.js";
 export * from "./discovery/sourceDiscovery.js";
 export * from "./fixtures.js";
