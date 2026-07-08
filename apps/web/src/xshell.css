@@ -248,6 +248,47 @@ body:has(.x-frame) {
   border-radius: 999px;
   background: var(--x-blue);
 }
+.x-topic-tabs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--x-line);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.x-topic-tabs::-webkit-scrollbar { display: none; }
+.x-topic-tabs .x-tab {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 170px;
+  min-height: 34px;
+  padding: 7px 12px;
+  border: 1px solid var(--x-line);
+  border-radius: 999px;
+  color: var(--x-muted);
+  font-size: 14px;
+  text-align: left;
+}
+.x-topic-tabs .x-tab span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.x-topic-tabs .x-tab em {
+  flex: 0 0 auto;
+  color: var(--x-muted);
+  font-size: 12px;
+  font-style: normal;
+}
+.x-topic-tabs .x-tab.active {
+  border-color: var(--x-ink);
+  color: var(--x-ink);
+}
+.x-topic-tabs .x-tab.active::after { content: none; }
 
 .x-merge-banner {
   display: flex;
@@ -689,6 +730,21 @@ body:has(.x-frame) {
   color: var(--x-muted);
   font-size: 14px;
   text-align: center;
+}
+.x-block-divider {
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 10px 16px 8px 72px;
+  border-bottom: 1px solid var(--x-line);
+  color: var(--x-muted);
+  font-size: 13px;
+}
+.x-block-divider span {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .x-supply-card {

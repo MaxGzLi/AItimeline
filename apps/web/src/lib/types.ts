@@ -18,6 +18,8 @@ import type {
   SourceQualityVerdict,
   SkillTreeView,
   SubscriptionRecord,
+  TimelineBlockDivider,
+  TimelineBlockTopic,
   TopicState,
   UserMemory,
   WeeklyRecapRecord
@@ -175,7 +177,22 @@ export type ApiSettings = {
   environmentContentLanguage: "zh" | "en" | null;
 };
 
-export type TimelineCard = RankedKnowledgeCard & { reviewDueAt?: string };
+export type TimelineCard = RankedKnowledgeCard & {
+  reviewDueAt?: string;
+  blockTopic?: TimelineBlockTopic;
+  timelineBlockId?: string;
+  timelineDivider?: TimelineBlockDivider;
+};
+
+export type ApiTimelineBlock = {
+  id: string;
+  topic: TimelineBlockTopic;
+  divider: TimelineBlockDivider;
+  postIds: string[];
+  score: number;
+  highestScore: number;
+  dwellBoost: number;
+};
 
 export type SupplyStatus = {
   newCards48h: number;
@@ -190,6 +207,7 @@ export type SupplyStatus = {
 
 export type ApiTimelineResponse = {
   posts: TimelineCard[];
+  timelineBlocks?: ApiTimelineBlock[];
   sourceImports: SourceImport[];
   topicStates?: TopicState[];
   supplyStatus?: SupplyStatus;

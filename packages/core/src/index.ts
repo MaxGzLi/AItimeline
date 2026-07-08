@@ -29,6 +29,7 @@ export * from "./harness/systemPrompt.js";
 export * from "./memory/userMemoryControls.js";
 export * from "./model/openaiCompatibleClient.js";
 export * from "./ranking/postReleasePlan.js";
+export * from "./ranking/arrangeTimelineBlocks.js";
 export * from "./ranking/lifecycle.js";
 export * from "./ranking/ranker.js";
 export * from "./recap/weeklyRecap.js";

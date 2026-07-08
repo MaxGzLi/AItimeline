@@ -70,6 +70,7 @@ export function PostView({
   const postRef = useRef<HTMLElement | null>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const visibleSince = useRef<number | null>(null);
+  const accumulatedVisibleMs = useRef(0);
   const reportedDwellMs = useRef(0);
   const impressionFired = useRef(false);
   const impressionCard = useRef(card);
@@ -91,23 +92,35 @@ export function PostView({
   const note = card.kind === "connection_note" ? card.connectionNote : undefined;
 
   useEffect(() => {
+    visibleSince.current = null;
+    accumulatedVisibleMs.current = 0;
+    reportedDwellMs.current = 0;
+    impressionFired.current = false;
+  }, [card.id]);
+
+  useEffect(() => {
     const node = postRef.current;
 
     if (!node || !("IntersectionObserver" in window)) {
       return;
     }
 
+    const getCurrentDwellMs = () => {
+      const activeVisibleMs = visibleSince.current === null ? 0 : performance.now() - visibleSince.current;
+
+      return Math.min(120000, Math.round(accumulatedVisibleMs.current + activeVisibleMs));
+    };
     const flushDwell = () => {
-      if (visibleSince.current === null) {
-        return;
+      if (visibleSince.current !== null) {
+        accumulatedVisibleMs.current = getCurrentDwellMs();
+        visibleSince.current = null;
       }
 
-      const dwellTimeMs = Math.round(performance.now() - visibleSince.current);
-      visibleSince.current = null;
+      const dwellTimeMs = Math.min(120000, Math.round(accumulatedVisibleMs.current));
 
       if (dwellTimeMs >= 1200 && dwellTimeMs > reportedDwellMs.current + 800) {
         reportedDwellMs.current = dwellTimeMs;
-        onDwell(card, dwellTimeMs);
+        onDwell(impressionCard.current, dwellTimeMs);
       }
     };
 
@@ -127,22 +140,29 @@ export function PostView({
         return;
       }
 
-      const dwellTimeMs = Math.round(performance.now() - visibleSince.current);
+      const dwellTimeMs = getCurrentDwellMs();
 
       if (dwellTimeMs >= 9000 && dwellTimeMs > reportedDwellMs.current + 3500) {
         reportedDwellMs.current = dwellTimeMs;
-        onDwell(card, dwellTimeMs);
+        onDwell(impressionCard.current, dwellTimeMs);
       }
     }, 3000);
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        flushDwell();
+      }
+    };
 
     observer.observe(node);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
       window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
       flushDwell();
       observer.disconnect();
     };
-  }, [card, onDwell]);
+  }, [card.id, onDwell]);
 
   useEffect(() => {
     if (!onImpression) {
