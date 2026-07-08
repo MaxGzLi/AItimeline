@@ -1029,9 +1029,9 @@ body:has(.x-frame) {
   font-size: 13px;
   font-style: normal;
 }
-.x-skill-layers {
+.x-skill-tree {
   display: grid;
-  gap: 12px;
+  gap: 10px;
   padding: 14px 16px 24px;
 }
 .x-skill-summary {
@@ -1046,75 +1046,64 @@ body:has(.x-frame) {
   border-radius: 999px;
   padding: 2px 9px;
 }
-.x-skill-layer {
+.x-tree-branch {
   display: grid;
-  gap: 8px;
-  padding-top: 10px;
-  border-top: 1px solid var(--x-line);
 }
-.x-skill-layer-head {
+.x-tree-children {
+  display: grid;
+  margin-left: 10px;
+  padding-left: 14px;
+  border-left: 1px solid var(--x-line);
+}
+.x-tree-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  color: var(--x-muted);
-  font-size: 13px;
-}
-.x-skill-layer-head em {
-  color: var(--x-repost);
-  font-style: normal;
-  font-weight: 700;
-}
-.x-skill-nodes {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 8px;
-}
-.x-skill-node {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: 9px;
-  min-height: 72px;
-  padding: 10px;
-  border: 1px solid var(--x-line);
-  border-radius: 8px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 6px;
   background: none;
   color: var(--x-ink);
   font: inherit;
   text-align: left;
   cursor: pointer;
 }
-.x-skill-node.required { background: var(--x-module); }
-.x-skill-node.optional { background: transparent; }
-.x-skill-node.mastered { border-color: color-mix(in srgb, var(--x-repost) 55%, var(--x-line)); }
-.x-skill-node.gap { border-style: dashed; border-color: color-mix(in srgb, var(--x-warn) 70%, var(--x-line)); }
-.x-skill-node:hover { background: var(--x-hover); }
-.x-skill-status {
-  display: grid;
-  place-items: center;
-  color: var(--x-muted);
-}
-.x-skill-node.mastered .x-skill-status { color: var(--x-repost); }
-.x-skill-node.gap .x-skill-status { color: var(--x-warn); }
-.x-skill-main {
-  display: grid;
-  gap: 2px;
+.x-tree-row:hover { background: var(--x-hover); }
+.x-tree-name {
   min-width: 0;
-}
-.x-skill-main strong {
   font-size: 14px;
   overflow-wrap: anywhere;
 }
-.x-skill-main em, .x-skill-meta {
+.x-tree-row.required .x-tree-name { font-weight: 600; }
+.x-tree-row.goal .x-tree-name {
+  font-size: 15px;
+  font-weight: 700;
+}
+.x-tree-row.gap .x-tree-name {
+  color: var(--x-warn);
+  text-decoration: underline dashed;
+  text-underline-offset: 4px;
+}
+.x-tree-row.mastered .x-tree-name { color: var(--x-muted); }
+.x-tree-row.repeat { opacity: 0.55; }
+.x-tree-tags {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 10px;
   color: var(--x-muted);
   font-size: 12px;
+}
+.x-tree-tags em {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-style: normal;
 }
-.x-skill-meta {
-  grid-column: 2;
-  justify-self: start;
-}
+.x-tree-state.mastered { color: var(--x-repost); }
+.x-tree-state.gap { color: var(--x-warn); }
 .x-graph-actions {
   display: flex;
   align-items: center;
@@ -2358,5 +2347,4 @@ button.x-chip {
 
 @media (max-width: 700px) {
   .x-goal-form { grid-template-columns: minmax(0, 1fr); }
-  .x-skill-nodes { grid-template-columns: minmax(0, 1fr); }
 }
