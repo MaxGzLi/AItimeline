@@ -64,6 +64,10 @@ globalThis.fetch = async (input, init = {}) => {
     );
   }
 
+  if (url.startsWith("https://network-fail.local/")) {
+    throw new TypeError("fetch failed");
+  }
+
   if (url.startsWith(baseUrl)) {
     return dispatchToServer(server, url, init);
   }
@@ -977,6 +981,372 @@ try {
     );
   } finally {
     await closeServer(subscriptionServer);
+  }
+
+  const previousSupplyBudget = process.env.AITIMELINE_DAILY_AUTO_JOB_BUDGET;
+  process.env.AITIMELINE_DAILY_AUTO_JOB_BUDGET = "2";
+
+  const supplyNow = "2026-07-08T12:00:00.000Z";
+  const supplyDataPath = join(tempDir, "supply-drought.json");
+  const supplyCurationPath = join(tempDir, "supply-drought-curation.json");
+  const supplyOldPosts = [
+    makeApiSmokePost({
+      id: "supply-old-1",
+      title: "Supply old card 1",
+      concepts: ["Supply"],
+      createdAt: "2026-07-04T00:00:00.000Z"
+    }),
+    makeApiSmokePost({
+      id: "supply-old-2",
+      title: "Supply old card 2",
+      concepts: ["Supply"],
+      createdAt: "2026-07-05T00:00:00.000Z"
+    })
+  ];
+  const recentConnectionNote = {
+    ...makeApiSmokePost({
+      id: "supply-connection-note",
+      title: "Supply recent connection note",
+      concepts: ["Supply"],
+      createdAt: "2026-07-08T11:00:00.000Z"
+    }),
+    kind: "connection_note"
+  };
+  const supplyCandidates = [
+    makeSourceCandidateRecord({
+      id: "supply-candidate-1",
+      url: "https://network-fail.local/supply-1",
+      score: 0.99
+    }),
+    makeSourceCandidateRecord({
+      id: "supply-candidate-2",
+      url: `${baseUrl}/fixtures/article-background?query=supply-2`,
+      score: 0.94
+    }),
+    makeSourceCandidateRecord({
+      id: "supply-candidate-3",
+      url: `${baseUrl}/fixtures/article-background?query=supply-3`,
+      score: 0.9
+    }),
+    makeSourceCandidateRecord({
+      id: "supply-candidate-4",
+      url: `${baseUrl}/fixtures/article-background?query=supply-4`,
+      score: 0.86
+    }),
+    makeSourceCandidateRecord({
+      id: "supply-candidate-5",
+      url: `${baseUrl}/fixtures/article-background?query=supply-5`,
+      score: 0.82
+    }),
+    makeSourceCandidateRecord({
+      id: "supply-candidate-6",
+      url: `${baseUrl}/fixtures/article-background?query=supply-6`,
+      score: 0.78
+    }),
+    makeSourceCandidateRecord({
+      id: "supply-candidate-unreachable",
+      url: `${baseUrl}/fixtures/article-background?query=unreachable`,
+      score: 1,
+      status: "unreachable"
+    }),
+    makeSourceCandidateRecord({
+      id: "supply-candidate-already-queued",
+      url: `${baseUrl}/fixtures/article-background?query=already-queued`,
+      score: 0.97,
+      status: "queued"
+    })
+  ];
+  const existingQueuedImportJob = makeQueuedImportJobRecord(
+    supplyCandidates.find((record) => record.id === "supply-candidate-already-queued"),
+    supplyNow
+  );
+
+  await writeFile(
+    supplyDataPath,
+    JSON.stringify({
+      version: 1,
+      updatedAt: supplyNow,
+      posts: [...supplyOldPosts, recentConnectionNote],
+      sourceCandidates: supplyCandidates,
+      subscriptions: [
+        {
+          id: "supply-subscription-1",
+          kind: "rss",
+          feedUrl: "https://feeds.local/supply-1.xml",
+          title: "Supply subscription 1",
+          filterMode: "relevant",
+          createdAt: "2026-07-01T00:00:00.000Z",
+          lastPolledAt: supplyNow
+        },
+        {
+          id: "supply-subscription-2",
+          kind: "rss",
+          feedUrl: "https://feeds.local/supply-2.xml",
+          title: "Supply subscription 2",
+          filterMode: "relevant",
+          createdAt: "2026-07-01T00:00:00.000Z",
+          lastPolledAt: supplyNow
+        }
+      ],
+      reviewStates: [
+        {
+          postId: "supply-old-1",
+          intervalDays: 1,
+          dueAt: "2026-07-07T00:00:00.000Z"
+        }
+      ]
+    })
+  );
+  await writeFile(
+    supplyCurationPath,
+    JSON.stringify({
+      version: 1,
+      records: [existingQueuedImportJob]
+    })
+  );
+
+  const supplyServer = createApiServer({
+    dataPath: supplyDataPath,
+    curationDataPath: supplyCurationPath,
+    mediaRootDir,
+    enableFixtures: true,
+    searchProvider: fakeSearchProvider
+  });
+
+  try {
+    const droughtTimeline = await requestJsonFromServer(
+      supplyServer,
+      `/api/timeline?now=${encodeURIComponent(supplyNow)}`
+    );
+
+    assert.equal(droughtTimeline.supplyStatus.newCards48h, 0, "connection_note cards should not count as new supply");
+    assert.equal(droughtTimeline.supplyStatus.pendingCandidates, 6, "supplyStatus should count pending candidates");
+    assert.equal(droughtTimeline.supplyStatus.queuedCandidates, 1, "supplyStatus should count queued candidates");
+    assert.equal(droughtTimeline.supplyStatus.activeSubscriptions, 2, "supplyStatus should count active subscriptions");
+    assert.equal(droughtTimeline.supplyStatus.queuedImports, 1, "supplyStatus should count queued import_source jobs");
+    assert.equal(droughtTimeline.supplyStatus.budgetRemaining, 2, "supplyStatus should expose today's budget remaining");
+    assert.equal(droughtTimeline.supplyStatus.reviewDueCount, 1, "supplyStatus should count due review cards");
+    assert.equal(droughtTimeline.supplyStatus.drought, true, "old-card supply should be in drought");
+
+    const refillResult = await requestJsonFromServer(supplyServer, "/api/supply/refill", {
+      method: "POST",
+      body: { now: supplyNow }
+    });
+    const refillSnapshot = await requestJsonFromServer(supplyServer, "/api/snapshot");
+    const refillJobs = await requestJsonFromServer(supplyServer, "/api/curation/jobs?status=queued");
+    const refillImportJobs = refillJobs.jobs.filter((record) => record.job.kind === "import_source");
+
+    assert.deepEqual(refillResult, { queued: 2, skipped: 3, budgetRemaining: 0 }, "refill should queue to the budget limit and skip the rest of top-5");
+    assert.equal(
+      refillSnapshot.autoJobBudget.find((record) => record.date === "2026-07-08")?.used,
+      2,
+      "refill should consume the daily auto-job budget"
+    );
+    assert.deepEqual(
+      refillImportJobs.map((record) => record.job.sourceCandidate.id).sort(),
+      ["supply-candidate-1", "supply-candidate-2", "supply-candidate-already-queued"].sort(),
+      "refill should enqueue the highest-scored pending candidates and leave unreachable unselected"
+    );
+    assert.equal(
+      refillSnapshot.sourceCandidates.find((record) => record.id === "supply-candidate-unreachable")?.status,
+      "unreachable",
+      "unreachable candidates should remain unreachable after refill"
+    );
+
+    const repeatRefill = await requestJsonFromServer(supplyServer, "/api/supply/refill", {
+      method: "POST",
+      body: { now: supplyNow }
+    });
+    const repeatRefillJobs = await requestJsonFromServer(supplyServer, "/api/curation/jobs?status=queued");
+
+    assert.equal(repeatRefill.queued, 0, "repeat refill should not enqueue duplicates");
+    assert.equal(repeatRefill.budgetRemaining, 0, "repeat refill should report exhausted budget");
+    assert.equal(
+      repeatRefillJobs.jobs.filter((record) => record.job.kind === "import_source").length,
+      3,
+      "repeat refill should keep the import queue idempotent"
+    );
+
+    // Frequency control must be exercised while the drought persists: run the
+    // worker twice without executing imports (kinds excludes import_source), so
+    // no new cards are produced between the two checks.
+    await requestJsonFromServer(supplyServer, "/api/curation/run", {
+      method: "POST",
+      body: {
+        now: supplyNow,
+        kinds: ["generate_followup"]
+      }
+    });
+    const stillDroughtTimeline = await requestJsonFromServer(
+      supplyServer,
+      `/api/timeline?now=${encodeURIComponent(supplyNow)}`
+    );
+
+    assert.equal(
+      stillDroughtTimeline.supplyStatus.drought,
+      true,
+      "drought should still hold before the repeat notification check"
+    );
+
+    await requestJsonFromServer(supplyServer, "/api/curation/run", {
+      method: "POST",
+      body: {
+        now: supplyNow,
+        kinds: ["generate_followup"]
+      }
+    });
+    const persistentDroughtNotifications = await requestJsonFromServer(supplyServer, "/api/notifications");
+
+    assert.equal(
+      persistentDroughtNotifications.records.filter((record) => record.kind === "supply_drought").length,
+      1,
+      "supply_drought notification should not repeat while the drought persists"
+    );
+
+    await requestJsonFromServer(supplyServer, "/api/curation/run", {
+      method: "POST",
+      body: {
+        now: supplyNow,
+        kinds: ["import_source"]
+      }
+    });
+    const afterNetworkFailureSnapshot = await requestJsonFromServer(supplyServer, "/api/snapshot");
+    const afterNetworkNotifications = await requestJsonFromServer(supplyServer, "/api/notifications");
+
+    assert.equal(
+      afterNetworkFailureSnapshot.sourceCandidates.find((record) => record.id === "supply-candidate-1")?.status,
+      "unreachable",
+      "network failed import_source jobs should mark their source candidate unreachable"
+    );
+    assert.equal(
+      afterNetworkFailureSnapshot.sourceCandidates.find((record) => record.id === "supply-candidate-2")?.status,
+      "imported",
+      "successful refill imports should mark candidates imported"
+    );
+    assert.equal(
+      afterNetworkNotifications.records.filter((record) => record.kind === "supply_drought").length,
+      1,
+      "worker drought check should create one supply_drought notification"
+    );
+
+    const recoveredAfterImportsTimeline = await requestJsonFromServer(
+      supplyServer,
+      `/api/timeline?now=${encodeURIComponent("2026-07-08T12:05:00.000Z")}`
+    );
+
+    assert.equal(
+      recoveredAfterImportsTimeline.supplyStatus.drought,
+      false,
+      "successful imports should lift the drought"
+    );
+
+    await requestJsonFromServer(supplyServer, "/api/curation/run", {
+      method: "POST",
+      body: {
+        now: "2026-07-08T12:05:00.000Z",
+        kinds: ["import_source"]
+      }
+    });
+    const repeatedNotifications = await requestJsonFromServer(supplyServer, "/api/notifications");
+
+    assert.equal(
+      repeatedNotifications.records.filter((record) => record.kind === "supply_drought").length,
+      1,
+      "no further supply_drought notification should be created once supply recovers"
+    );
+  } finally {
+    await closeServer(supplyServer);
+    if (previousSupplyBudget === undefined) {
+      delete process.env.AITIMELINE_DAILY_AUTO_JOB_BUDGET;
+    } else {
+      process.env.AITIMELINE_DAILY_AUTO_JOB_BUDGET = previousSupplyBudget;
+    }
+  }
+
+  const supplyRecoveredDataPath = join(tempDir, "supply-recovered.json");
+  const supplyRecoveredCurationPath = join(tempDir, "supply-recovered-curation.json");
+  await writeFile(
+    supplyRecoveredDataPath,
+    JSON.stringify({
+      version: 1,
+      updatedAt: supplyNow,
+      posts: [
+        makeApiSmokePost({
+          id: "supply-new-1",
+          title: "Supply new card 1",
+          concepts: ["Supply"],
+          createdAt: "2026-07-08T10:00:00.000Z"
+        }),
+        makeApiSmokePost({
+          id: "supply-new-2",
+          title: "Supply new card 2",
+          concepts: ["Supply"],
+          createdAt: "2026-07-08T11:00:00.000Z"
+        }),
+        makeApiSmokePost({
+          id: "supply-new-3",
+          title: "Supply new card 3",
+          concepts: ["Supply"],
+          createdAt: "2026-07-08T12:00:00.000Z"
+        })
+      ]
+    })
+  );
+  const supplyRecoveredServer = createApiServer({
+    dataPath: supplyRecoveredDataPath,
+    curationDataPath: supplyRecoveredCurationPath,
+    mediaRootDir,
+    enableFixtures: true,
+    searchProvider: fakeSearchProvider
+  });
+
+  try {
+    const recoveredTimeline = await requestJsonFromServer(
+      supplyRecoveredServer,
+      `/api/timeline?now=${encodeURIComponent(supplyNow)}`
+    );
+
+    assert.equal(recoveredTimeline.supplyStatus.newCards48h, 3, "three recent cards should count as sufficient supply");
+    assert.equal(recoveredTimeline.supplyStatus.drought, false, "supplyStatus drought should turn false at the threshold");
+  } finally {
+    await closeServer(supplyRecoveredServer);
+  }
+
+  const legacySupplyDataPath = join(tempDir, "supply-legacy-compatible.json");
+  const legacySupplyCurationPath = join(tempDir, "supply-legacy-compatible-curation.json");
+  const legacyCandidate = makeSourceCandidateRecord({
+    id: "legacy-candidate-without-status",
+    url: `${baseUrl}/fixtures/article-background?query=legacy-supply`,
+    score: 0.6
+  });
+  const { status: _status, ...legacyCandidateWithoutStatus } = legacyCandidate;
+
+  await writeFile(
+    legacySupplyDataPath,
+    JSON.stringify({
+      version: 1,
+      updatedAt: supplyNow,
+      sourceCandidates: [legacyCandidateWithoutStatus]
+    })
+  );
+  const legacySupplyServer = createApiServer({
+    dataPath: legacySupplyDataPath,
+    curationDataPath: legacySupplyCurationPath,
+    mediaRootDir,
+    enableFixtures: true,
+    searchProvider: fakeSearchProvider
+  });
+
+  try {
+    const legacySupplySnapshot = await requestJsonFromServer(legacySupplyServer, "/api/snapshot");
+
+    assert.equal(
+      legacySupplySnapshot.sourceCandidates[0]?.status,
+      "pending",
+      "legacy source candidates without unreachable-era status should normalize to pending"
+    );
+  } finally {
+    await closeServer(legacySupplyServer);
   }
 
   const weeklyDataPath = join(tempDir, "weekly-recap.json");
@@ -2739,6 +3109,62 @@ function makeInteractionSignalRecord(post, { liked = false, saved = false, creat
       reason: "Smoke fixture."
     },
     createdAt
+  };
+}
+
+function makeSourceCandidateRecord({
+  id,
+  url,
+  score,
+  status = "pending",
+  concept = "Supply",
+  createdAt = "2026-07-08T00:00:00.000Z"
+}) {
+  const sourceId = `article-${id}`;
+
+  return {
+    id,
+    candidate: {
+      id,
+      source: {
+        id: sourceId,
+        title: `Source candidate ${id}`,
+        url,
+        type: "article"
+      },
+      topicId: concept,
+      conceptIds: [concept],
+      relevanceScore: score,
+      noveltyScore: score,
+      qualityScore: score,
+      reason: `Candidate ${id} is ranked for supply refill.`,
+      discoveredAt: createdAt
+    },
+    status,
+    intakeKind: "agent_discovery",
+    createdAt,
+    updatedAt: createdAt
+  };
+}
+
+function makeQueuedImportJobRecord(candidateRecord, createdAt) {
+  return {
+    id: `queued-import-${candidateRecord.candidate.id}`,
+    job: {
+      id: `queued-import-${candidateRecord.candidate.id}`,
+      kind: "import_source",
+      topicId: candidateRecord.candidate.topicId,
+      conceptIds: candidateRecord.candidate.conceptIds,
+      priority: 0.7,
+      reason: "Existing queued import smoke fixture.",
+      createdAt,
+      runAfter: createdAt,
+      sourceCandidate: candidateRecord.candidate
+    },
+    status: "queued",
+    attempts: 0,
+    createdAt,
+    updatedAt: createdAt
   };
 }
 

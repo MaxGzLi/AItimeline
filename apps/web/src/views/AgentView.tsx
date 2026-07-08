@@ -92,7 +92,7 @@ export function AgentView({
 
   return (
     <>
-      <section className="x-mr" aria-label={t("mr.sourceImport")}>
+      <section className="x-mr" id="agent-source-import" aria-label={t("mr.sourceImport")}>
         <h2 className="x-mrhead">
           <span className="x-pulse" aria-hidden="true" />
           {t("mr.sourceImport")}
@@ -110,7 +110,7 @@ export function AgentView({
         />
       </section>
 
-      <section className="x-mr" aria-label={t("mr.subscriptions")}>
+      <section className="x-mr" id="agent-subscriptions" aria-label={t("mr.subscriptions")}>
         <h2 className="x-mrhead">
           <span className="x-pulse" aria-hidden="true" />
           {t("mr.subscriptions")}

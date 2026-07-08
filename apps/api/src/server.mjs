@@ -66,6 +66,9 @@ const currentDir = dirname(fileURLToPath(import.meta.url));
 const defaultDataPath = resolve(currentDir, "../data/aitimeline.json");
 const defaultCurationDataPath = resolve(currentDir, "../data/curation-jobs.json");
 const defaultMediaRoot = resolve(currentDir, "../data/media");
+const supplyDroughtNewCardThreshold = 3;
+const supplyDroughtWindowHours = 48;
+const supplyRefillLimit = 5;
 
 export function createApiServer(options = {}) {
   const dataPath = options.dataPath ?? process.env.AITIMELINE_DATA_PATH ?? defaultDataPath;
@@ -380,7 +383,8 @@ export function createApiServer(options = {}) {
             persistenceStore.getSnapshot(),
             url.searchParams.get("now"),
             url.searchParams.get("userId") ?? "local-user",
-            resolveContentLanguage(persistenceStore, process.env)
+            resolveContentLanguage(persistenceStore, process.env),
+            curationStore
           )
         );
         return;
@@ -540,6 +544,20 @@ export function createApiServer(options = {}) {
 
       if (request.method === "GET" && url.pathname === "/api/subscriptions") {
         sendJson(response, 200, { records: persistenceStore.getSnapshot().subscriptions });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/supply/refill") {
+        const body = await readJsonBody(request);
+        const now = typeof body.now === "string" ? body.now : new Date().toISOString();
+        const result = queueSupplyRefill({
+          persistenceStore,
+          curationStore,
+          contentLanguage: resolveContentLanguage(persistenceStore, process.env),
+          now
+        });
+
+        sendJson(response, 200, result);
         return;
       }
 
@@ -786,6 +804,25 @@ export function createApiServer(options = {}) {
           contentLanguage,
           now: runNow
         });
+        const runKinds = Array.isArray(body.kinds) ? body.kinds : undefined;
+        const shouldRefillForDrought = !runKinds || runKinds.includes("import_source");
+        const supplyStatus = getSupplyStatus(persistenceStore.getSnapshot(), curationStore, runNow);
+        const droughtNotification = maybeCreateSupplyDroughtNotification({
+          persistenceStore,
+          status: supplyStatus,
+          contentLanguage,
+          now: runNow
+        });
+        let supplyRefill = { queued: 0, skipped: 0, budgetRemaining: supplyStatus.budgetRemaining };
+
+        if (shouldRefillForDrought && supplyStatus.drought) {
+          supplyRefill = queueSupplyRefill({
+            persistenceStore,
+            curationStore,
+            contentLanguage,
+            now: runNow
+          });
+        }
         const batch = await runDueBackgroundCurationJobs(
           curationStore,
           {
@@ -886,6 +923,21 @@ export function createApiServer(options = {}) {
             }
           }
 
+          if (
+            record.status === "failed" &&
+            record.job.kind === "import_source" &&
+            record.job.sourceCandidate &&
+            isNetworkFailureMessage(record.lastError)
+          ) {
+            snapshot = markSourceCandidateUnreachable(
+              persistenceStore,
+              persistenceStore.getSnapshot(),
+              record.job.sourceCandidate.id,
+              record.completedAt ?? filteredBatch.completedAt,
+              record.lastError
+            );
+          }
+
           if (record.result?.conceptBrief) {
             const completedAt = record.completedAt ?? filteredBatch.completedAt;
             snapshot = persistenceStore.saveConceptBriefs([record.result.conceptBrief], completedAt);
@@ -906,6 +958,8 @@ export function createApiServer(options = {}) {
         sendJson(response, 200, {
           ...filteredBatch,
           subscriptionPolling,
+          supplyRefill,
+          droughtNotification,
           snapshotSummary: summarizeSnapshot(snapshot)
         });
         return;
@@ -1322,6 +1376,184 @@ async function pollDueSubscriptions({ persistenceStore, curationStore, fetchImpl
     errors,
     snapshotSummary: summarizeSnapshot(workingSnapshot)
   };
+}
+
+function getSupplyStatus(snapshot, curationStore, nowValue) {
+  const now = nowValue ? new Date(nowValue) : new Date();
+  const windowStartMs = now.getTime() - supplyDroughtWindowHours * 60 * 60 * 1000;
+  const newCards48h = getKnowledgePosts(snapshot.posts).filter((post) => {
+    const createdAt = new Date(post.createdAt).getTime();
+
+    return Number.isFinite(createdAt) && createdAt >= windowStartMs && createdAt <= now.getTime();
+  }).length;
+  const hardDismissedPostIds = getHardDismissedPostIds(snapshot.dismissedPosts);
+  // Same cutoff as GET /api/review/due so the drought card count matches the review page.
+  const reviewDueCount = getDueReviewStates(snapshot.reviewStates, now.toISOString()).filter(
+    (state) => !hardDismissedPostIds.has(state.postId)
+  ).length;
+
+  return {
+    newCards48h,
+    pendingCandidates: snapshot.sourceCandidates.filter((record) => record.status === "pending").length,
+    queuedCandidates: snapshot.sourceCandidates.filter((record) => record.status === "queued").length,
+    activeSubscriptions: snapshot.subscriptions.length,
+    queuedImports: curationStore.list("queued").filter((record) => record.job.kind === "import_source").length,
+    budgetRemaining: getBudgetRemaining(snapshot, now),
+    reviewDueCount,
+    drought: newCards48h < supplyDroughtNewCardThreshold
+  };
+}
+
+function getBudgetRemaining(snapshot, nowValue) {
+  const limit = getDailyAutoJobBudgetLimit(process.env);
+  const budget = getDailyAutoJobBudgetRecord(snapshot, nowValue);
+  const used = budget?.used ?? 0;
+
+  return Math.max(0, limit - used);
+}
+
+function queueSupplyRefill({ persistenceStore, curationStore, contentLanguage, now }) {
+  const nowIso = normalizeIsoDate(now);
+  const snapshot = persistenceStore.getSnapshot();
+  const activeCandidateIds = getActiveImportSourceCandidateIds(curationStore);
+  const selectedRecords = snapshot.sourceCandidates
+    .filter((record) => record.status === "pending")
+    .filter((record) => !activeCandidateIds.has(record.candidate.id))
+    .sort((left, right) => scoreCandidateRecord(right) - scoreCandidateRecord(left))
+    .slice(0, supplyRefillLimit);
+
+  if (!selectedRecords.length) {
+    return {
+      queued: 0,
+      skipped: 0,
+      budgetRemaining: getBudgetRemaining(snapshot, nowIso)
+    };
+  }
+
+  const rawPlan = createSingleJobPlan(
+    selectedRecords.map((record) => createSupplyRefillImportJob(record.candidate, nowIso, contentLanguage)),
+    nowIso
+  );
+  const budgetResult = applyDailyAutoJobBudget({
+    plan: rawPlan,
+    budget: getDailyAutoJobBudgetRecord(snapshot, nowIso),
+    limit: getDailyAutoJobBudgetLimit(process.env),
+    now: nowIso
+  });
+  const acceptedIds = new Set(budgetResult.plan.acceptedSourceCandidateIds);
+  const records = curationStore.enqueuePlan(budgetResult.plan, nowIso);
+  let nextSnapshot = persistenceStore.saveDailyAutoJobBudgetRecords([budgetResult.budget], nowIso);
+
+  if (records.length) {
+    nextSnapshot = persistenceStore.saveCurationJobRecords(records, nowIso);
+  }
+
+  const queuedCandidateRecords = selectedRecords
+    .filter((record) => acceptedIds.has(record.candidate.id))
+    .map((record) => ({
+      ...record,
+      status: "queued",
+      updatedAt: nowIso,
+      lastQueuedAt: nowIso
+    }));
+
+  if (queuedCandidateRecords.length) {
+    nextSnapshot = persistenceStore.saveSourceCandidateRecords(queuedCandidateRecords, nowIso);
+  }
+
+  return {
+    queued: queuedCandidateRecords.length,
+    skipped: Math.max(0, selectedRecords.length - queuedCandidateRecords.length),
+    budgetRemaining: getBudgetRemaining(nextSnapshot, nowIso)
+  };
+}
+
+function getActiveImportSourceCandidateIds(curationStore) {
+  return new Set(
+    curationStore
+      .list()
+      .filter((record) => record.status === "queued" || record.status === "running")
+      .filter((record) => record.job.kind === "import_source")
+      .flatMap((record) => record.job.sourceCandidate?.id ?? [])
+  );
+}
+
+function createSupplyRefillImportJob(candidate, now, contentLanguage) {
+  const candidateScore = scoreCandidateRecord({ candidate });
+
+  return {
+    id: `supply-refill-import-${hashText(candidate.id)}`,
+    kind: "import_source",
+    topicId: candidate.topicId ?? candidate.conceptIds[0] ?? candidate.source.title,
+    conceptIds: candidate.conceptIds,
+    priority: Math.round(Math.min(1, Math.max(0.1, candidateScore)) * 100) / 100,
+    reason:
+      contentLanguage === "en"
+        ? `Supply is low, so AITimeline is trying this candidate source: ${candidate.reason}`
+        : `供给偏低,所以尝试导入这个候选来源:${candidate.reason}`,
+    createdAt: now,
+    runAfter: now,
+    sourceCandidate: candidate
+  };
+}
+
+function maybeCreateSupplyDroughtNotification({ persistenceStore, status, contentLanguage, now }) {
+  if (!status.drought) {
+    return null;
+  }
+
+  const snapshot = persistenceStore.getSnapshot();
+  const droughtStartAt = getSupplyDroughtStartAt(snapshot, now);
+  const existing = snapshot.notifications.find(
+    (record) => record.kind === "supply_drought" && record.createdAt >= droughtStartAt
+  );
+
+  if (existing) {
+    return existing;
+  }
+
+  const droughtStartDay = droughtStartAt.slice(0, 10);
+  const notification = {
+    id: `notification-${hashText(`supply_drought|${droughtStartDay}`)}`,
+    kind: "supply_drought",
+    turnId: `supply-drought-${droughtStartDay}`,
+    postIds: [],
+    body: formatSupplyDroughtNotificationBody(status, contentLanguage),
+    createdAt: normalizeIsoDate(now)
+  };
+
+  persistenceStore.saveNotifications([notification], now);
+
+  return notification;
+}
+
+function getSupplyDroughtStartAt(snapshot, nowValue) {
+  const now = nowValue ? new Date(nowValue) : new Date();
+  const knowledgePosts = getKnowledgePosts(snapshot.posts)
+    .map((post) => new Date(post.createdAt))
+    .filter((date) => Number.isFinite(date.getTime()))
+    .sort((left, right) => right.getTime() - left.getTime());
+
+  if (knowledgePosts.length >= supplyDroughtNewCardThreshold) {
+    const thresholdPost = knowledgePosts[supplyDroughtNewCardThreshold - 1];
+    const start = new Date(thresholdPost.getTime() + supplyDroughtWindowHours * 60 * 60 * 1000);
+
+    return (start > now ? now : start).toISOString();
+  }
+
+  if (knowledgePosts.length > 0) {
+    return knowledgePosts[knowledgePosts.length - 1].toISOString();
+  }
+
+  return "1970-01-01T00:00:00.000Z";
+}
+
+function formatSupplyDroughtNotificationBody(status, contentLanguage) {
+  if (contentLanguage === "en") {
+    return `Only ${status.newCards48h} new cards arrived in the last 48h. Candidate pool: ${status.pendingCandidates} pending, ${status.queuedCandidates} queued; subscriptions: ${status.activeSubscriptions}. Add a subscription, refill candidates, or import a link to restart supply.`;
+  }
+
+  return `近 48 小时只有 ${status.newCards48h} 张新卡。候选池:${status.pendingCandidates} 条待挖、${status.queuedCandidates} 条已排队;订阅:${status.activeSubscriptions} 条。可以配订阅、挖候选池或导入链接来恢复供给。`;
 }
 
 function normalizeSubscriptionTitle(inputTitle, feedTitle, feedUrl) {
@@ -3093,6 +3325,33 @@ function updateSourceCandidateAfterImport(persistenceStore, snapshot, candidateI
   ]);
 }
 
+function markSourceCandidateUnreachable(persistenceStore, snapshot, candidateId, now, errorMessage) {
+  const candidateRecord = snapshot.sourceCandidates.find((item) => item.candidate.id === candidateId);
+
+  if (!candidateRecord) {
+    return snapshot;
+  }
+
+  return persistenceStore.saveSourceCandidateRecords([
+    {
+      ...candidateRecord,
+      status: "unreachable",
+      updatedAt: now,
+      rejectionReasons: [...(candidateRecord.rejectionReasons ?? []), errorMessage ?? "Network request failed."]
+    }
+  ]);
+}
+
+function isNetworkFailureMessage(message) {
+  if (typeof message !== "string" || !message.trim()) {
+    return false;
+  }
+
+  return /(?:fetch failed|network|timeout|timed out|abort|aborted|econnrefused|econnreset|enotfound|etimedout|eai_again|und_err_connect_timeout|socket)/i.test(
+    message
+  );
+}
+
 function collectKnownSourceUrls(snapshot) {
   return [
     ...snapshot.posts.flatMap((post) => post.sources.map((source) => source.url)),
@@ -4321,7 +4580,7 @@ async function ingestSourceCandidate(candidate) {
   throw new Error(`Background source ingestion does not support ${candidate.source.type} yet.`);
 }
 
-function getTimelineResponse(snapshot, nowValue, userId = "local-user", contentLanguage = "zh") {
+function getTimelineResponse(snapshot, nowValue, userId = "local-user", contentLanguage = "zh", curationStore) {
   const now = nowValue ? new Date(nowValue) : new Date();
   const releasePlans = snapshot.releasePlans;
   const releaseItems = releasePlans.flatMap((plan) => plan.items);
@@ -4375,6 +4634,7 @@ function getTimelineResponse(snapshot, nowValue, userId = "local-user", contentL
     sourceImports: snapshot.sourceImports,
     releasePlans,
     topicStates: snapshot.topicStates,
+    supplyStatus: curationStore ? getSupplyStatus(snapshot, curationStore, now) : undefined,
     recommendationSummary: summarizeRecommendation(rankedPosts),
     snapshotSummary: summarizeSnapshot(snapshot)
   };
@@ -4841,7 +5101,14 @@ function isSourceType(value) {
 }
 
 function isSourceCandidateStatus(value) {
-  return value === "pending" || value === "queued" || value === "imported" || value === "dismissed" || value === "rejected_source";
+  return (
+    value === "pending" ||
+    value === "queued" ||
+    value === "imported" ||
+    value === "dismissed" ||
+    value === "rejected_source" ||
+    value === "unreachable"
+  );
 }
 
 function isSourceCandidateIntakeKind(value) {

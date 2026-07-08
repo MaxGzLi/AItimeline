@@ -36,7 +36,9 @@ export function NotificationsView({
                   ? t("notifications.kind.masteryPromotion")
                   : notification.kind === "learning_goal_achieved"
                     ? t("notifications.kind.learningGoalAchieved")
-                    : t("notifications.kind.researchProgress")}
+                    : notification.kind === "supply_drought"
+                      ? t("notifications.kind.supplyDrought")
+                      : t("notifications.kind.researchProgress")}
             </span>
             {!notification.readAt ? <span className="x-navdot inline" /> : null}
             <span className="x-meta">{new Date(notification.createdAt).toLocaleString()}</span>

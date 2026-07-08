@@ -691,6 +691,69 @@ body:has(.x-frame) {
   text-align: center;
 }
 
+.x-supply-card {
+  display: grid;
+  gap: 11px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--x-line);
+  background: var(--x-bg);
+}
+.x-supply-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.x-supply-diagnosis {
+  margin: 0;
+  color: var(--x-ink);
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1.35;
+}
+.x-supply-facts,
+.x-supply-error {
+  margin: 0;
+  color: var(--x-muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+.x-supply-error { color: var(--x-red); }
+.x-supply-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.x-supply-action,
+.x-supply-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 30px;
+  padding: 6px 12px;
+  border: 1px solid var(--x-line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--x-ink);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.2;
+  cursor: pointer;
+}
+.x-supply-action:hover:not(:disabled),
+.x-supply-link:hover:not(:disabled) {
+  background: var(--x-hover);
+}
+.x-supply-action:disabled {
+  cursor: default;
+  opacity: 0.65;
+}
+.x-supply-link {
+  border-color: transparent;
+  color: var(--x-blue);
+}
+
 /* ---------- Weekly recap card ---------- */
 .x-weekly-card {
   display: grid;

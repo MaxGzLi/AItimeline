@@ -45,7 +45,13 @@ export type AiThreads = Record<string, AiMessage[]>;
 export type InteractionSignals = Record<string, InteractionSignal>;
 export type LearningFeedbackByPost = Record<string, LearningFeedback>;
 export type ApiStatus = "checking" | "connected" | "offline";
-export type SourceCandidateStatus = "pending" | "queued" | "imported" | "dismissed" | "rejected_source";
+export type SourceCandidateStatus =
+  | "pending"
+  | "queued"
+  | "imported"
+  | "dismissed"
+  | "rejected_source"
+  | "unreachable";
 export type GroundingStatus = "passed" | "warning" | "failed";
 export type DismissedPostMode = "soft" | "hard";
 export type AgentTurnStatus = "answered" | "pending_confirmation" | "researching" | "closed";
@@ -171,10 +177,22 @@ export type ApiSettings = {
 
 export type TimelineCard = RankedKnowledgeCard & { reviewDueAt?: string };
 
+export type SupplyStatus = {
+  newCards48h: number;
+  pendingCandidates: number;
+  queuedCandidates: number;
+  activeSubscriptions: number;
+  queuedImports: number;
+  budgetRemaining: number;
+  reviewDueCount: number;
+  drought: boolean;
+};
+
 export type ApiTimelineResponse = {
   posts: TimelineCard[];
   sourceImports: SourceImport[];
   topicStates?: TopicState[];
+  supplyStatus?: SupplyStatus;
   recommendationSummary?: {
     total: number;
     byIntent: Record<string, number>;
@@ -216,6 +234,8 @@ export type ApiCurationRunResponse = {
       sourceImport?: ApiImportResponse;
     };
   }>;
+  supplyRefill?: ApiSupplyRefillResponse;
+  droughtNotification?: AgentNotification | null;
 };
 
 export type ApiCurationJobsResponse = {
@@ -274,7 +294,7 @@ export type AgentConfirmApiResponse = {
 
 export type AgentNotification = {
   id: string;
-  kind: "agent_answer" | "research_progress" | "mastery_promotion" | "learning_goal_achieved";
+  kind: "agent_answer" | "research_progress" | "mastery_promotion" | "learning_goal_achieved" | "supply_drought";
   turnId: string;
   postIds: string[];
   body: string;
@@ -287,6 +307,12 @@ export type AgentNotification = {
 
 export type ApiNotificationsResponse = {
   records: AgentNotification[];
+};
+
+export type ApiSupplyRefillResponse = {
+  queued: number;
+  skipped: number;
+  budgetRemaining: number;
 };
 
 export type SourceCandidateRecord = {
