@@ -12,6 +12,7 @@ import type {
   InteractionSignal,
   KnowledgePost,
   LearningFeedback,
+  LearningGoalRecord,
   MergedSourceRecord,
   ReviewState,
   SubscriptionFilterMode,
@@ -88,7 +89,7 @@ export interface AgentTurnRecord {
 
 export type AgentTurnStatus = "answered" | "pending_confirmation" | "researching" | "closed";
 
-export type AgentNotificationKind = "agent_answer" | "research_progress" | "mastery_promotion";
+export type AgentNotificationKind = "agent_answer" | "research_progress" | "mastery_promotion" | "learning_goal_achieved";
 
 export interface AgentNotificationCitation {
   sourceId: string;
@@ -166,6 +167,7 @@ export interface AITimelinePersistenceSnapshot {
   conceptBriefs: ConceptBrief[];
   weeklyRecaps: WeeklyRecapRecord[];
   subscriptions: SubscriptionRecord[];
+  learningGoals: LearningGoalRecord[];
 }
 
 export interface AITimelinePersistenceStore {
@@ -188,6 +190,8 @@ export interface AITimelinePersistenceStore {
   saveWeeklyRecaps(records: WeeklyRecapRecord[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
   saveSubscriptions(records: SubscriptionRecord[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
   deleteSubscription(id: string, savedAt?: string | Date): AITimelinePersistenceSnapshot;
+  saveLearningGoals(records: LearningGoalRecord[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
+  deleteLearningGoal(id: string, savedAt?: string | Date): AITimelinePersistenceSnapshot;
   saveInteractionSignalRecords(
     records: InteractionSignalRecord[],
     savedAt?: string | Date
@@ -364,6 +368,26 @@ export function createAITimelinePersistenceStore(
 
       return cloneSnapshot(snapshot);
     },
+    saveLearningGoals(records, savedAt = new Date()) {
+      snapshot = {
+        ...snapshot,
+        updatedAt: normalizeDate(savedAt).toISOString(),
+        learningGoals: upsertLearningGoals(snapshot.learningGoals, records)
+      };
+      persist(storage, snapshot);
+
+      return cloneSnapshot(snapshot);
+    },
+    deleteLearningGoal(id, savedAt = new Date()) {
+      snapshot = {
+        ...snapshot,
+        updatedAt: normalizeDate(savedAt).toISOString(),
+        learningGoals: snapshot.learningGoals.filter((record) => record.id !== id)
+      };
+      persist(storage, snapshot);
+
+      return cloneSnapshot(snapshot);
+    },
     saveInteractionSignalRecords(records, savedAt = new Date()) {
       snapshot = {
         ...snapshot,
@@ -530,7 +554,8 @@ function createSnapshot(input: AITimelinePersistenceSnapshotInput = {}): AITimel
     autoJobBudget: normalizeDailyAutoJobBudgetRecords(input.autoJobBudget ?? []),
     conceptBriefs: normalizeConceptBriefs(input.conceptBriefs ?? []),
     weeklyRecaps: normalizeWeeklyRecaps(input.weeklyRecaps ?? []),
-    subscriptions: normalizeSubscriptions(input.subscriptions ?? [])
+    subscriptions: normalizeSubscriptions(input.subscriptions ?? []),
+    learningGoals: normalizeLearningGoals(input.learningGoals ?? [])
   };
 }
 
@@ -562,7 +587,9 @@ function normalizeNotificationRecord(
   value: AgentNotificationRecord | (Partial<AgentNotificationRecord> & { id: string })
 ): AgentNotificationRecord {
   const kind =
-    value.kind === "research_progress" || value.kind === "mastery_promotion" ? value.kind : "agent_answer";
+    value.kind === "research_progress" || value.kind === "mastery_promotion" || value.kind === "learning_goal_achieved"
+      ? value.kind
+      : "agent_answer";
 
   return {
     id: value.id,
@@ -1072,6 +1099,46 @@ function normalizeSubscriptionFilterMode(value: unknown): SubscriptionFilterMode
   return value === "all" || value === "listOnly" || value === "relevant" ? value : "relevant";
 }
 
+function normalizeLearningGoals(value: unknown): LearningGoalRecord[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const byId = new Map<string, LearningGoalRecord>();
+
+  for (const record of value) {
+    if (
+      !isRecord(record) ||
+      typeof record.id !== "string" ||
+      typeof record.concept !== "string" ||
+      typeof record.createdAt !== "string"
+    ) {
+      continue;
+    }
+
+    const id = record.id.trim();
+    const concept = normalizeConceptText(record.concept);
+
+    if (!id || !normalizeConceptKey(concept)) {
+      continue;
+    }
+
+    byId.set(id, {
+      id,
+      concept,
+      createdAt: record.createdAt,
+      status: normalizeLearningGoalStatus(record.status),
+      achievedAt: typeof record.achievedAt === "string" && record.achievedAt.trim() ? record.achievedAt : undefined
+    });
+  }
+
+  return Array.from(byId.values()).sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+}
+
+function normalizeLearningGoalStatus(value: unknown): LearningGoalRecord["status"] {
+  return value === "achieved" || value === "archived" ? value : "active";
+}
+
 function normalizeStringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
@@ -1307,6 +1374,10 @@ function upsertWeeklyRecaps(items: WeeklyRecapRecord[], nextItems: WeeklyRecapRe
 
 function upsertSubscriptions(items: SubscriptionRecord[], nextItems: SubscriptionRecord[]): SubscriptionRecord[] {
   return normalizeSubscriptions(upsertManyById(items, nextItems));
+}
+
+function upsertLearningGoals(items: LearningGoalRecord[], nextItems: LearningGoalRecord[]): LearningGoalRecord[] {
+  return normalizeLearningGoals(upsertManyById(items, nextItems));
 }
 
 function upsertUserMemory(items: UserMemoryRecord[], item: UserMemoryRecord): UserMemoryRecord[] {

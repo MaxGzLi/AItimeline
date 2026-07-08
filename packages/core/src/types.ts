@@ -53,6 +53,8 @@ export type SubscriptionKind = "rss" | "youtube_channel";
 
 export type SubscriptionFilterMode = "all" | "relevant" | "listOnly";
 
+export type LearningGoalStatus = "active" | "achieved" | "archived";
+
 export type KnowledgeDifficulty = "beginner" | "intermediate" | "advanced";
 
 export type KnowledgeConfidence = "low" | "medium" | "high";
@@ -617,6 +619,14 @@ export interface SubscriptionRecord {
   lastPolledAt?: string;
   lastItemPublishedAt?: string;
   lastError?: string;
+}
+
+export interface LearningGoalRecord {
+  id: string;
+  concept: string;
+  createdAt: string;
+  status: LearningGoalStatus;
+  achievedAt?: string;
 }
 
 export interface UserMemory {

@@ -10,6 +10,7 @@ import { classifyConceptZone } from "@aitimeline/core";
 import { Search } from "lucide-react";
 import { formatDueDate } from "../lib/format";
 import { t } from "../lib/i18n";
+import type { LearningGoalWithTree } from "../lib/types";
 import { LinkedGraphCanvas } from "./LinkedGraphCanvas";
 
 const zoneBadges: Record<KnowledgeBoundaryZone, { label: string; className: string }> = {
@@ -24,9 +25,11 @@ export function ContextRail({
   detailCard,
   detailGraph,
   graph,
+  learningGoals,
   onOpenCardId,
   onOpenConcept,
   onOpenGraph,
+  onOpenSkillTree,
   onOpenReview,
   onSearchChange,
   reviewQueue,
@@ -36,9 +39,11 @@ export function ContextRail({
   detailCard?: KnowledgeCard | null;
   detailGraph?: LinkedKnowledgeGraph | null;
   graph: KnowledgeGraph;
+  learningGoals: LearningGoalWithTree[];
   onOpenCardId: (cardId: string) => void;
   onOpenConcept: (concept: string) => void;
   onOpenGraph: () => void;
+  onOpenSkillTree: () => void;
   onOpenReview: () => void;
   onSearchChange: (value: string) => void;
   reviewQueue: ReviewItem[];
@@ -47,6 +52,8 @@ export function ContextRail({
   const zoneTotal = Math.max(1, boundary.inside.length + boundary.learning.length + boundary.frontier.length);
   const hasDetailGraph =
     !!detailGraph && detailGraph.nodes.length > 1 && detailGraph.edges.length > 0;
+  const activeGoal = learningGoals.find((goal) => goal.status === "active");
+  const activeGoalProgress = activeGoal?.tree?.progress;
 
   return (
     <aside className="x-rail" aria-label={t("rail.state")}>
@@ -149,6 +156,19 @@ export function ContextRail({
               </span>
               <span className="x-mnum">{boundary.frontier.length}</span>
             </button>
+            {activeGoal ? (
+              <button className="x-mrow" onClick={onOpenSkillTree} type="button">
+                <span className="x-mmain">
+                  <p className="x-mname">{t("rail.learningGoal", { concept: activeGoal.concept })}</p>
+                  <p className="x-msub">
+                    {activeGoalProgress
+                      ? t("goals.progress", { mastered: activeGoalProgress.mastered, total: activeGoalProgress.total })
+                      : t("goals.pending")}
+                  </p>
+                </span>
+                <span className="x-mnum">{activeGoalProgress?.percent ?? 0}%</span>
+              </button>
+            ) : null}
           </section>
 
           <section className="x-module" aria-label={t("rail.concepts")}>

@@ -9,6 +9,7 @@ import {
   addConceptAliasDecision,
   buildConceptDigest,
   buildDiscoveryConfirmationQuestions,
+  buildSkillTree,
   createAutomaticConceptAliases,
   createConceptBriefInputFromCards,
   countSeenReadSignalsByPostId,
@@ -47,6 +48,7 @@ import {
   rankPersonalizedTimeline,
   runConversationTurn,
   runDueBackgroundCurationJobs,
+  normalizeConceptKey as normalizeCoreConceptKey,
   normalizeSubscriptionFeedUrl,
   parseSubscriptionFeed,
   generateConceptBrief,
@@ -156,6 +158,65 @@ export function createApiServer(options = {}) {
 
         sendJson(response, 200, {
           record: nextNotification,
+          snapshotSummary: summarizeSnapshot(nextSnapshot)
+        });
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/goals") {
+        const userId = url.searchParams.get("userId") ?? "local-user";
+        const result = handleListLearningGoals({
+          persistenceStore,
+          curationStore,
+          userId,
+          contentLanguage: resolveContentLanguage(persistenceStore, process.env),
+          now: url.searchParams.get("now") ?? new Date().toISOString()
+        });
+
+        sendJson(response, 200, result);
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/goals") {
+        const body = await readJsonBody(request);
+        const result = handleCreateLearningGoal({
+          body,
+          persistenceStore,
+          curationStore,
+          userId:
+            body && typeof body === "object" && typeof body.userId === "string" && body.userId.trim()
+              ? body.userId.trim()
+              : "local-user",
+          contentLanguage: resolveContentLanguage(persistenceStore, process.env)
+        });
+
+        sendJson(response, 200, result);
+        return;
+      }
+
+      if (request.method === "POST" && /^\/api\/goals\/[^/]+$/.test(url.pathname)) {
+        const goalId = decodeURIComponent(url.pathname.replace(/^\/api\/goals\//, ""));
+        const body = await readJsonBody(request);
+        const result = handleArchiveLearningGoal(goalId, body, persistenceStore);
+
+        sendJson(response, 200, result);
+        return;
+      }
+
+      if (request.method === "DELETE" && /^\/api\/goals\/[^/]+$/.test(url.pathname)) {
+        const goalId = decodeURIComponent(url.pathname.replace(/^\/api\/goals\//, ""));
+        const snapshot = persistenceStore.getSnapshot();
+
+        if (!snapshot.learningGoals.some((record) => record.id === goalId)) {
+          sendJson(response, 404, { error: "Learning goal not found." });
+          return;
+        }
+
+        const nextSnapshot = persistenceStore.deleteLearningGoal(goalId, new Date().toISOString());
+
+        sendJson(response, 200, {
+          deleted: true,
+          id: goalId,
           snapshotSummary: summarizeSnapshot(nextSnapshot)
         });
         return;
@@ -318,7 +379,8 @@ export function createApiServer(options = {}) {
           getTimelineResponse(
             persistenceStore.getSnapshot(),
             url.searchParams.get("now"),
-            url.searchParams.get("userId") ?? "local-user"
+            url.searchParams.get("userId") ?? "local-user",
+            resolveContentLanguage(persistenceStore, process.env)
           )
         );
         return;
@@ -430,6 +492,7 @@ export function createApiServer(options = {}) {
         sendJson(response, 200, {
           reviewState: nextReviewState,
           masteryPromotions: masteryResult.promotions,
+          learningGoalAchievements: masteryResult.learningGoalAchievements ?? [],
           snapshotSummary: summarizeSnapshot(masteryResult.snapshot)
         });
         return;
@@ -2966,6 +3029,12 @@ function collectConfirmedDiscoveryConcepts(snapshot) {
     }
   }
 
+  for (const concept of collectActiveLearningGoalConcepts(snapshot, "local-user")) {
+    if (typeof concept === "string" && concept.trim()) {
+      confirmed.add(concept.trim());
+    }
+  }
+
   return Array.from(confirmed);
 }
 
@@ -3145,11 +3214,381 @@ function promoteMasteryAfterReview({ persistenceStore, snapshot, post, userId, r
     reviewedAt
   );
 
-  return { snapshot: nextSnapshot, promotions };
+  const achievementResult = markAchievedLearningGoals({
+    persistenceStore,
+    snapshot: nextSnapshot,
+    userId,
+    contentLanguage,
+    now: reviewedAt
+  });
+
+  return { snapshot: achievementResult.snapshot, promotions, learningGoalAchievements: achievementResult.achievedGoals };
 }
 
 function getSnapshotUserMemory(snapshot, userId) {
   return snapshot.userMemories.find((record) => record.userId === userId)?.memory ?? createEmptyUserMemory();
+}
+
+function handleListLearningGoals({ persistenceStore, curationStore, userId, contentLanguage, now }) {
+  let snapshot = persistenceStore.getSnapshot();
+  const achievementResult = markAchievedLearningGoals({
+    persistenceStore,
+    snapshot,
+    userId,
+    contentLanguage,
+    now
+  });
+
+  snapshot = achievementResult.snapshot;
+
+  const activeTrees = snapshot.learningGoals
+    .filter((record) => record.status === "active")
+    .flatMap((record) => {
+      const treeResult = buildLearningGoalTree(snapshot, record.concept, userId);
+
+      return treeResult.tree ? [treeResult.tree] : [];
+    });
+  const productionResult = queueGapConceptBriefsForSkillTrees({
+    trees: activeTrees,
+    persistenceStore,
+    curationStore,
+    snapshot,
+    contentLanguage,
+    now,
+    limit: 3
+  });
+
+  snapshot = productionResult.snapshot;
+
+  return {
+    records: snapshot.learningGoals.map((record) => decorateLearningGoalRecord(record, snapshot, userId)),
+    achieved: achievementResult.achievedGoals,
+    gapProduction: omitSnapshotFromProductionResult(productionResult),
+    snapshotSummary: summarizeSnapshot(snapshot)
+  };
+}
+
+function handleCreateLearningGoal({ body, persistenceStore, curationStore, userId, contentLanguage }) {
+  if (!body || typeof body !== "object") {
+    throw new HttpError(400, "Request body must be an object.");
+  }
+
+  requireString(body.concept, "concept");
+  const now = typeof body.now === "string" ? body.now : new Date().toISOString();
+  let snapshot = markAchievedLearningGoals({
+    persistenceStore,
+    snapshot: persistenceStore.getSnapshot(),
+    userId,
+    contentLanguage,
+    now
+  }).snapshot;
+  const treeResult = buildLearningGoalTree(snapshot, body.concept, userId);
+
+  if (!treeResult.tree) {
+    throw new HttpError(400, "Learning goal concept must exist in the knowledge graph.");
+  }
+
+  const goalKey = treeResult.tree.goalId;
+  const existingActive = snapshot.learningGoals.find(
+    (record) =>
+      record.status === "active" &&
+      buildLearningGoalTree(snapshot, record.concept, userId).tree?.goalId === goalKey
+  );
+
+  if (existingActive) {
+    const productionResult = queueGapConceptBriefsForSkillTrees({
+      trees: [treeResult.tree],
+      persistenceStore,
+      curationStore,
+      snapshot,
+      contentLanguage,
+      now,
+      limit: 3
+    });
+
+    snapshot = productionResult.snapshot;
+
+    return {
+      record: decorateLearningGoalRecord(existingActive, snapshot, userId),
+      records: snapshot.learningGoals.map((record) => decorateLearningGoalRecord(record, snapshot, userId)),
+      gapProduction: omitSnapshotFromProductionResult(productionResult),
+      snapshotSummary: summarizeSnapshot(snapshot)
+    };
+  }
+
+  if (snapshot.learningGoals.filter((record) => record.status === "active").length >= 3) {
+    throw new HttpError(400, "At most 3 active learning goals are allowed.");
+  }
+
+  const record = {
+    id: `learning-goal-${hashText(`${goalKey}|${now}`)}`,
+    concept: treeResult.tree.goalConcept,
+    createdAt: now,
+    status: "active"
+  };
+
+  snapshot = persistenceStore.saveLearningGoals([record], now);
+  const achievementResult = markAchievedLearningGoals({
+    persistenceStore,
+    snapshot,
+    userId,
+    contentLanguage,
+    now
+  });
+
+  snapshot = achievementResult.snapshot;
+
+  const savedRecord = snapshot.learningGoals.find((item) => item.id === record.id) ?? record;
+  const savedTreeResult = buildLearningGoalTree(snapshot, savedRecord.concept, userId);
+  const productionResult =
+    savedRecord.status === "active" && savedTreeResult.tree
+      ? queueGapConceptBriefsForSkillTrees({
+          trees: [savedTreeResult.tree],
+          persistenceStore,
+          curationStore,
+          snapshot,
+          contentLanguage,
+          now,
+          limit: 3
+        })
+      : { snapshot, queued: false, records: [], budget: undefined, discardedJobIds: [], skippedConcepts: [] };
+
+  snapshot = productionResult.snapshot;
+
+  return {
+    record: decorateLearningGoalRecord(savedRecord, snapshot, userId),
+    records: snapshot.learningGoals.map((item) => decorateLearningGoalRecord(item, snapshot, userId)),
+    achieved: achievementResult.achievedGoals,
+    gapProduction: omitSnapshotFromProductionResult(productionResult),
+    snapshotSummary: summarizeSnapshot(snapshot)
+  };
+}
+
+function handleArchiveLearningGoal(goalId, body, persistenceStore) {
+  if (!body || typeof body !== "object" || body.status !== "archived") {
+    throw new HttpError(400, "Only status \"archived\" is supported.");
+  }
+
+  const snapshot = persistenceStore.getSnapshot();
+  const record = snapshot.learningGoals.find((item) => item.id === goalId);
+
+  if (!record) {
+    throw new HttpError(404, "Learning goal not found.");
+  }
+
+  const now = new Date().toISOString();
+  const nextRecord = { ...record, status: "archived" };
+  const nextSnapshot = persistenceStore.saveLearningGoals([nextRecord], now);
+
+  return {
+    record: nextSnapshot.learningGoals.find((item) => item.id === goalId) ?? nextRecord,
+    records: nextSnapshot.learningGoals,
+    snapshotSummary: summarizeSnapshot(nextSnapshot)
+  };
+}
+
+function decorateLearningGoalRecord(record, snapshot, userId) {
+  if (record.status !== "active") {
+    return record;
+  }
+
+  const treeResult = buildLearningGoalTree(snapshot, record.concept, userId);
+
+  return {
+    ...record,
+    tree: treeResult.tree,
+    treeReason: treeResult.reason
+  };
+}
+
+function buildLearningGoalTree(snapshot, concept, userId = "local-user") {
+  const memory = getSnapshotUserMemory(snapshot, userId);
+
+  return buildSkillTree({
+    goalConcept: concept,
+    cards: snapshot.posts,
+    conceptAliases: snapshot.conceptAliases,
+    knownConcepts: memory.knowledge.knownConcepts
+  });
+}
+
+function markAchievedLearningGoals({ persistenceStore, snapshot, userId, contentLanguage, now }) {
+  const achievedAt = normalizeIsoDate(now);
+  const achievedGoals = [];
+  const updates = [];
+
+  for (const record of snapshot.learningGoals) {
+    if (record.status !== "active") {
+      continue;
+    }
+
+    const treeResult = buildLearningGoalTree(snapshot, record.concept, userId);
+    const goalNode = treeResult.tree?.nodes.find((node) => node.id === treeResult.tree?.goalId);
+
+    if (!goalNode?.mastered) {
+      continue;
+    }
+
+    const nextRecord = {
+      ...record,
+      status: "achieved",
+      achievedAt
+    };
+
+    updates.push(nextRecord);
+    achievedGoals.push(nextRecord);
+  }
+
+  if (!updates.length) {
+    return { snapshot, achievedGoals: [] };
+  }
+
+  let nextSnapshot = persistenceStore.saveLearningGoals(updates, achievedAt);
+
+  nextSnapshot = persistenceStore.saveNotifications(
+    updates.map((record) => createLearningGoalAchievedNotification(record, snapshot, userId, contentLanguage, achievedAt)),
+    achievedAt
+  );
+
+  return { snapshot: nextSnapshot, achievedGoals: updates };
+}
+
+function createLearningGoalAchievedNotification(record, snapshot, userId, contentLanguage, createdAt) {
+  const treeResult = buildLearningGoalTree(snapshot, record.concept, userId);
+  const goalNode = treeResult.tree?.nodes.find((node) => node.id === treeResult.tree?.goalId);
+  const body =
+    contentLanguage === "en"
+      ? `#${record.concept} learning goal achieved. The path is now complete.`
+      : `#${record.concept} 学习目标已达成,这条路径已完成。`;
+
+  return {
+    id: `notification-${hashText(`learning_goal_achieved|${record.id}`)}`,
+    kind: "learning_goal_achieved",
+    turnId: `learning-goal-${hashText(record.id)}`,
+    postIds: goalNode?.postIds ?? [],
+    body,
+    createdAt
+  };
+}
+
+function queueGapConceptBriefsForSkillTrees({
+  trees,
+  persistenceStore,
+  curationStore,
+  snapshot,
+  contentLanguage,
+  now,
+  limit
+}) {
+  const nowIso = normalizeIsoDate(now);
+  const existingBriefKeys = new Set(snapshot.conceptBriefs.map((brief) => normalizeCoreConceptKey(brief.concept)));
+  const existingJobKeys = new Set(
+    curationStore
+      .list()
+      .filter((record) => record.job.kind === "concept_brief" && record.status !== "failed")
+      .map((record) => normalizeCoreConceptKey(record.job.topicId))
+  );
+  const selectedConcepts = [];
+  const selectedKeys = new Set();
+
+  for (const tree of trees) {
+    for (const node of tree.nodes) {
+      const key = normalizeCoreConceptKey(node.concept);
+
+      if (
+        !node.gap ||
+        node.mastered ||
+        !key ||
+        selectedKeys.has(key) ||
+        existingBriefKeys.has(key) ||
+        existingJobKeys.has(key)
+      ) {
+        continue;
+      }
+
+      selectedKeys.add(key);
+      selectedConcepts.push(node.concept);
+
+      if (selectedConcepts.length >= limit) {
+        break;
+      }
+    }
+
+    if (selectedConcepts.length >= limit) {
+      break;
+    }
+  }
+
+  if (!selectedConcepts.length) {
+    return {
+      snapshot,
+      queued: false,
+      records: [],
+      budget: getDailyAutoJobBudgetRecord(snapshot, nowIso),
+      discardedJobIds: [],
+      skippedConcepts: []
+    };
+  }
+
+  const jobs = selectedConcepts.map((concept) => {
+    const input = buildConceptBriefInput(snapshot, concept, contentLanguage, nowIso);
+
+    return createConceptBriefJob(input.concept, input.cards.length, nowIso);
+  });
+  const rawPlan = createSingleJobPlan(jobs, nowIso);
+  const budgetResult = applyDailyAutoJobBudget({
+    plan: rawPlan,
+    budget: getDailyAutoJobBudgetRecord(snapshot, nowIso),
+    limit: getDailyAutoJobBudgetLimit(process.env),
+    now: nowIso
+  });
+  const records = curationStore.enqueuePlan(budgetResult.plan, nowIso);
+  let nextSnapshot = persistenceStore.saveDailyAutoJobBudgetRecords([budgetResult.budget], nowIso);
+
+  if (records.length) {
+    nextSnapshot = persistenceStore.saveCurationJobRecords(records, nowIso);
+  }
+
+  return {
+    snapshot: nextSnapshot,
+    queued: records.length > 0,
+    records,
+    budget: budgetResult.budget,
+    discardedJobIds: budgetResult.discardedJobIds,
+    skippedConcepts: selectedConcepts.filter(
+      (concept) => !records.some((record) => normalizeCoreConceptKey(record.job.topicId) === normalizeCoreConceptKey(concept))
+    )
+  };
+}
+
+function omitSnapshotFromProductionResult(result) {
+  return {
+    queued: result.queued,
+    records: result.records.map((record) => ({ id: record.id, status: record.status, job: record.job })),
+    budget: result.budget,
+    discardedJobIds: result.discardedJobIds,
+    skippedConcepts: result.skippedConcepts
+  };
+}
+
+function collectActiveLearningGoalConcepts(snapshot, userId = "local-user") {
+  const concepts = [];
+
+  for (const record of snapshot.learningGoals) {
+    if (record.status !== "active") {
+      continue;
+    }
+
+    const treeResult = buildLearningGoalTree(snapshot, record.concept, userId);
+
+    for (const node of treeResult.tree?.nodes ?? []) {
+      if (!node.mastered) {
+        concepts.push(node.concept);
+      }
+    }
+  }
+
+  return uniqueStrings(concepts);
 }
 
 function buildAutoMasteryPromotionReason(promotion) {
@@ -3882,7 +4321,7 @@ async function ingestSourceCandidate(candidate) {
   throw new Error(`Background source ingestion does not support ${candidate.source.type} yet.`);
 }
 
-function getTimelineResponse(snapshot, nowValue, userId = "local-user") {
+function getTimelineResponse(snapshot, nowValue, userId = "local-user", contentLanguage = "zh") {
   const now = nowValue ? new Date(nowValue) : new Date();
   const releasePlans = snapshot.releasePlans;
   const releaseItems = releasePlans.flatMap((plan) => plan.items);
@@ -3922,6 +4361,8 @@ function getTimelineResponse(snapshot, nowValue, userId = "local-user") {
     seenReadCounts: countSeenReadSignalsByPostId(interactionSignals),
     dueReviewPostIds,
     conceptAliases: snapshot.conceptAliases,
+    learningGoalConcepts: collectActiveLearningGoalConcepts(snapshot, userId),
+    contentLanguage,
     now
   }).map((post) => {
     const dueReviewState = dueReviewStateByPostId.get(post.id);
@@ -4096,7 +4537,8 @@ function summarizeSnapshot(snapshot) {
     autoJobBudget: snapshot.autoJobBudget,
     conceptBriefs: snapshot.conceptBriefs.length,
     weeklyRecaps: snapshot.weeklyRecaps.length,
-    subscriptions: snapshot.subscriptions.length
+    subscriptions: snapshot.subscriptions.length,
+    learningGoals: snapshot.learningGoals.length
   };
 }
 
