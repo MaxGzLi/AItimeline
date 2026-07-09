@@ -27,7 +27,11 @@ import {
   DEEP_READ_ANTI_SLOP_RULES,
   DEEP_READ_BANNED_PHRASES,
   DEEP_READ_GENERIC_OPENERS,
+  DEEP_READ_MODEL_PARAGRAPH_COUNT_RANGE,
+  DEEP_READ_MODEL_PARAGRAPH_LENGTH_RANGE,
+  DEEP_READ_MODEL_SENTENCE_COUNT_RANGE,
   DEEP_READ_STRUCTURE_RULES,
+  DEEP_READ_WRITING_REQUIREMENTS,
   deepReadPipelineVersion
 } from "./constants.js";
 
@@ -35,7 +39,11 @@ export {
   DEEP_READ_ANTI_SLOP_RULES,
   DEEP_READ_BANNED_PHRASES,
   DEEP_READ_GENERIC_OPENERS,
+  DEEP_READ_MODEL_PARAGRAPH_COUNT_RANGE,
+  DEEP_READ_MODEL_PARAGRAPH_LENGTH_RANGE,
+  DEEP_READ_MODEL_SENTENCE_COUNT_RANGE,
   DEEP_READ_STRUCTURE_RULES,
+  DEEP_READ_WRITING_REQUIREMENTS,
   deepReadPipelineVersion
 } from "./constants.js";
 
@@ -102,6 +110,7 @@ export interface DeepReadOutlineResult {
 export interface DeepReadChapterDraft {
   contract: DeepReadChapterContract;
   paragraphs: DeepReadParagraph[];
+  takeaway?: string;
 }
 
 export interface DeepReadChapterGateResult {
@@ -113,6 +122,12 @@ export interface DeepReadMaterialContext {
   materials: DeepReadSelectedMaterial[];
   materialByPointerKey: Map<string, DeepReadSelectedMaterial>;
   chunkByPointerKey: Map<string, KnowledgeChunk>;
+  literalAllowlistValues: string[];
+}
+
+export interface DeepReadWrittenChapterSummary {
+  title: string;
+  takeaway: string;
 }
 
 const defaultMaxTokens = 100000;
@@ -161,23 +176,38 @@ async function createDeepReadArticleWithClient(
     contentLanguage: input.contentLanguage,
     maxTokens: options.maxTokens
   });
-  const context = createDeepReadMaterialContext(selection.materials);
+  const context = createDeepReadMaterialContext(selection.materials, {
+    topic: selection.topic,
+    conceptAliases: input.conceptAliases
+  });
   const chapters: DeepReadChapter[] = [];
   const deletedParagraphLog: DeepReadDeletedParagraphLog[] = [];
+  const previousChapters: DeepReadWrittenChapterSummary[] = [];
 
   for (const contract of outline.contracts) {
+    if (!contract.materialPointers.length) {
+      chapters.push(createDeepReadGapChapter(contract, context, input.contentLanguage, options.createdAt));
+      continue;
+    }
+
     const draft = await generateDeepReadChapterDraft(contract, context, {
       client,
-      contentLanguage: input.contentLanguage
+      contentLanguage: input.contentLanguage,
+      previousChapters
     });
     const gated = await gateDeepReadChapter(draft, context, {
       client,
       contentLanguage: input.contentLanguage,
-      now: options.createdAt
+      now: options.createdAt,
+      previousChapters
     });
 
     chapters.push(gated.chapter);
     deletedParagraphLog.push(...gated.deletedParagraphLog);
+
+    if (gated.chapter.status === "complete") {
+      previousChapters.push(summarizeWrittenChapter(gated.chapter, draft.takeaway));
+    }
   }
 
   return assembleDeepReadArticle({
@@ -478,10 +508,13 @@ export async function generateDeepReadChapterDraft(
   options: {
     client?: ModelClient;
     contentLanguage?: ContentLanguage;
+    previousChapters?: readonly DeepReadWrittenChapterSummary[];
   } = {}
 ): Promise<DeepReadChapterDraft> {
   if (options.client && contract.materialPointers.length) {
-    const modelDraft = await generateModelChapterDraft(contract, context, options.client, options.contentLanguage);
+    const modelDraft = await generateModelChapterDraft(contract, context, options.client, options.contentLanguage, {
+      previousChapters: options.previousChapters
+    });
 
     if (modelDraft?.paragraphs.length) {
       return modelDraft;
@@ -501,9 +534,51 @@ export async function gateDeepReadChapter(
     client?: ModelClient;
     contentLanguage?: ContentLanguage;
     now?: string | Date;
+    previousChapters?: readonly DeepReadWrittenChapterSummary[];
   } = {}
 ): Promise<DeepReadChapterGateResult> {
   const checkedAt = normalizeDate(options.now ?? new Date()).toISOString();
+  const initial = await gateDeepReadChapterOnce(draft, context, {
+    client: options.client,
+    contentLanguage: options.contentLanguage,
+    checkedAt
+  });
+
+  if (!options.client || initial.deletedParagraphLog.length <= draft.paragraphs.length / 3) {
+    return initial;
+  }
+
+  const regenerated = await generateModelChapterDraft(draft.contract, context, options.client, options.contentLanguage, {
+    previousChapters: options.previousChapters,
+    gateFeedback: collectChapterGateFeedback(initial.deletedParagraphLog)
+  });
+
+  if (!regenerated?.paragraphs.length) {
+    return initial;
+  }
+
+  const retry = await gateDeepReadChapterOnce(regenerated, context, {
+    client: options.client,
+    contentLanguage: options.contentLanguage,
+    checkedAt
+  });
+
+  return {
+    chapter: retry.chapter,
+    deletedParagraphLog: [...initial.deletedParagraphLog, ...retry.deletedParagraphLog]
+  };
+}
+
+async function gateDeepReadChapterOnce(
+  draft: DeepReadChapterDraft,
+  context: DeepReadMaterialContext,
+  options: {
+    client?: ModelClient;
+    contentLanguage?: ContentLanguage;
+    checkedAt: string;
+  }
+): Promise<DeepReadChapterGateResult> {
+  const checkedAt = options.checkedAt;
   const accepted: DeepReadParagraph[] = [];
   const deletedParagraphLog: DeepReadDeletedParagraphLog[] = [];
 
@@ -529,6 +604,24 @@ export async function gateDeepReadChapter(
     if (report.passed) {
       accepted.push(candidate);
       continue;
+    }
+
+    if (canDowngradeFactParagraph(candidate, report, context)) {
+      const downgraded: DeepReadParagraph = {
+        ...candidate,
+        kind: "synthesis"
+      };
+      const downgradedReport = await gateDeepReadParagraph(downgraded, draft.contract, context, {
+        client: options.client,
+        checkedAt
+      });
+
+      if (downgradedReport.passed) {
+        accepted.push({ ...downgraded, gate: downgradedReport });
+        continue;
+      }
+
+      report = downgradedReport;
     }
 
     deletedParagraphLog.push({
@@ -598,7 +691,7 @@ export async function gateDeepReadParagraph(
 ): Promise<DeepReadParagraphGateReport> {
   const issues = [
     ...validateDeepReadCitationExistence(paragraph, context),
-    ...validateDeepReadKeyFactsLiteral(paragraph, context),
+    ...validateDeepReadKeyFactsLiteral(paragraph, contract, context),
     ...validateMechanicalAntiSlop(paragraph)
   ];
 
@@ -647,26 +740,76 @@ export function validateDeepReadCitationExistence(
 
 export function validateDeepReadKeyFactsLiteral(
   paragraph: Pick<DeepReadParagraph, "kind" | "text" | "citations">,
+  contract: Pick<DeepReadChapterContract, "keyFacts">,
   context: DeepReadMaterialContext
 ): string[] {
-  if (paragraph.kind !== "fact") {
-    return [];
-  }
-
+  const paragraphFacts = extractLooseFacts(paragraph.text);
   const evidenceText = paragraph.citations
     .map((citation) => context.chunkByPointerKey.get(toChunkKey(citation.sourceId, citation.chunkId))?.content ?? "")
     .join("\n");
+
+  if (paragraph.kind !== "fact") {
+    // Numbers, dates and versions stay literally grounded in every paragraph:
+    // otherwise a digit can dodge the gate by riding in synthesis prose.
+    const strictFacts = paragraphFacts.filter((fact) => isStrictLiteralFactKind(fact.kind));
+
+    if (!strictFacts.length) {
+      return [];
+    }
+
+    if (!evidenceText.trim()) {
+      return [
+        `synthesis paragraph contains strict numeric/date/version tokens but cites no resolvable evidence: ${strictFacts
+          .map((fact) => fact.value)
+          .join(", ")}`
+      ];
+    }
+
+    const missingStrict = strictFacts.filter((fact) => !containsNormalizedToken(evidenceText, fact.normalizedValue));
+
+    return missingStrict.length
+      ? [
+          `synthesis paragraph contains strict numeric/date/version tokens absent from cited chunks: ${missingStrict
+            .map((fact) => fact.value)
+            .join(", ")}`
+        ]
+      : [];
+  }
 
   if (!evidenceText.trim()) {
     return ["fact paragraph has no resolvable cited evidence"];
   }
 
-  const paragraphFacts = extractLooseFacts(paragraph.text);
-  const missing = paragraphFacts.filter((fact) => !containsNormalizedToken(evidenceText, fact.normalizedValue));
+  const strictMissing = paragraphFacts.filter(
+    (fact) => isStrictLiteralFactKind(fact.kind) && !containsNormalizedToken(evidenceText, fact.normalizedValue)
+  );
+  const allowedProperNouns = buildProperNounAllowlist(contract, context);
+  const missingProperNouns = paragraphFacts.filter(
+    (fact) =>
+      fact.kind === "proper_noun" &&
+      !containsNormalizedToken(evidenceText, fact.normalizedValue) &&
+      !allowedProperNouns.has(fact.normalizedValue) &&
+      !isAbbreviationForEvidencePhrase(fact.value, evidenceText)
+  );
+  const issues: string[] = [];
 
-  return missing.length
-    ? [`fact paragraph contains tokens absent from cited chunks: ${missing.map((fact) => fact.value).join(", ")}`]
-    : [];
+  if (strictMissing.length) {
+    issues.push(
+      `fact paragraph contains strict numeric/date/version tokens absent from cited chunks: ${strictMissing
+        .map((fact) => fact.value)
+        .join(", ")}`
+    );
+  }
+
+  if (missingProperNouns.length) {
+    issues.push(
+      `fact paragraph contains proper-noun tokens absent from cited chunks: ${missingProperNouns
+        .map((fact) => fact.value)
+        .join(", ")}`
+    );
+  }
+
+  return issues;
 }
 
 export function validateMechanicalAntiSlop(paragraph: Pick<DeepReadParagraph, "text">): string[] {
@@ -689,6 +832,54 @@ export function validateMechanicalAntiSlop(paragraph: Pick<DeepReadParagraph, "t
   }
 
   return issues;
+}
+
+function canDowngradeFactParagraph(
+  paragraph: DeepReadParagraph,
+  report: DeepReadParagraphGateReport,
+  context: DeepReadMaterialContext
+): boolean {
+  return (
+    paragraph.kind === "fact" &&
+    paragraph.citations.length > 0 &&
+    validateDeepReadCitationExistence(paragraph, context).length === 0 &&
+    !report.issues.some(isStrictLiteralGateIssue)
+  );
+}
+
+function isStrictLiteralGateIssue(issue: string): boolean {
+  return (
+    issue.includes("strict numeric/date/version") ||
+    issue.includes("fact paragraph has no resolvable cited evidence") ||
+    issue.includes("fact paragraphs must include at least one citation") ||
+    issue.includes("points to an unknown sourceId/chunkId")
+  );
+}
+
+function buildProperNounAllowlist(
+  contract: Pick<DeepReadChapterContract, "keyFacts">,
+  context: DeepReadMaterialContext
+): Set<string> {
+  const values = [
+    ...context.literalAllowlistValues,
+    ...contract.keyFacts.filter((fact) => fact.kind === "proper_noun").map((fact) => fact.value)
+  ];
+
+  return new Set(values.map(normalizeFactValue).filter(Boolean));
+}
+
+function isStrictLiteralFactKind(kind: DeepReadKeyFact["kind"]): boolean {
+  return kind === "number" || kind === "date" || kind === "version";
+}
+
+function isAbbreviationForEvidencePhrase(value: string, evidenceText: string): boolean {
+  const abbreviation = normalizeAcronym(value);
+
+  if (abbreviation.length < 2 || abbreviation.length > 10) {
+    return false;
+  }
+
+  return extractAcronymCandidates(evidenceText).some((candidate) => normalizeAcronym(candidate) === abbreviation);
 }
 
 export async function runDeepReadNewReaderTest(
@@ -772,6 +963,117 @@ export async function runDeepReadNewReaderTest(
   };
 }
 
+function createDeepReadGapChapter(
+  contract: DeepReadChapterContract,
+  context: DeepReadMaterialContext,
+  contentLanguage: ContentLanguage | undefined,
+  checkedAt: string
+): DeepReadChapter {
+  const gapStatement =
+    contract.gapStatement ??
+    formatLine(
+      contentLanguage,
+      "当前来源覆盖不到本章问题,不能写成有据正文。",
+      "The current sources do not cover this chapter question enough to write supported body text."
+    );
+
+  return {
+    id: contract.id,
+    title: contract.title,
+    question: contract.question,
+    status: "gap",
+    singleSource: false,
+    gapStatement,
+    contract,
+    paragraphs: [
+      {
+        id: `${contract.id}-gap`,
+        kind: "synthesis",
+        text: gapStatement,
+        citations: [],
+        gate: {
+          passed: true,
+          issues: [],
+          checkedAt
+        }
+      }
+    ],
+    sources: buildChapterSources(contract, context)
+  };
+}
+
+function aggregateDeepReadGapChapters(
+  chapters: readonly DeepReadChapter[],
+  contentLanguage: ContentLanguage | undefined,
+  checkedAt: string
+): DeepReadChapter[] {
+  const bodyChapters = chapters.filter(
+    (chapter) => chapter.status === "complete" && chapter.contract.materialPointers.length > 0
+  );
+  const gapChapters = chapters.filter(
+    (chapter) => chapter.status === "gap" || chapter.contract.materialPointers.length === 0
+  );
+
+  if (!gapChapters.length) {
+    return bodyChapters;
+  }
+
+  const gapTitle = formatLine(contentLanguage, "本文来源覆盖不到的部分", "What the sources do not cover");
+  const gapQuestion = formatLine(
+    contentLanguage,
+    "哪些问题不能从当前来源中写成有据正文?",
+    "Which questions cannot be written as supported body text from the current sources?"
+  );
+  const gapStatement = formatLine(
+    contentLanguage,
+    "下面这些章节没有足够来源覆盖,或在门禁后只剩缺口说明。",
+    "The following chapters are not covered by enough sources, or were reduced to gap notes by the gates."
+  );
+  const gapContract: DeepReadChapterContract = {
+    id: "chapter-source-coverage-gaps",
+    title: gapTitle,
+    question: gapQuestion,
+    materialPointers: [],
+    keyFacts: [],
+    gapStatement,
+    conflictInstructions: [],
+    singleSource: false,
+    readerPositioning: {
+      masteredConcepts: uniqueStrings(gapChapters.flatMap((chapter) => chapter.contract.readerPositioning.masteredConcepts)),
+      gapConcepts: uniqueStrings(gapChapters.flatMap((chapter) => chapter.contract.readerPositioning.gapConcepts))
+    }
+  };
+
+  return [
+    ...bodyChapters,
+    {
+      id: gapContract.id,
+      title: gapTitle,
+      question: gapQuestion,
+      status: "gap" as const,
+      singleSource: false,
+      gapStatement,
+      contract: gapContract,
+      paragraphs: gapChapters.map((chapter, index) => ({
+        id: `${gapContract.id}-p${index + 1}`,
+        kind: "synthesis" as const,
+        text: formatLine(
+          contentLanguage,
+          `「${chapter.title}」:${chapter.gapStatement ?? firstMeaningfulSentence(chapter.paragraphs.map((paragraph) => paragraph.text).join(" ")) ?? chapter.question}`,
+          `${chapter.title}: ${chapter.gapStatement ?? firstMeaningfulSentence(chapter.paragraphs.map((paragraph) => paragraph.text).join(" ")) ?? chapter.question}`
+        ),
+        citations: [],
+        gate: {
+          passed: true,
+          issues: [],
+          checkedAt
+        }
+      })),
+      sources: []
+    }
+  ];
+}
+
 async function assembleDeepReadArticle({
   input,
   selection,
@@ -793,7 +1095,8 @@ async function assembleDeepReadArticle({
   maxTokens: number;
   client?: ModelClient;
 }): Promise<DeepReadArticleRecord> {
-  const dedupedChapters = dedupeArticleParagraphs(chapters);
+  const assembledChapters = aggregateDeepReadGapChapters(chapters, input.contentLanguage, createdAt);
+  const dedupedChapters = dedupeArticleParagraphs(assembledChapters);
   const sourceList = buildArticleSources(selection.materials);
   const density = calculateKnowledgeDensity(dedupedChapters);
   const newReaderTest = await runDeepReadNewReaderTest(dedupedChapters, client, input.contentLanguage);
@@ -812,7 +1115,9 @@ async function assembleDeepReadArticle({
   return {
     id: `deepread-${sanitizeId(selection.topic)}-${hashText(`${selection.topic}|${createdAt}`)}`,
     version: deepReadPipelineVersion,
-    status: "ready",
+    status: dedupedChapters.some((chapter) => chapter.status === "complete" && chapter.contract.materialPointers.length > 0)
+      ? "ready"
+      : "failed",
     runnerKind,
     topic: selection.topic,
     topicKey: selection.topicKey,
@@ -887,7 +1192,7 @@ async function createModelOutlineContracts(
         {
           role: "system",
           content:
-            "Refine the draft skeleton using only these materials. Drop nodes without material or mark them as gaps. Return JSON only."
+            "Refine the draft skeleton using only these materials. Drop nodes without material or mark them as gaps. Chapters must ask mutually exclusive questions — merge overlapping chapters instead of keeping near-duplicates. Return JSON only."
         },
         {
           role: "user",
@@ -955,7 +1260,11 @@ async function generateModelChapterDraft(
   contract: DeepReadChapterContract,
   context: DeepReadMaterialContext,
   client: ModelClient,
-  contentLanguage: ContentLanguage | undefined
+  contentLanguage: ContentLanguage | undefined,
+  options: {
+    previousChapters?: readonly DeepReadWrittenChapterSummary[];
+    gateFeedback?: readonly string[];
+  } = {}
 ): Promise<DeepReadChapterDraft | undefined> {
   try {
     const materials = contract.materialPointers.flatMap((pointer) => {
@@ -978,7 +1287,11 @@ async function generateModelChapterDraft(
         {
           role: "system",
           content: [
-            "Generate one chapter. Use only the provided chapter materials. Return JSON only.",
+            "Write one readable article chapter. Use only the provided chapter materials. Return JSON only.",
+            "This is body prose for a human reader, not bullet notes, not a table, and not a list of tiny fragments.",
+            `Paragraph count: ${DEEP_READ_MODEL_PARAGRAPH_COUNT_RANGE.min}-${DEEP_READ_MODEL_PARAGRAPH_COUNT_RANGE.max}. Sentences per paragraph: ${DEEP_READ_MODEL_SENTENCE_COUNT_RANGE.min}-${DEEP_READ_MODEL_SENTENCE_COUNT_RANGE.max}. Paragraph length: about ${DEEP_READ_MODEL_PARAGRAPH_LENGTH_RANGE.min}-${DEEP_READ_MODEL_PARAGRAPH_LENGTH_RANGE.max} Chinese characters or comparable English words.`,
+            "Writing requirements:",
+            ...DEEP_READ_WRITING_REQUIREMENTS,
             "Structure rules:",
             ...DEEP_READ_STRUCTURE_RULES,
             "Anti-slop rules:",
@@ -990,8 +1303,13 @@ async function generateModelChapterDraft(
           content: JSON.stringify({
             language: contentLanguage ?? "zh",
             contract,
+            previousChapters: options.previousChapters ?? [],
+            gateFeedback: options.gateFeedback ?? [],
+            continuity:
+              "Do not repeat previous chapters. Continue their line of thought and make the final sentence reconnect this chapter to the article's main topic.",
             materials,
             schema: {
+              takeaway: "string optional, one sentence summary of this chapter's contribution",
               paragraphs: [
                 {
                   text: "string",
@@ -1024,7 +1342,13 @@ async function generateModelChapterDraft(
       ];
     });
 
-    return normalized.length ? { contract, paragraphs: normalized } : undefined;
+    return normalized.length
+      ? {
+          contract,
+          paragraphs: normalized,
+          takeaway: typeof parsed?.takeaway === "string" ? parsed.takeaway.trim() : summarizeParagraphsForPrompt(normalized)
+        }
+      : undefined;
   } catch {
     return undefined;
   }
@@ -1100,6 +1424,24 @@ function generateDeterministicParagraphs(
   }
 
   return paragraphs;
+}
+
+function summarizeWrittenChapter(chapter: DeepReadChapter, draftTakeaway: string | undefined): DeepReadWrittenChapterSummary {
+  return {
+    title: chapter.title,
+    takeaway: draftTakeaway?.trim() || summarizeParagraphsForPrompt(chapter.paragraphs)
+  };
+}
+
+function summarizeParagraphsForPrompt(paragraphs: readonly DeepReadParagraph[]): string {
+  const firstText = paragraphs.map((paragraph) => paragraph.text).find((text) => text.trim().length > 0) ?? "";
+  const firstSentence = firstMeaningfulSentence(firstText) ?? trimText(firstText, 120);
+
+  return trimText(firstSentence, 160);
+}
+
+function collectChapterGateFeedback(logs: readonly DeepReadDeletedParagraphLog[]): string[] {
+  return logs.map((log) => `${log.paragraphId}: ${log.reasons.join("; ")} | ${trimText(log.text, 180)}`);
 }
 
 async function rewriteDeepReadParagraph(
@@ -1203,7 +1545,7 @@ async function validateSynthesisParagraphOverstatement(
         {
           role: "system",
           content:
-            "Detect overstatement in synthesis: unsupported strong claims, marketing language, or correlation upgraded to causation. Return JSON only."
+            "Detect overstatement in synthesis: unsupported strong claims, marketing language, or correlation upgraded to causation. A claim explicitly attributed to its source (e.g. 'the paper claims', '论文声称/DeepSeek 表示') is NOT overstatement when the cited evidence does make that claim — attributed reporting must pass. Return JSON only."
         },
         {
           role: "user",
@@ -1300,7 +1642,13 @@ function reviewDeepReadOutlineContracts(
   return notes;
 }
 
-export function createDeepReadMaterialContext(materials: DeepReadSelectedMaterial[]): DeepReadMaterialContext {
+export function createDeepReadMaterialContext(
+  materials: DeepReadSelectedMaterial[],
+  options: {
+    topic?: string;
+    conceptAliases?: readonly ConceptAliasRecord[];
+  } = {}
+): DeepReadMaterialContext {
   const materialByPointerKey = new Map<string, DeepReadSelectedMaterial>();
   const chunkByPointerKey = new Map<string, KnowledgeChunk>();
 
@@ -1316,8 +1664,48 @@ export function createDeepReadMaterialContext(materials: DeepReadSelectedMateria
   return {
     materials,
     materialByPointerKey,
-    chunkByPointerKey
+    chunkByPointerKey,
+    literalAllowlistValues: buildDeepReadLiteralAllowlist(options.topic, options.conceptAliases ?? [])
   };
+}
+
+function buildDeepReadLiteralAllowlist(
+  topic: string | undefined,
+  conceptAliases: readonly ConceptAliasRecord[]
+): string[] {
+  const resolver = createConceptAliasResolver(conceptAliases);
+  const values: string[] = [];
+  const resolvedTopic = topic ? normalizeConceptLabel(resolver.resolveConcept(topic)) : "";
+  const topicKey = normalizeConceptKey(resolvedTopic);
+
+  if (topic) {
+    values.push(topic, resolvedTopic);
+    const acronym = buildAcronym(topic);
+
+    if (acronym) {
+      values.push(acronym);
+    }
+  }
+
+  for (const record of resolver.records) {
+    const labels = [record.canonical, ...record.aliases];
+    const resolvesToTopic = labels.some((label) => normalizeConceptKey(resolver.resolveConcept(label)) === topicKey);
+
+    if (!resolvesToTopic) {
+      continue;
+    }
+
+    for (const label of labels) {
+      values.push(label);
+      const acronym = buildAcronym(label);
+
+      if (acronym) {
+        values.push(acronym);
+      }
+    }
+  }
+
+  return uniqueStrings(values);
 }
 
 function resolveCardCitationPointers(
@@ -1562,12 +1950,16 @@ function buildArticleSources(materials: readonly DeepReadSelectedMaterial[]): De
   return Array.from(bySource.values()).sort((left, right) => left.title.localeCompare(right.title));
 }
 
-function dedupeArticleParagraphs(chapters: DeepReadChapter[]): DeepReadChapter[] {
+export function dedupeArticleParagraphs(chapters: DeepReadChapter[]): DeepReadChapter[] {
   const seen = new Set<string>();
 
   return chapters.map((chapter) => ({
     ...chapter,
     paragraphs: chapter.paragraphs.filter((paragraph) => {
+      if (chapter.status === "gap" || paragraph.citations.length === 0) {
+        return true;
+      }
+
       const key = normalizeTextKey(paragraph.text);
 
       if (!key || seen.has(key)) {
@@ -1705,6 +2097,41 @@ function containsNormalizedToken(text: string, token: string): boolean {
 
 function normalizeFactValue(value: string): string {
   return value.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function normalizeAcronym(value: string): string {
+  return value.replace(/[^\p{L}\p{N}]+/gu, "").toLowerCase();
+}
+
+function buildAcronym(value: string): string | undefined {
+  const words = value
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .split(/[^\p{L}\p{N}-]+/u)
+    .map((word) => word.trim())
+    .filter((word) => word.length > 0);
+
+  if (words.length < 2) {
+    return undefined;
+  }
+
+  return words.map((word) => word[0]?.toUpperCase() ?? "").join("");
+}
+
+function extractAcronymCandidates(text: string): string[] {
+  const candidates: string[] = [];
+  const words = text.match(/[\p{L}\p{N}]+(?:-[\p{L}\p{N}]+)*/gu) ?? [];
+
+  for (let start = 0; start < words.length; start += 1) {
+    for (let size = 2; size <= 7 && start + size <= words.length; size += 1) {
+      const acronym = buildAcronym(words.slice(start, start + size).join(" "));
+
+      if (acronym) {
+        candidates.push(acronym);
+      }
+    }
+  }
+
+  return candidates;
 }
 
 function normalizeTextKey(value: string): string {
