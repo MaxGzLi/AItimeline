@@ -3645,6 +3645,110 @@ const conceptVsCardCards = [
 ];
 assert.equal(resolveWikilink("记忆", { cards: conceptVsCardCards }).kind, "concept", "concept precedence beats a card whose title equals the concept");
 
+// Deep-read concept mentions: automatic body links only hit known library concepts.
+const { createConceptMentionMatcher } = await import("../packages/core/dist/graph/conceptMentions.js");
+
+const conceptMentionCards = [
+  { id: "mention-gqa", title: "GQA", summary: "s", keyTakeaway: "k", concepts: ["GQA"], sources: [], createdAt: "2026-01-01T00:00:00.000Z" },
+  { id: "mention-mla", title: "MLA", summary: "s", keyTakeaway: "k", concepts: ["MLA"], sources: [], createdAt: "2026-01-02T00:00:00.000Z" },
+  {
+    id: "mention-long-cjk",
+    title: "多头潜在注意力",
+    summary: "s",
+    keyTakeaway: "k",
+    concepts: ["多头潜在注意力"],
+    sources: [],
+    createdAt: "2026-01-03T00:00:00.000Z"
+  },
+  { id: "mention-short-cjk", title: "注意力", summary: "s", keyTakeaway: "k", concepts: ["注意力"], sources: [], createdAt: "2026-01-04T00:00:00.000Z" },
+  { id: "mention-rag", title: "RAG", summary: "s", keyTakeaway: "k", concepts: ["RAG"], sources: [], createdAt: "2026-01-05T00:00:00.000Z" },
+  { id: "mention-mixed", title: "AI芯片", summary: "s", keyTakeaway: "k", concepts: ["AI芯片"], sources: [], createdAt: "2026-01-06T00:00:00.000Z" },
+  { id: "mention-cjk-duel", title: "注意力机制", summary: "s", keyTakeaway: "k", concepts: ["注意力机制"], sources: [], createdAt: "2026-01-07T00:00:00.000Z" },
+  {
+    id: "mention-mixed-case",
+    title: "Transformer架构",
+    summary: "s",
+    keyTakeaway: "k",
+    concepts: ["Transformer架构"],
+    sources: [],
+    createdAt: "2026-01-08T00:00:00.000Z"
+  }
+];
+const conceptMentionAliases = [
+  {
+    canonical: "RAG",
+    aliases: ["Retrieval-Augmented Generation"],
+    decidedBy: "user",
+    decidedAt: "2026-01-06T00:00:00.000Z"
+  }
+];
+const conceptMentionMatcher = createConceptMentionMatcher({
+  cards: conceptMentionCards,
+  conceptAliases: conceptMentionAliases
+});
+
+const latinBoundaryMentions = conceptMentionMatcher.findMentions("MLATransformerConfig improves gqa.");
+assert.deepEqual(
+  latinBoundaryMentions.map((mention) => ({ text: mention.text, concept: mention.concept, slug: mention.slug })),
+  [{ text: "gqa", concept: "GQA", slug: "gqa" }],
+  "latin concept mentions require word boundaries and match known concepts case-insensitively"
+);
+
+const cjkMentions = conceptMentionMatcher.findMentions("模型使用多头潜在注意力。");
+assert.deepEqual(
+  cjkMentions.map((mention) => mention.concept),
+  ["多头潜在注意力"],
+  "CJK concept mentions match as substrings"
+);
+assert.deepEqual(
+  cjkMentions.map((mention) => mention.text),
+  ["多头潜在注意力"],
+  "overlapping CJK concept mentions keep the longest non-overlapping match"
+);
+
+const aliasMentions = conceptMentionMatcher.findMentions("Retrieval-Augmented Generation connects retrieval and generation.");
+assert.deepEqual(
+  aliasMentions.map((mention) => ({ text: mention.text, concept: mention.concept, slug: mention.slug })),
+  [{ text: "Retrieval-Augmented Generation", concept: "RAG", slug: "rag" }],
+  "concept mention aliases resolve to the canonical concept"
+);
+
+assert.deepEqual(conceptMentionMatcher.findMentions("Transformer is outside this tiny library."), [], "unknown words do not produce ghost concept mentions");
+
+assert.deepEqual(
+  conceptMentionMatcher.findMentions("OpenAI芯片战略引发关注。"),
+  [],
+  "a mixed CJK concept must not start midway through a latin word"
+);
+assert.deepEqual(
+  conceptMentionMatcher.findMentions("国产AI芯片来了").map((mention) => mention.text),
+  ["AI芯片"],
+  "a mixed CJK concept still matches flush against CJK prose"
+);
+assert.deepEqual(
+  conceptMentionMatcher.findMentions("注意力机制决定注意力分配").map((mention) => mention.text),
+  ["注意力机制", "注意力"],
+  "the longest candidate wins a same-start duel and the shorter one still matches later"
+);
+assert.deepEqual(
+  conceptMentionMatcher.findMentions("采用transformer架构").map((mention) => mention.text),
+  ["transformer架构"],
+  "mixed CJK concepts match their latin part case-insensitively"
+);
+
+const orderedMentionText = "gqa 借助多头潜在注意力服务 Retrieval-Augmented Generation.";
+const orderedMentions = conceptMentionMatcher.findMentions(orderedMentionText);
+assert.deepEqual(orderedMentions, conceptMentionMatcher.findMentions(orderedMentionText), "concept mention output is deterministic");
+assert.deepEqual(
+  orderedMentions,
+  [
+    { start: 0, end: 3, text: "gqa", concept: "GQA", slug: "gqa" },
+    { start: 6, end: 13, text: "多头潜在注意力", concept: "多头潜在注意力", slug: "多头潜在注意力" },
+    { start: 16, end: 46, text: "Retrieval-Augmented Generation", concept: "RAG", slug: "rag" }
+  ],
+  "concept mention offsets slice the raw text exactly"
+);
+
 // Backlinks: note bodies and public comments both count; the snippet frames the link.
 const backlinkCards = [
   {

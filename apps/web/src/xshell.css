@@ -1327,6 +1327,13 @@ body:has(.x-frame) {
   font-weight: 800;
   text-transform: uppercase;
 }
+.x-deepread-p.synthesis .x-wikilink {
+  display: inline;
+  margin-right: 0;
+  font-size: inherit;
+  font-weight: inherit;
+  text-transform: none;
+}
 .x-deepread-chapter-sources,
 .x-deepread-footer section {
   display: grid;

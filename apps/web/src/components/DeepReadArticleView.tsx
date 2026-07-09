@@ -1,15 +1,32 @@
+import {
+  createConceptMentionMatcher,
+  type ConceptAliasRecord,
+  type KnowledgeCard
+} from "@aitimeline/core";
 import { AlertTriangle, ArrowLeft, BookOpen, FileText } from "lucide-react";
+import { useMemo, type ReactNode } from "react";
 import { formatDueDate } from "../lib/format";
 import { t } from "../lib/i18n";
 import type { DeepReadArticleRecord } from "../lib/types";
 
 export function DeepReadArticleView({
   article,
+  cards,
+  conceptAliases,
+  onOpenConcept,
   onBack
 }: {
   article: DeepReadArticleRecord | null;
+  cards: KnowledgeCard[];
+  conceptAliases: ConceptAliasRecord[];
+  onOpenConcept: (concept: string) => void;
   onBack: () => void;
 }) {
+  const conceptMentionMatcher = useMemo(
+    () => createConceptMentionMatcher({ cards, conceptAliases }),
+    [cards, conceptAliases]
+  );
+
   if (!article) {
     return (
       <section className="x-deepread-empty">
@@ -26,6 +43,9 @@ export function DeepReadArticleView({
       </section>
     );
   }
+
+  const introLinkedConcepts = new Set<string>();
+  const conclusionLinkedConcepts = new Set<string>();
 
   return (
     <article className="x-deepread" aria-label={t("deepread.readerLabel")}>
@@ -51,7 +71,15 @@ export function DeepReadArticleView({
             sources: article.sources.length
           })}
         </p>
-        <p className="x-deepread-intro">{article.introduction}</p>
+        <p className="x-deepread-intro">
+          {renderTextWithConceptMentions(
+            article.introduction,
+            conceptMentionMatcher,
+            introLinkedConcepts,
+            onOpenConcept,
+            "deepread-intro"
+          )}
+        </p>
       </header>
 
       {article.budget.truncated ? (
@@ -61,51 +89,69 @@ export function DeepReadArticleView({
         </section>
       ) : null}
 
-      {article.chapters.map((chapter, index) => (
-        <section className={`x-deepread-chapter ${chapter.status}`} key={chapter.id}>
-          <header className="x-deepread-chapter-head">
-            <p className="x-label">{t("deepread.chapterIndex", { index: index + 1 })}</p>
-            <h2>{chapter.title}</h2>
-            <p>{chapter.question}</p>
-            <div className="x-deepread-tags">
-              {chapter.status === "gap" ? <span>{t("deepread.gapChapter")}</span> : null}
-              {chapter.singleSource ? <span>{t("deepread.singleSource")}</span> : null}
+      {article.chapters.map((chapter, index) => {
+        const chapterLinkedConcepts = new Set<string>();
+
+        return (
+          <section className={`x-deepread-chapter ${chapter.status}`} key={chapter.id}>
+            <header className="x-deepread-chapter-head">
+              <p className="x-label">{t("deepread.chapterIndex", { index: index + 1 })}</p>
+              <h2>{chapter.title}</h2>
+              <p>{chapter.question}</p>
+              <div className="x-deepread-tags">
+                {chapter.status === "gap" ? <span>{t("deepread.gapChapter")}</span> : null}
+                {chapter.singleSource ? <span>{t("deepread.singleSource")}</span> : null}
+              </div>
+            </header>
+
+            {chapter.gapStatement ? <p className="x-deepread-gap">{chapter.gapStatement}</p> : null}
+
+            <div className="x-deepread-paragraphs">
+              {chapter.paragraphs.map((paragraph) => (
+                <p className={`x-deepread-p ${paragraph.kind}`} key={paragraph.id}>
+                  {paragraph.kind === "synthesis" ? <span>{t("deepread.synthesis")}</span> : null}
+                  {renderTextWithConceptMentions(
+                    paragraph.text,
+                    conceptMentionMatcher,
+                    chapterLinkedConcepts,
+                    onOpenConcept,
+                    `deepread-${chapter.id}-${paragraph.id}`
+                  )}
+                </p>
+              ))}
             </div>
-          </header>
 
-          {chapter.gapStatement ? <p className="x-deepread-gap">{chapter.gapStatement}</p> : null}
-
-          <div className="x-deepread-paragraphs">
-            {chapter.paragraphs.map((paragraph) => (
-              <p className={`x-deepread-p ${paragraph.kind}`} key={paragraph.id}>
-                {paragraph.kind === "synthesis" ? <span>{t("deepread.synthesis")}</span> : null}
-                {paragraph.text}
-              </p>
-            ))}
-          </div>
-
-          <section className="x-deepread-chapter-sources">
-            <h3>{t("deepread.chapterSources")}</h3>
-            {chapter.sources.length ? (
-              <ul>
-                {chapter.sources.map((source) => (
-                  <li key={source.sourceId}>
-                    <strong>{source.sourceTitle}</strong>
-                    <small>{t("deepread.chunkCount", { count: source.chunkIds.length })}</small>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p>{t("deepread.noChapterSources")}</p>
-            )}
+            <section className="x-deepread-chapter-sources">
+              <h3>{t("deepread.chapterSources")}</h3>
+              {chapter.sources.length ? (
+                <ul>
+                  {chapter.sources.map((source) => (
+                    <li key={source.sourceId}>
+                      <strong>{source.sourceTitle}</strong>
+                      <small>{t("deepread.chunkCount", { count: source.chunkIds.length })}</small>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p>{t("deepread.noChapterSources")}</p>
+              )}
+            </section>
           </section>
-        </section>
-      ))}
+        );
+      })}
 
       <footer className="x-deepread-footer">
         <section>
           <h2>{t("deepread.conclusion")}</h2>
-          <p>{article.conclusion}</p>
+          <p>
+            {renderTextWithConceptMentions(
+              article.conclusion,
+              conceptMentionMatcher,
+              conclusionLinkedConcepts,
+              onOpenConcept,
+              "deepread-conclusion"
+            )}
+          </p>
         </section>
         <section>
           <h2>{t("deepread.sources")}</h2>
@@ -150,4 +196,66 @@ export function DeepReadArticleView({
       </footer>
     </article>
   );
+}
+
+function renderTextWithConceptMentions(
+  text: string,
+  matcher: ReturnType<typeof createConceptMentionMatcher>,
+  linkedConcepts: Set<string>,
+  onOpenConcept: (concept: string) => void,
+  keyPrefix: string
+): ReactNode {
+  const linkedMentions = matcher.findMentions(text).filter((mention) => {
+    if (linkedConcepts.has(mention.slug)) {
+      return false;
+    }
+
+    linkedConcepts.add(mention.slug);
+    return true;
+  });
+
+  if (linkedMentions.length === 0) {
+    return text;
+  }
+
+  const nodes: ReactNode[] = [];
+  let cursor = 0;
+
+  linkedMentions.forEach((mention, index) => {
+    if (mention.start > cursor) {
+      nodes.push(text.slice(cursor, mention.start));
+    }
+
+    const open = () => onOpenConcept(mention.concept);
+
+    nodes.push(
+      <span
+        className="x-wikilink concept"
+        key={`${keyPrefix}-${index}-${mention.start}-${mention.slug}`}
+        onClick={(event) => {
+          event.stopPropagation();
+          open();
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            event.stopPropagation();
+            open();
+          }
+        }}
+        role="link"
+        tabIndex={0}
+      >
+        {mention.text}
+      </span>
+    );
+
+    cursor = mention.end;
+  });
+
+  if (cursor < text.length) {
+    nodes.push(text.slice(cursor));
+  }
+
+  return nodes;
 }
