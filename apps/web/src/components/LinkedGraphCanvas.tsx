@@ -35,7 +35,28 @@ interface Palette {
   warn: string;
 }
 
+interface LabelCandidate {
+  node: SimNode;
+  text: string;
+  x: number;
+  y: number;
+  priority: number;
+  isHovered: boolean;
+}
+
+interface LabelBox {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+}
+
 const NOTE_COLOR = "#536471"; // matches the non-agent .x-avatar background
+const LABEL_FONT = "11px -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif";
+const LABEL_GAP = 4;
+const LABEL_HALO_WIDTH = 3;
+const LABEL_BOX_HEIGHT = 14;
+const LABEL_BOX_PAD = LABEL_HALO_WIDTH + 1;
 
 // Force-simulation constants, tuned for the small graphs this prototype builds.
 const REPULSION = 2600;
@@ -87,6 +108,7 @@ export function LinkedGraphCanvas({
   // including across graph rebuilds, so it must outlive this effect.
   const userTookOverRef = useRef(false);
   const graphRef = useRef(graph);
+  const adjacencyRef = useRef<Map<string, Set<string>>>(new Map());
   graphRef.current = graph;
   const onLayoutSettledRef = useRef(onLayoutSettled);
   onLayoutSettledRef.current = onLayoutSettled;
@@ -160,6 +182,25 @@ export function LinkedGraphCanvas({
           vy: 0
         };
       });
+    }
+
+    function buildAdjacency() {
+      const adjacency = new Map<string, Set<string>>();
+
+      for (const node of graphRef.current.nodes) {
+        adjacency.set(node.id, new Set<string>());
+      }
+
+      for (const edge of graphRef.current.edges) {
+        const sourceNeighbors = adjacency.get(edge.source) ?? new Set<string>();
+        const targetNeighbors = adjacency.get(edge.target) ?? new Set<string>();
+        sourceNeighbors.add(edge.target);
+        targetNeighbors.add(edge.source);
+        adjacency.set(edge.source, sourceNeighbors);
+        adjacency.set(edge.target, targetNeighbors);
+      }
+
+      adjacencyRef.current = adjacency;
     }
 
     function step() {
@@ -313,6 +354,20 @@ export function LinkedGraphCanvas({
       return { minX, minY, maxX, maxY };
     }
 
+    function labelBox(x: number, y: number, width: number): LabelBox {
+      const halfHeight = LABEL_BOX_HEIGHT / 2;
+      return {
+        left: x - LABEL_BOX_PAD,
+        right: x + width + LABEL_BOX_PAD,
+        top: y - halfHeight - LABEL_BOX_PAD,
+        bottom: y + halfHeight + LABEL_BOX_PAD
+      };
+    }
+
+    function boxesIntersect(a: LabelBox, b: LabelBox): boolean {
+      return !(a.right <= b.left || a.left >= b.right || a.bottom <= b.top || a.top >= b.bottom);
+    }
+
     // Frames every node (plus its right-side label, for always-labeled
     // concept/ghost nodes) inside the viewport: never zooms in past 1:1, and
     // is a no-op once the user has zoomed or panned the camera themselves.
@@ -361,6 +416,8 @@ export function LinkedGraphCanvas({
       const nodes = nodesRef.current;
       const byId = new Map(nodes.map((node) => [node.id, node]));
       const hovered = hoverRef.current;
+      const hoveredNeighbors = hovered ? adjacencyRef.current.get(hovered) : undefined;
+      const labelCandidates: LabelCandidate[] = [];
 
       // Edges first, so nodes sit on top.
       for (const edge of graphRef.current.edges) {
@@ -422,17 +479,54 @@ export function LinkedGraphCanvas({
           }
         }
 
-        // Concept and ghost labels are always on; card/note labels only on hover.
+        // Concept, ghost, and idea labels are always candidates; card/note labels only on hover.
         const showLabel = node.kind === "concept" || node.kind === "ghost" || node.kind === "idea" || node.id === hovered;
 
         if (showLabel && node.label) {
-          ctx.font = "11px -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif";
-          ctx.textBaseline = "middle";
-          ctx.fillStyle = node.kind === "concept" ? palette.ink : palette.muted;
-          ctx.globalAlpha = node.kind === "concept" || node.id === hovered ? 1 : 0.85;
-          ctx.fillText(truncate(node.label), point.x + radius + 4, point.y);
-          ctx.globalAlpha = 1;
+          const isHovered = node.id === hovered;
+          const isHoverNeighbor = hoveredNeighbors?.has(node.id) ?? false;
+          labelCandidates.push({
+            node,
+            text: truncate(node.label),
+            x: Math.round(point.x + radius + LABEL_GAP),
+            y: Math.round(point.y),
+            priority: isHovered ? 0 : isHoverNeighbor ? 1 : 2,
+            isHovered
+          });
         }
+      }
+
+      ctx.font = LABEL_FONT;
+      ctx.textBaseline = "middle";
+      labelCandidates.sort((a, b) => {
+        if (a.priority !== b.priority) {
+          return a.priority - b.priority;
+        }
+        if (a.node.weight !== b.node.weight) {
+          return b.node.weight - a.node.weight;
+        }
+        return a.node.id.localeCompare(b.node.id);
+      });
+
+      const placedLabels: LabelBox[] = [];
+
+      for (const candidate of labelCandidates) {
+        const box = labelBox(candidate.x, candidate.y, ctx.measureText(candidate.text).width);
+        const collides = placedLabels.some((placed) => boxesIntersect(box, placed));
+
+        if (!candidate.isHovered && collides) {
+          continue;
+        }
+
+        placedLabels.push(box);
+        ctx.strokeStyle = palette.bg;
+        ctx.lineWidth = LABEL_HALO_WIDTH;
+        ctx.globalAlpha = 1;
+        ctx.strokeText(candidate.text, candidate.x, candidate.y);
+        ctx.fillStyle = candidate.node.kind === "concept" ? palette.ink : palette.muted;
+        ctx.globalAlpha = candidate.node.kind === "concept" || candidate.isHovered ? 1 : 0.85;
+        ctx.fillText(candidate.text, candidate.x, candidate.y);
+        ctx.globalAlpha = 1;
       }
     }
 
@@ -644,6 +738,7 @@ export function LinkedGraphCanvas({
     themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
 
     buildNodes();
+    buildAdjacency();
 
     // Converge off-screen and draw the final layout in one shot — never play
     // the fling-into-place animation at the user (the graph regrows whenever
