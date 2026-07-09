@@ -108,7 +108,6 @@ export function LinkedGraphCanvas({
   // including across graph rebuilds, so it must outlive this effect.
   const userTookOverRef = useRef(false);
   const graphRef = useRef(graph);
-  const adjacencyRef = useRef<Map<string, Set<string>>>(new Map());
   graphRef.current = graph;
   const onLayoutSettledRef = useRef(onLayoutSettled);
   onLayoutSettledRef.current = onLayoutSettled;
@@ -182,25 +181,6 @@ export function LinkedGraphCanvas({
           vy: 0
         };
       });
-    }
-
-    function buildAdjacency() {
-      const adjacency = new Map<string, Set<string>>();
-
-      for (const node of graphRef.current.nodes) {
-        adjacency.set(node.id, new Set<string>());
-      }
-
-      for (const edge of graphRef.current.edges) {
-        const sourceNeighbors = adjacency.get(edge.source) ?? new Set<string>();
-        const targetNeighbors = adjacency.get(edge.target) ?? new Set<string>();
-        sourceNeighbors.add(edge.target);
-        targetNeighbors.add(edge.source);
-        adjacency.set(edge.source, sourceNeighbors);
-        adjacency.set(edge.target, targetNeighbors);
-      }
-
-      adjacencyRef.current = adjacency;
     }
 
     function step() {
@@ -416,7 +396,22 @@ export function LinkedGraphCanvas({
       const nodes = nodesRef.current;
       const byId = new Map(nodes.map((node) => [node.id, node]));
       const hovered = hoverRef.current;
-      const hoveredNeighbors = hovered ? adjacencyRef.current.get(hovered) : undefined;
+      // Recomputed per frame from the live edge list so it can never go stale
+      // when the graph mutates without changing graphSignature.
+      let hoveredNeighbors: Set<string> | undefined;
+
+      if (hovered) {
+        hoveredNeighbors = new Set<string>();
+
+        for (const edge of graphRef.current.edges) {
+          if (edge.source === hovered) {
+            hoveredNeighbors.add(edge.target);
+          } else if (edge.target === hovered) {
+            hoveredNeighbors.add(edge.source);
+          }
+        }
+      }
+
       const labelCandidates: LabelCandidate[] = [];
 
       // Edges first, so nodes sit on top.
@@ -498,6 +493,9 @@ export function LinkedGraphCanvas({
 
       ctx.font = LABEL_FONT;
       ctx.textBaseline = "middle";
+      // Round joins keep the halo stroke from sprouting miter spikes on
+      // sharp glyph corners.
+      ctx.lineJoin = "round";
       labelCandidates.sort((a, b) => {
         if (a.priority !== b.priority) {
           return a.priority - b.priority;
@@ -738,7 +736,6 @@ export function LinkedGraphCanvas({
     themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
 
     buildNodes();
-    buildAdjacency();
 
     // Converge off-screen and draw the final layout in one shot — never play
     // the fling-into-place animation at the user (the graph regrows whenever
