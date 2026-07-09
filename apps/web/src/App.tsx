@@ -2627,6 +2627,9 @@ export function App() {
         {activeView === "deepread" ? (
           <DeepReadArticleView
             article={selectedDeepReadArticle}
+            cards={allCards}
+            conceptAliases={conceptAliases}
+            onOpenConcept={handleOpenConcept}
             onBack={() => {
               setActiveView("graph");
               setGraphRequestedTab("skillTree");
