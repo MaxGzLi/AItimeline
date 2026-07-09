@@ -3661,7 +3661,18 @@ const conceptMentionCards = [
     createdAt: "2026-01-03T00:00:00.000Z"
   },
   { id: "mention-short-cjk", title: "注意力", summary: "s", keyTakeaway: "k", concepts: ["注意力"], sources: [], createdAt: "2026-01-04T00:00:00.000Z" },
-  { id: "mention-rag", title: "RAG", summary: "s", keyTakeaway: "k", concepts: ["RAG"], sources: [], createdAt: "2026-01-05T00:00:00.000Z" }
+  { id: "mention-rag", title: "RAG", summary: "s", keyTakeaway: "k", concepts: ["RAG"], sources: [], createdAt: "2026-01-05T00:00:00.000Z" },
+  { id: "mention-mixed", title: "AI芯片", summary: "s", keyTakeaway: "k", concepts: ["AI芯片"], sources: [], createdAt: "2026-01-06T00:00:00.000Z" },
+  { id: "mention-cjk-duel", title: "注意力机制", summary: "s", keyTakeaway: "k", concepts: ["注意力机制"], sources: [], createdAt: "2026-01-07T00:00:00.000Z" },
+  {
+    id: "mention-mixed-case",
+    title: "Transformer架构",
+    summary: "s",
+    keyTakeaway: "k",
+    concepts: ["Transformer架构"],
+    sources: [],
+    createdAt: "2026-01-08T00:00:00.000Z"
+  }
 ];
 const conceptMentionAliases = [
   {
@@ -3704,13 +3715,38 @@ assert.deepEqual(
 
 assert.deepEqual(conceptMentionMatcher.findMentions("Transformer is outside this tiny library."), [], "unknown words do not produce ghost concept mentions");
 
+assert.deepEqual(
+  conceptMentionMatcher.findMentions("OpenAI芯片战略引发关注。"),
+  [],
+  "a mixed CJK concept must not start midway through a latin word"
+);
+assert.deepEqual(
+  conceptMentionMatcher.findMentions("国产AI芯片来了").map((mention) => mention.text),
+  ["AI芯片"],
+  "a mixed CJK concept still matches flush against CJK prose"
+);
+assert.deepEqual(
+  conceptMentionMatcher.findMentions("注意力机制决定注意力分配").map((mention) => mention.text),
+  ["注意力机制", "注意力"],
+  "the longest candidate wins a same-start duel and the shorter one still matches later"
+);
+assert.deepEqual(
+  conceptMentionMatcher.findMentions("采用transformer架构").map((mention) => mention.text),
+  ["transformer架构"],
+  "mixed CJK concepts match their latin part case-insensitively"
+);
+
 const orderedMentionText = "gqa 借助多头潜在注意力服务 Retrieval-Augmented Generation.";
 const orderedMentions = conceptMentionMatcher.findMentions(orderedMentionText);
 assert.deepEqual(orderedMentions, conceptMentionMatcher.findMentions(orderedMentionText), "concept mention output is deterministic");
 assert.deepEqual(
-  orderedMentions.map((mention) => mention.start),
-  [...orderedMentions.map((mention) => mention.start)].sort((left, right) => left - right),
-  "concept mentions are sorted by start offset"
+  orderedMentions,
+  [
+    { start: 0, end: 3, text: "gqa", concept: "GQA", slug: "gqa" },
+    { start: 6, end: 13, text: "多头潜在注意力", concept: "多头潜在注意力", slug: "多头潜在注意力" },
+    { start: 16, end: 46, text: "Retrieval-Augmented Generation", concept: "RAG", slug: "rag" }
+  ],
+  "concept mention offsets slice the raw text exactly"
 );
 
 // Backlinks: note bodies and public comments both count; the snippet frames the link.

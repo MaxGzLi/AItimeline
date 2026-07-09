@@ -16,6 +16,17 @@
 - `dcl-concept-panel-light.png` — 点击后词条浮层(文章在底层)。
 - `dcl-article-links-dark.png` — 暗色第 1 章;可见 MLATransformerConfig 为纯文本。
 
+## 审查修复(合并前,验收人修)
+
+独立审查在编译产物上实测出一条必修 bug 及若干边角,已一并修复并回归:
+
+- **M-1 混合中英概念误链**:`AI芯片` 这类含 CJK 的概念原走裸子串匹配,不查词边界——「OpenAI芯片战略」会从 OpenAI 中间劈出 `[AI芯片]`。修:边界检查按候选词两端字符是否为 ASCII 词字符分别强制(`hasAsciiCompatibleEdges`),`OpenAI芯片` 不再命中、`国产AI芯片` 照常命中。
+- **统一小写匹配**:所有候选一律经 lowerText 匹配(CJK 小写恒等),顺带修掉「混合概念拉丁部分大小写敏感」的漏链(`transformer架构` 现可命中 `Transformer架构`)。
+- **U+0130 索引错位守卫**:`toLowerCase` 个别字符会膨胀长度导致 lowerText 与原文偏移错位(整段漏链);加 `lowerAligned` 守卫,不对齐时退化为逐段 slice 比较,正常文本零开销。
+- **smoke 补强**:同起点对决断言(`注意力机制` vs `注意力`,真正锁住最长优先排序——删掉排序会红)、混合概念边界正反两态、大小写命中、`orderedMentions` 含 start/end 的精确 deepEqual(锁偏移量)。
+
+不修(记为已知边界):全角正文(`ＧＱＡ`)不命中——与下述别名问题同类,纯漏链无误链。
+
 ## 已知边界(按设计,不阻塞)
 
 - 「GQA」这类**缩写本身**目前链不上:库内概念是全称 `Group-Query Attention`,自动别名只合并大小写变体、不推断缩写。全称出现处正常链接。缩写自动别名(GQA→Group-Query Attention)是后续单独一单。

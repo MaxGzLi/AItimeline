@@ -21,13 +21,11 @@ export interface ConceptMentionMatcher {
 interface ConceptMentionCandidate {
   text: string;
   searchText: string;
-  hasCjk: boolean;
   concept: string;
   slug: string;
 }
 
 const ASCII_WORD_CHARACTER = /[A-Za-z0-9_]/;
-const CJK_CHARACTER = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
 
 export function createConceptMentionMatcher(
   input: { cards: readonly KnowledgeCard[] } & ConceptAliasOptions
@@ -62,15 +60,13 @@ export function createConceptMentionMatcher(
       return;
     }
 
-    const hasCjk = CJK_CHARACTER.test(text);
-    const searchText = hasCjk ? text : text.toLowerCase();
-    const key = `${hasCjk ? "cjk" : "latin"}:${searchText}:${slug}`;
+    const searchText = text.toLowerCase();
+    const key = `${searchText}:${slug}`;
 
     if (!candidateByKey.has(key)) {
       candidateByKey.set(key, {
         text,
         searchText,
-        hasCjk,
         concept,
         slug
       });
@@ -101,10 +97,14 @@ export function createConceptMentionMatcher(
 
       const mentions: ConceptMention[] = [];
       const lowerText = text.toLowerCase();
+      // Rare lowercase mappings expand (e.g. U+0130 becomes two code units)
+      // and would desync lowerText offsets from the raw text; fall back to
+      // per-slice comparison in that case.
+      const lowerAligned = lowerText.length === text.length;
       let index = 0;
 
       while (index < text.length) {
-        const match = findCandidateAt(text, lowerText, index, candidates);
+        const match = findCandidateAt(text, lowerText, lowerAligned, index, candidates);
 
         if (!match) {
           index += 1;
@@ -129,6 +129,7 @@ export function createConceptMentionMatcher(
 function findCandidateAt(
   text: string,
   lowerText: string,
+  lowerAligned: boolean,
   start: number,
   candidates: readonly ConceptMentionCandidate[]
 ): { candidate: ConceptMentionCandidate; end: number } | null {
@@ -139,19 +140,15 @@ function findCandidateAt(
       continue;
     }
 
-    if (candidate.hasCjk) {
-      if (text.startsWith(candidate.text, start)) {
-        return { candidate, end };
-      }
+    const matched = lowerAligned
+      ? lowerText.startsWith(candidate.searchText, start)
+      : text.slice(start, end).toLowerCase() === candidate.searchText;
 
+    if (!matched) {
       continue;
     }
 
-    if (!lowerText.startsWith(candidate.searchText, start)) {
-      continue;
-    }
-
-    if (hasAsciiWordBoundary(text, start, end)) {
+    if (hasAsciiCompatibleEdges(text, candidate.text, start, end)) {
       return { candidate, end };
     }
   }
@@ -159,8 +156,19 @@ function findCandidateAt(
   return null;
 }
 
-function hasAsciiWordBoundary(text: string, start: number, end: number): boolean {
-  return !isAsciiWordCharacter(text[start - 1]) && !isAsciiWordCharacter(text[end]);
+// A word boundary is only demanded where the candidate itself has an ASCII
+// word character at that edge, so "AI芯片" cannot start midway through
+// "OpenAI芯片" while "内存瓶颈" still matches flush against CJK prose.
+function hasAsciiCompatibleEdges(text: string, candidateText: string, start: number, end: number): boolean {
+  if (isAsciiWordCharacter(candidateText[0]) && isAsciiWordCharacter(text[start - 1])) {
+    return false;
+  }
+
+  if (isAsciiWordCharacter(candidateText[candidateText.length - 1]) && isAsciiWordCharacter(text[end])) {
+    return false;
+  }
+
+  return true;
 }
 
 function isAsciiWordCharacter(character: string | undefined): boolean {
