@@ -1,6 +1,7 @@
 import type { ModelClient, ModelMessage } from "../harness/modelRunner.js";
 import type { ContentLanguage } from "../harness/contentLanguage.js";
 import { validateClaimSupport } from "../harness/groundingGate.js";
+import { normalizeConceptKey } from "../graph/conceptAliases.js";
 import type {
   ConceptBrief,
   ConceptBriefAdjacentConcept,
@@ -503,10 +504,6 @@ function hashText(value: string): string {
   }
 
   return hash.toString(16);
-}
-
-function normalizeConceptKey(value: string): string {
-  return value.trim().toLowerCase();
 }
 
 function normalizeCount(value: unknown): number {

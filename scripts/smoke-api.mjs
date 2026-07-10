@@ -6,7 +6,9 @@ import { join } from "node:path";
 import { createApiServer } from "../apps/api/src/server.mjs";
 
 const previousContentLanguage = process.env.AITIMELINE_CONTENT_LANGUAGE;
+const previousTimelineTimeZone = process.env.AITIMELINE_TIMEZONE;
 process.env.AITIMELINE_CONTENT_LANGUAGE = "zh";
+process.env.AITIMELINE_TIMEZONE = "UTC";
 
 const tempDir = await mkdtemp(join(tmpdir(), "aitimeline-api-"));
 const mediaRootDir = join(tempDir, "media");
@@ -1173,6 +1175,467 @@ try {
     );
   } finally {
     await closeServer(topicBlocksServer);
+  }
+
+  const conceptKeyApiDataPath = join(tempDir, "concept-key-api.json");
+  const conceptKeyApiCurationPath = join(tempDir, "concept-key-api-curation.json");
+  const conceptKeyApiNow = "2026-07-08T10:00:00.000Z";
+  const conceptKeyApiPost = makeApiSmokePost({
+    id: "concept-key-rag-post",
+    title: "RAG concept-key API fixture",
+    concepts: ["RAG"],
+    createdAt: conceptKeyApiNow
+  });
+  const conceptKeyDwellPost = makeApiSmokePost({
+    id: "coalesced-dwell-api-post",
+    title: "Coalesced dwell API fixture",
+    concepts: ["Dwell"],
+    createdAt: conceptKeyApiNow
+  });
+  const productionThresholdPost = makeApiSmokePost({
+    id: "production-threshold-api-post",
+    title: "Production threshold API fixture",
+    concepts: ["Threshold"],
+    createdAt: conceptKeyApiNow
+  });
+  const directThresholdPost = makeApiSmokePost({
+    id: "direct-threshold-api-post",
+    title: "Direct threshold API fixture",
+    concepts: ["Threshold Direct"],
+    createdAt: conceptKeyApiNow
+  });
+  const likedThresholdPost = makeApiSmokePost({
+    id: "liked-threshold-api-post",
+    title: "Liked threshold API fixture",
+    concepts: ["Threshold Liked"],
+    createdAt: conceptKeyApiNow
+  });
+  const incrementalStrengthPost = makeApiSmokePost({
+    id: "incremental-strength-api-post",
+    title: "Incremental strength API fixture",
+    concepts: ["Strength Incremental"],
+    createdAt: conceptKeyApiNow
+  });
+  const directStrengthPost = makeApiSmokePost({
+    id: "direct-strength-api-post",
+    title: "Direct strength API fixture",
+    concepts: ["Strength Direct"],
+    createdAt: conceptKeyApiNow
+  });
+
+  await writeFile(
+    conceptKeyApiDataPath,
+    JSON.stringify({
+      version: 1,
+      updatedAt: conceptKeyApiNow,
+      posts: [
+        conceptKeyApiPost,
+        conceptKeyDwellPost,
+        productionThresholdPost,
+        directThresholdPost,
+        likedThresholdPost,
+        incrementalStrengthPost,
+        directStrengthPost
+      ]
+    })
+  );
+
+  const conceptKeyApiServer = createApiServer({
+    dataPath: conceptKeyApiDataPath,
+    curationDataPath: conceptKeyApiCurationPath,
+    mediaRootDir,
+    enableFixtures: true,
+    searchProvider: fakeSearchProvider
+  });
+
+  try {
+    await requestJsonFromServer(conceptKeyApiServer, "/api/source-candidates", {
+      method: "POST",
+      body: {
+        url: `${baseUrl}/fixtures/article-background?query=full-width-rag`,
+        title: "Full-width RAG candidate",
+        intakeKind: "agent_discovery",
+        topicId: "ＲＡＧ",
+        conceptIds: ["ＲＡＧ"],
+        relevanceScore: 0.95,
+        noveltyScore: 0.8,
+        qualityScore: 0.9,
+        reason: "Full-width concept-key candidate fixture.",
+        discoveredAt: conceptKeyApiNow
+      }
+    });
+    const conceptKeySignalResult = await requestJsonFromServer(conceptKeyApiServer, "/api/signals", {
+      method: "POST",
+      body: {
+        generatedAt: conceptKeyApiNow,
+        signal: {
+          postId: conceptKeyApiPost.id,
+          topicId: "RAG",
+          conceptIds: ["RAG"],
+          impression: true,
+          dwellTimeMs: 18000,
+          openedThread: true,
+          liked: true,
+          saved: false,
+          askedQuestion: false,
+          reviewed: false,
+          skippedQuickly: false,
+          createdAt: conceptKeyApiNow
+        }
+      }
+    });
+
+    assert.ok(
+      conceptKeySignalResult.records.some((record) => record.job.kind === "import_source"),
+      "API candidate matching should treat full-width ＲＡＧ and ASCII RAG as one concept key"
+    );
+
+    const cumulativeDwellResults = [];
+    let snapshotAfterFirstDwell;
+
+    for (const [index, dwellTimeMs] of [12000, 15000, 18000].entries()) {
+      cumulativeDwellResults.push(
+        await requestJsonFromServer(conceptKeyApiServer, "/api/signals", {
+          method: "POST",
+          body: {
+            generatedAt: `2026-07-08T11:0${index}:00.000Z`,
+            signal: {
+              postId: conceptKeyDwellPost.id,
+              topicId: "Dwell",
+              conceptIds: ["Dwell"],
+              impression: true,
+              dwellTimeMs,
+              openedThread: false,
+              liked: false,
+              saved: false,
+              askedQuestion: false,
+              reviewed: false,
+              skippedQuickly: false,
+              createdAt: `2026-07-08T11:0${index}:00.000Z`
+            }
+          }
+        })
+      );
+
+      if (index === 0) {
+        snapshotAfterFirstDwell = await requestJsonFromServer(conceptKeyApiServer, "/api/snapshot");
+      }
+    }
+
+    const snapshotAfterCumulativeDwell = await requestJsonFromServer(conceptKeyApiServer, "/api/snapshot");
+    const firstDwellBudget = snapshotAfterFirstDwell.autoJobBudget.find((record) => record.date === "2026-07-08");
+    const finalDwellBudget = snapshotAfterCumulativeDwell.autoJobBudget.find((record) => record.date === "2026-07-08");
+
+    assert.ok(cumulativeDwellResults[0].records.length > 0, "the first qualifying dwell should enqueue production");
+    assert.ok(
+      cumulativeDwellResults.slice(1).every((result) => result.coalescedReplay && result.records.length === 0),
+      "15s and 18s cumulative re-sends should not repeat topic feedback production"
+    );
+    assert.equal(
+      finalDwellBudget?.used,
+      firstDwellBudget?.used,
+      "cumulative dwell re-sends should not consume the daily budget again"
+    );
+    assert.equal(
+      snapshotAfterCumulativeDwell.curationJobs.length,
+      snapshotAfterFirstDwell.curationJobs.length,
+      "cumulative dwell re-sends should not persist duplicate curation jobs"
+    );
+    assert.deepEqual(
+      {
+        interestScore: cumulativeDwellResults[2].topicState.interestScore,
+        fatigueScore: cumulativeDwellResults[2].topicState.fatigueScore,
+        comprehensionScore: cumulativeDwellResults[2].topicState.comprehensionScore
+      },
+      {
+        interestScore: cumulativeDwellResults[0].topicState.interestScore,
+        fatigueScore: cumulativeDwellResults[0].topicState.fatigueScore,
+        comprehensionScore: cumulativeDwellResults[0].topicState.comprehensionScore
+      },
+      "12 -> 15 -> 18 second cumulative dwell should contribute one topic-state update"
+    );
+
+    const thresholdSignal = (dwellTimeMs, createdAt) => ({
+      postId: productionThresholdPost.id,
+      topicId: "Threshold",
+      conceptIds: ["Threshold"],
+      impression: true,
+      dwellTimeMs,
+      openedThread: false,
+      liked: false,
+      saved: false,
+      askedQuestion: false,
+      reviewed: false,
+      skippedQuickly: false,
+      createdAt
+    });
+    const thresholdNineSecondResult = await requestJsonFromServer(conceptKeyApiServer, "/api/signals", {
+      method: "POST",
+      body: {
+        generatedAt: "2026-07-08T12:00:00.000Z",
+        signal: thresholdSignal(9000, "2026-07-08T12:00:00.000Z")
+      }
+    });
+    const snapshotAfterNineSeconds = await requestJsonFromServer(conceptKeyApiServer, "/api/snapshot");
+    const thresholdTwelveSecondResult = await requestJsonFromServer(conceptKeyApiServer, "/api/signals", {
+      method: "POST",
+      body: {
+        generatedAt: "2026-07-08T12:01:00.000Z",
+        signal: thresholdSignal(12000, "2026-07-08T12:01:00.000Z")
+      }
+    });
+    const snapshotAfterTwelveSeconds = await requestJsonFromServer(conceptKeyApiServer, "/api/snapshot");
+    const budgetAfterNineSeconds = snapshotAfterNineSeconds.autoJobBudget.find(
+      (record) => record.date === "2026-07-08"
+    );
+    const budgetAfterTwelveSeconds = snapshotAfterTwelveSeconds.autoJobBudget.find(
+      (record) => record.date === "2026-07-08"
+    );
+
+    assert.ok(thresholdNineSecondResult.records.length > 0, "9s dwell should cross the production threshold once");
+    assert.equal(
+      thresholdTwelveSecondResult.records.length,
+      0,
+      "9s -> 12s dwell should update topic semantics without enqueueing production twice"
+    );
+    assert.equal(
+      budgetAfterTwelveSeconds?.used,
+      budgetAfterNineSeconds?.used,
+      "9s -> 12s dwell should not consume another production budget slot"
+    );
+    assert.equal(
+      snapshotAfterTwelveSeconds.curationJobs.length,
+      snapshotAfterNineSeconds.curationJobs.length,
+      "9s -> 12s dwell should not persist another production job"
+    );
+    const directTwelveSecondResult = await requestJsonFromServer(conceptKeyApiServer, "/api/signals", {
+      method: "POST",
+      body: {
+        generatedAt: "2026-07-08T12:02:00.000Z",
+        signal: {
+          ...thresholdSignal(12000, "2026-07-08T12:02:00.000Z"),
+          postId: directThresholdPost.id,
+          topicId: "Threshold Direct",
+          conceptIds: ["Threshold Direct"]
+        }
+      }
+    });
+
+    assert.deepEqual(
+      {
+        interestScore: thresholdTwelveSecondResult.topicState.interestScore,
+        fatigueScore: thresholdTwelveSecondResult.topicState.fatigueScore,
+        comprehensionScore: thresholdTwelveSecondResult.topicState.comprehensionScore
+      },
+      {
+        interestScore: directTwelveSecondResult.topicState.interestScore,
+        fatigueScore: directTwelveSecondResult.topicState.fatigueScore,
+        comprehensionScore: directTwelveSecondResult.topicState.comprehensionScore
+      },
+      "9s -> 12s and a direct 12s report should converge to the same topic scores"
+    );
+
+    const likedThresholdSignal = (dwellTimeMs, createdAt) => ({
+      ...thresholdSignal(dwellTimeMs, createdAt),
+      postId: likedThresholdPost.id,
+      topicId: "Threshold Liked",
+      conceptIds: ["Threshold Liked"],
+      liked: true
+    });
+    await requestJsonFromServer(conceptKeyApiServer, "/api/signals", {
+      method: "POST",
+      body: {
+        generatedAt: "2026-07-08T12:03:00.000Z",
+        signal: likedThresholdSignal(2000, "2026-07-08T12:03:00.000Z")
+      }
+    });
+    const snapshotAfterLikedAction = await requestJsonFromServer(conceptKeyApiServer, "/api/snapshot");
+    const likedThresholdResult = await requestJsonFromServer(conceptKeyApiServer, "/api/signals", {
+      method: "POST",
+      body: {
+        generatedAt: "2026-07-08T12:04:00.000Z",
+        signal: likedThresholdSignal(9000, "2026-07-08T12:04:00.000Z")
+      }
+    });
+    const snapshotAfterLikedDwell = await requestJsonFromServer(conceptKeyApiServer, "/api/snapshot");
+
+    assert.equal(
+      likedThresholdResult.records.length,
+      0,
+      "an explicit action that already qualified production should not enqueue again when dwell reaches 9s"
+    );
+    assert.equal(
+      snapshotAfterLikedDwell.curationJobs.length,
+      snapshotAfterLikedAction.curationJobs.length,
+      "liked@2s -> liked@9s should keep the production job count stable"
+    );
+    assert.equal(
+      snapshotAfterLikedDwell.autoJobBudget.find((record) => record.date === "2026-07-08")?.used,
+      snapshotAfterLikedAction.autoJobBudget.find((record) => record.date === "2026-07-08")?.used,
+      "liked@2s -> liked@9s should not consume another production budget slot"
+    );
+
+    const openedStrengthSignal = (post, dwellTimeMs, createdAt) => ({
+      postId: post.id,
+      topicId: post.concepts[0],
+      conceptIds: post.concepts,
+      impression: true,
+      dwellTimeMs,
+      openedThread: true,
+      liked: false,
+      saved: false,
+      askedQuestion: false,
+      reviewed: false,
+      skippedQuickly: false,
+      createdAt
+    });
+    await requestJsonFromServer(conceptKeyApiServer, "/api/signals", {
+      method: "POST",
+      body: {
+        generatedAt: "2026-07-08T12:05:00.000Z",
+        signal: openedStrengthSignal(incrementalStrengthPost, 8000, "2026-07-08T12:05:00.000Z")
+      }
+    });
+    const incrementalStrengthResult = await requestJsonFromServer(conceptKeyApiServer, "/api/signals", {
+      method: "POST",
+      body: {
+        generatedAt: "2026-07-08T12:06:00.000Z",
+        signal: openedStrengthSignal(incrementalStrengthPost, 9000, "2026-07-08T12:06:00.000Z")
+      }
+    });
+    const directStrengthResult = await requestJsonFromServer(conceptKeyApiServer, "/api/signals", {
+      method: "POST",
+      body: {
+        generatedAt: "2026-07-08T12:07:00.000Z",
+        signal: openedStrengthSignal(directStrengthPost, 9000, "2026-07-08T12:07:00.000Z")
+      }
+    });
+
+    assert.deepEqual(
+      {
+        interestScore: incrementalStrengthResult.topicState.interestScore,
+        fatigueScore: incrementalStrengthResult.topicState.fatigueScore,
+        comprehensionScore: incrementalStrengthResult.topicState.comprehensionScore
+      },
+      {
+        interestScore: directStrengthResult.topicState.interestScore,
+        fatigueScore: directStrengthResult.topicState.fatigueScore,
+        comprehensionScore: directStrengthResult.topicState.comprehensionScore
+      },
+      "openedThread@8s -> @9s and a direct @9s report should converge across the strength threshold"
+    );
+  } finally {
+    await closeServer(conceptKeyApiServer);
+  }
+
+  const legacyTopicStateDataPath = join(tempDir, "legacy-topic-state.json");
+  const legacyTopicStateCurationPath = join(tempDir, "legacy-topic-state-curation.json");
+  const legacyTopicStatePost = makeApiSmokePost({
+    id: "legacy-topic-state-post",
+    title: "Legacy topic state fixture",
+    concepts: ["Legacy Topic"],
+    createdAt: "2026-07-08T13:00:00.000Z"
+  });
+  const legacyTopicStateRecord = makeInteractionSignalRecord(legacyTopicStatePost, {
+    createdAt: "2026-07-08T13:00:00.000Z"
+  });
+  legacyTopicStateRecord.signal = {
+    ...legacyTopicStateRecord.signal,
+    dwellTimeMs: 12000
+  };
+
+  await writeFile(
+    legacyTopicStateDataPath,
+    JSON.stringify({
+      version: 1,
+      updatedAt: "2026-07-08T13:00:00.000Z",
+      posts: [legacyTopicStatePost],
+      interactionSignals: [legacyTopicStateRecord]
+    })
+  );
+
+  const legacyTopicStateServer = createApiServer({
+    dataPath: legacyTopicStateDataPath,
+    curationDataPath: legacyTopicStateCurationPath,
+    mediaRootDir,
+    enableFixtures: true,
+    searchProvider: fakeSearchProvider
+  });
+
+  try {
+    const legacyTopicStateSignalResult = await requestJsonFromServer(legacyTopicStateServer, "/api/signals", {
+      method: "POST",
+      body: {
+        generatedAt: "2026-07-08T13:01:00.000Z",
+        signal: {
+          ...legacyTopicStateRecord.signal,
+          dwellTimeMs: 15000,
+          createdAt: "2026-07-08T13:01:00.000Z"
+        }
+      }
+    });
+    const legacyTopicStateSnapshot = await requestJsonFromServer(legacyTopicStateServer, "/api/snapshot");
+
+    assert.ok(
+      legacyTopicStateSignalResult.topicState,
+      "a legacy snapshot with signals but no topic state should initialize topic feedback on the next resend"
+    );
+    assert.equal(
+      legacyTopicStateSnapshot.topicStates.length,
+      1,
+      "legacy topic feedback initialization should persist exactly one topic state"
+    );
+    assert.equal(
+      legacyTopicStateSignalResult.records.length,
+      0,
+      "legacy topic-state repair should not re-enqueue production for an already-qualified daily dwell"
+    );
+  } finally {
+    await closeServer(legacyTopicStateServer);
+  }
+
+  const previousBoundaryTimeZone = process.env.AITIMELINE_TIMEZONE;
+  process.env.AITIMELINE_TIMEZONE = "Asia/Shanghai";
+  const timeZoneDeepReadServer = createApiServer({
+    dataPath: join(tempDir, "timezone-deepread.json"),
+    curationDataPath: join(tempDir, "timezone-deepread-curation.json"),
+    mediaRootDir,
+    enableFixtures: true,
+    searchProvider: fakeSearchProvider
+  });
+
+  try {
+    const shanghaiDayOneDeepRead = await requestJsonFromServer(timeZoneDeepReadServer, "/api/deepread", {
+      method: "POST",
+      body: {
+        topic: "Shanghai day one",
+        userId: "timezone-user",
+        now: "2026-07-10T15:30:00.000Z"
+      }
+    });
+    const shanghaiDayTwoDeepRead = await requestJsonFromServer(timeZoneDeepReadServer, "/api/deepread", {
+      method: "POST",
+      body: {
+        topic: "Shanghai day two",
+        userId: "timezone-user",
+        now: "2026-07-10T16:30:00.000Z"
+      }
+    });
+
+    assert.equal(shanghaiDayOneDeepRead.queued, true, "the first local-day deep-read should queue");
+    assert.equal(
+      shanghaiDayTwoDeepRead.queued,
+      true,
+      "deep-read daily limits should reset at Asia/Shanghai midnight, not UTC midnight"
+    );
+  } finally {
+    await closeServer(timeZoneDeepReadServer);
+
+    if (previousBoundaryTimeZone === undefined) {
+      delete process.env.AITIMELINE_TIMEZONE;
+    } else {
+      process.env.AITIMELINE_TIMEZONE = previousBoundaryTimeZone;
+    }
   }
 
   const guaranteeDataPath = join(tempDir, "goal-production-guarantee.json");
@@ -3664,10 +4127,10 @@ try {
     "the first follow-up for a seed post should persist its card"
   );
 
-  // 第二轮:同一种子再触发一次跟进,产物与第一轮同题,必须被去重跳过。
+  // 第二轮:同一 post/day 的累计快照只替换 dwell,不得再排一条生产 job。
   const afterFirstFollowupSnapshot = await requestJson("/api/snapshot");
 
-  await requestJson("/api/signals", {
+  const repeatCumulativeSignal = await requestJson("/api/signals", {
     method: "POST",
     body: {
       generatedAt: "2026-06-10T01:00:00.000Z",
@@ -3694,6 +4157,17 @@ try {
     }
   });
 
+  assert.equal(
+    repeatCumulativeSignal.coalescedReplay,
+    true,
+    "same-day cumulative dwell snapshots should be recognized as a coalesced replay"
+  );
+  assert.equal(
+    repeatCumulativeSignal.records.length,
+    0,
+    "same-day cumulative dwell snapshots should not enqueue duplicate production"
+  );
+
   const repeatFollowupRun = await requestJson("/api/curation/run", {
     method: "POST",
     body: {
@@ -3701,15 +4175,10 @@ try {
       kinds: ["generate_followup"]
     }
   });
-  const repeatFollowupRecord = repeatFollowupRun.records.find(
-    (record) => record.status === "succeeded" && record.result?.sourceImport
-  );
-
-  assert.ok(repeatFollowupRecord, "repeat follow-up run should still process the job");
-  assert.deepEqual(
-    repeatFollowupRecord.result.sourceImport.posts,
-    [],
-    "duplicate-titled follow-up posts should be skipped before persistence"
+  assert.equal(
+    repeatFollowupRun.records.some((record) => record.job.kind === "generate_followup"),
+    false,
+    "coalesced cumulative dwell should leave no repeat follow-up job to process"
   );
 
   const snapshot = await requestJson("/api/snapshot");
@@ -4374,6 +4843,12 @@ try {
     delete process.env.AITIMELINE_CONTENT_LANGUAGE;
   } else {
     process.env.AITIMELINE_CONTENT_LANGUAGE = previousContentLanguage;
+  }
+
+  if (previousTimelineTimeZone === undefined) {
+    delete process.env.AITIMELINE_TIMEZONE;
+  } else {
+    process.env.AITIMELINE_TIMEZONE = previousTimelineTimeZone;
   }
 }
 

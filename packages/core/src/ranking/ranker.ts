@@ -13,6 +13,11 @@ import {
   normalizeConceptKey,
   slugConcept as slugResolvedConcept
 } from "../graph/conceptAliases.js";
+import {
+  coalesceInteractionSignals,
+  type InteractionSignalInput
+} from "../interaction/coalesceInteractionSignals.js";
+import { countSeenReadSignalsByPostId } from "./lifecycle.js";
 
 export type RecommendationIntent =
   | "deepen_interest"
@@ -26,13 +31,14 @@ export interface PersonalizedTimelineRankingInput {
   cards: KnowledgeCard[];
   memory?: UserMemory;
   topicStates?: TopicState[];
-  recentSignals?: InteractionSignal[];
+  recentSignals?: InteractionSignalInput[];
   seenReadCounts?: Record<string, number>;
   dueReviewPostIds?: string[];
   conceptAliases?: ConceptAliasRecord[];
   learningGoalConcepts?: string[];
   contentLanguage?: ContentLanguage;
   now?: string | Date;
+  timeZone?: string;
 }
 
 export interface PersonalizedRankedKnowledgeCard extends RankedKnowledgeCard {
@@ -93,7 +99,9 @@ export function rankPersonalizedTimeline(input: PersonalizedTimelineRankingInput
   const memory = input.memory;
   const resolver = createConceptAliasResolver(input.conceptAliases);
   const topicStateById = new Map((input.topicStates ?? []).map((state) => [state.topicId, state]));
-  const recentSignals = [...(input.recentSignals ?? [])]
+  const coalescedSignals = coalesceInteractionSignals(input.recentSignals ?? [], input.timeZone);
+  const derivedSeenReadCounts = countSeenReadSignalsByPostId(coalescedSignals, input.timeZone);
+  const recentSignals = [...coalescedSignals]
     .sort((left, right) => normalizeDate(right.createdAt).getTime() - normalizeDate(left.createdAt).getTime())
     .slice(0, 80);
   const interestSet = createConceptSet(memory?.profile.interests ?? [], resolver);
@@ -212,7 +220,10 @@ export function rankPersonalizedTimeline(input: PersonalizedTimelineRankingInput
         score += 30;
         reasons.unshift("Due for spaced review");
       } else {
-        const seenReadCount = Math.max(0, input.seenReadCounts?.[card.id] ?? 0);
+        const seenReadCount = Math.max(
+          0,
+          input.seenReadCounts?.[card.id] ?? derivedSeenReadCounts[card.id] ?? 0
+        );
         const seenReadPenalty = Math.min(seenReadCount * 12, 36);
 
         if (seenReadPenalty > 0) {

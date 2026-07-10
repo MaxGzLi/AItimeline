@@ -37,14 +37,14 @@ export function createExpansionPlan(input: CreateExpansionPlanInput): AgentExpan
   const jobsPerTopic = new Map<string, number>();
 
   for (const signal of input.signals) {
-    // Expansion policy only receives signal ids, not full posts. Follow-up posts
-    // created by the harness use a followup-* post id prefix, so suppress them
-    // here before they can enqueue follow-up, discovery, or import jobs.
-    if (isFollowupPostId(signal.postId)) {
+    // Expansion policy only receives signal ids, not full posts. Reserved ids
+    // identify system-derived cards, which must never drive another production
+    // chain through passive dwell or explicit interactions.
+    if (isSystemDerivedPostId(signal.postId)) {
       suppressions.push({
         postId: signal.postId,
         topicId: signal.topicId,
-        reason: "Follow-up posts do not start another background curation chain."
+        reason: "System-derived posts do not start another background curation chain."
       });
       continue;
     }
@@ -95,6 +95,10 @@ export function createExpansionPlan(input: CreateExpansionPlanInput): AgentExpan
       .map((job) => job.topicId)
       .filter(unique)
   };
+}
+
+export function isSystemDerivedPostId(postId: string | undefined): boolean {
+  return isFollowupPostId(postId) || (typeof postId === "string" && postId.startsWith("connection-note-"));
 }
 
 export function shouldContinueSeries(

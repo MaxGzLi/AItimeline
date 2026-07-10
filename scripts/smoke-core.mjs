@@ -3,6 +3,8 @@ import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+process.env.AITIMELINE_TIMEZONE = "UTC";
+
 const { applyDailyAutoJobBudget, createBackgroundCurationPlan } = await import("../packages/core/dist/agents/backgroundCuration.js");
 const { createDeterministicConceptBrief, generateConceptBrief } = await import("../packages/core/dist/agents/conceptBrief.js");
 const { runConversationTurn } = await import("../packages/core/dist/agents/conversationAgent.js");
@@ -78,11 +80,17 @@ const { createSourcePostReleasePlan } = await import("../packages/core/dist/rank
 const { arrangeTimelineBlocks, resolveCardBlockTopic } = await import(
   "../packages/core/dist/ranking/arrangeTimelineBlocks.js"
 );
-const { buildWeeklyRecap, buildWeeklyRecapId } = await import("../packages/core/dist/recap/weeklyRecap.js");
+const { buildWeeklyRecap, buildWeeklyRecapId, getIsoWeekStart } = await import(
+  "../packages/core/dist/recap/weeklyRecap.js"
+);
+const { coalesceInteractionSignals } = await import(
+  "../packages/core/dist/interaction/coalesceInteractionSignals.js"
+);
 const {
   countSeenReadSignalsByPostId,
   filterTimelineLifecycle,
-  isPureExposureSignal
+  isPureExposureSignal,
+  summarizeLifecycleSignals
 } = await import("../packages/core/dist/ranking/lifecycle.js");
 const { rankPersonalizedTimeline } = await import("../packages/core/dist/ranking/ranker.js");
 const { advanceReviewState, createInitialReviewState, getRestingReviewStates } = await import(
@@ -97,6 +105,16 @@ const { normalizeSubscriptionFeedUrl, parseSubscriptionFeed } = await import(
   "../packages/core/dist/subscriptions/feedParser.js"
 );
 const { normalizeMathDelimiters } = await import("../packages/core/dist/text/mathDelimiters.js");
+const {
+  addDaysToDayKey,
+  differenceInDayKeys,
+  getDayKey,
+  getIsoWeekKey,
+  getIsoWeekStartKey,
+  getStartOfDayInstant,
+  isValidIanaTimeZone,
+  resolveTimelineTimeZone
+} = await import("../packages/core/dist/time/calendarKeys.js");
 const { fetchArticle, parseArxivAtom, transformArticleUrl } = await import(
   "../packages/core/dist/transform/articleImport.js"
 );
@@ -105,6 +123,72 @@ const { parseArxivHtmlDecomposition } = await import("../packages/core/dist/tran
 const { transformMockYouTubeUrl } = await import("../packages/core/dist/transform/mockYoutubeImport.js");
 const { transformYouTubeUrl } = await import("../packages/core/dist/transform/youtubeImport.js");
 const { seoWaterSourceFixture, technicalSourceFixture } = await import("../packages/core/dist/fixtures.js");
+
+const timeZoneBoundary = "2026-07-05T16:30:00.000Z";
+
+assert.equal(resolveTimelineTimeZone(), "UTC", "smoke should inject a deterministic timeline timezone");
+assert.equal(
+  resolveTimelineTimeZone({}),
+  Intl.DateTimeFormat().resolvedOptions().timeZone,
+  "an explicit empty timezone environment should use the host system timezone"
+);
+assert.equal(
+  getDayKey(timeZoneBoundary),
+  "2026-07-05",
+  "implicit day keys should honor AITIMELINE_TIMEZONE"
+);
+assert.equal(
+  getDayKey(timeZoneBoundary, "Asia/Shanghai"),
+  "2026-07-06",
+  "Asia/Shanghai should roll the UTC Sunday instant into Monday"
+);
+assert.equal(
+  getDayKey(timeZoneBoundary, "UTC"),
+  "2026-07-05",
+  "UTC should keep the boundary instant on Sunday"
+);
+assert.equal(
+  getDayKey("2026-07-06", "America/Los_Angeles"),
+  "2026-07-06",
+  "a persisted civil day key should not shift through UTC midnight"
+);
+assert.equal(
+  getIsoWeekStartKey(timeZoneBoundary, "Asia/Shanghai"),
+  "2026-07-06",
+  "Asia/Shanghai week keys should start on the local Monday"
+);
+assert.equal(
+  getIsoWeekStartKey(timeZoneBoundary, "UTC"),
+  "2026-06-29",
+  "UTC week keys should keep the instant in the preceding ISO week"
+);
+assert.equal(getIsoWeekKey(timeZoneBoundary, "Asia/Shanghai"), "2026-W28", "local ISO week id should be stable");
+assert.equal(getIsoWeekKey(timeZoneBoundary, "UTC"), "2026-W27", "UTC ISO week id should be stable");
+const losAngelesWeekStart = getIsoWeekStart("2026-07-08T12:00:00.000Z", "America/Los_Angeles");
+assert.equal(
+  getDayKey(losAngelesWeekStart, "America/Los_Angeles"),
+  "2026-07-06",
+  "Date-based ISO week start should resolve to local Monday in a negative-offset timezone"
+);
+assert.equal(
+  getIsoWeekStartKey(losAngelesWeekStart, "America/Los_Angeles"),
+  "2026-07-06",
+  "Date-based ISO week start should round-trip through the day-key helper"
+);
+assert.equal(
+  getStartOfDayInstant("2018-11-04", "America/Sao_Paulo").toISOString(),
+  "2018-11-04T03:00:00.000Z",
+  "start-of-day resolution should handle a timezone that skips local midnight"
+);
+assert.equal(addDaysToDayKey("2026-03-07", 2), "2026-03-09", "civil day addition should ignore DST length");
+assert.equal(differenceInDayKeys("2026-03-09", "2026-03-07"), 2, "civil day differences should ignore DST length");
+assert.equal(isValidIanaTimeZone("Asia/Shanghai"), true, "valid IANA timezone names should be accepted");
+assert.equal(isValidIanaTimeZone("Mars/Olympus"), false, "invalid IANA timezone names should be rejected");
+assert.throws(
+  () => resolveTimelineTimeZone("Mars/Olympus"),
+  /Invalid IANA time zone/,
+  "invalid configured timezones should fail fast"
+);
 
 const followupInstructionPattern =
   /Seed grounding|User signal reason|must cite this chunk|Deeper angle|Broader angle|Simpler angle|Review angle/i;
@@ -522,7 +606,7 @@ const weeklyRecap = buildWeeklyRecap(
       makeSmokePost({
         id: "weekly-old-rag",
         title: "Old RAG card",
-        concepts: ["RAG", "Evaluation"],
+        concepts: ["ＲＡＧ", "Evaluation"],
         createdAt: "2026-06-23T09:00:00.000Z"
       }),
       makeSmokePost({
@@ -611,6 +695,48 @@ assert.equal(
   "weekly recap weekStartIndex should point at the target Monday"
 );
 assert.ok(weeklyRecap.narrative.en.length >= 2, "weekly recap should include English narrative lines");
+
+const weeklyBoundaryPosts = [
+  {
+    id: "weekly-timezone-baseline",
+    concepts: ["Baseline"],
+    createdAt: "2026-06-29T00:00:00.000Z"
+  },
+  {
+    id: "weekly-timezone-boundary",
+    concepts: ["Timezone Boundary"],
+    createdAt: timeZoneBoundary
+  }
+];
+const shanghaiBoundaryRecap = buildWeeklyRecap(
+  {
+    posts: weeklyBoundaryPosts,
+    reviewStates: [],
+    interactionSignals: [],
+    timeZone: "Asia/Shanghai"
+  },
+  "2026-07-06"
+);
+const utcBoundaryRecap = buildWeeklyRecap(
+  {
+    posts: weeklyBoundaryPosts,
+    reviewStates: [],
+    interactionSignals: [],
+    timeZone: "UTC"
+  },
+  "2026-07-06"
+);
+
+assert.equal(
+  shanghaiBoundaryRecap?.stats.newCardCount,
+  1,
+  "weekly recap should place a Sunday UTC / Monday Shanghai card in the Shanghai week"
+);
+assert.equal(
+  utcBoundaryRecap?.stats.newCardCount,
+  0,
+  "weekly recap should keep the same instant in the preceding UTC week"
+);
 
 const insufficientWeeklyRecap = buildWeeklyRecap(
   {
@@ -792,6 +918,21 @@ const budgetResult = applyDailyAutoJobBudget({
 assert.equal(budgetResult.plan.jobs.length, 1, "daily auto job budget should keep only the first metered job");
 assert.equal(budgetResult.budget.used, 1, "daily auto job budget should count accepted automatic jobs");
 assert.equal(budgetResult.budget.discarded, 1, "daily auto job budget should count discarded automatic jobs");
+assert.equal(
+  applyDailyAutoJobBudget({
+    plan: budgetPlan,
+    limit: 1,
+    now: timeZoneBoundary,
+    timeZone: "Asia/Shanghai"
+  }).budget.date,
+  "2026-07-06",
+  "daily auto-job budgets should reset on the configured civil day"
+);
+assert.equal(
+  applyDailyAutoJobBudget({ plan: budgetPlan, limit: 1, now: timeZoneBoundary, timeZone: "UTC" }).budget.date,
+  "2026-07-05",
+  "daily auto-job budgets should retain UTC day boundaries when configured"
+);
 
 const result = transformMockYouTubeUrl(
   "https://www.youtube.com/watch?v=aitimeline-demo",
@@ -985,6 +1126,60 @@ assert.ok(conceptBrief.sentences.length >= 3, "concept_brief fallback should pro
 assert.ok(
   conceptBrief.sentences.every((sentence) => conceptBriefCardIds.has(sentence.cardId)),
   "concept_brief fallback should make every sentence traceable to a source card id"
+);
+
+const fullWidthRagBrief = createDeterministicConceptBrief({
+  concept: "RAG",
+  cards: [
+    {
+      id: "full-width-rag-brief-card",
+      title: "RAG retrieval context",
+      keyTakeaway: "Retrieval supplies grounded context before generation.",
+      concepts: ["ＲＡＧ", "Retrieval"],
+      createdAt: "2026-06-10T00:00:00.000Z",
+      graphEdges: [
+        {
+          sourceConcept: "ＲＡＧ",
+          targetConcept: "Retrieval",
+          relation: "requires"
+        }
+      ]
+    }
+  ],
+  contentLanguage: "en",
+  createdAt: "2026-06-10T00:00:00.000Z"
+});
+
+assert.deepEqual(
+  fullWidthRagBrief.adjacentConcepts.map((record) => record.concept),
+  ["Retrieval"],
+  "concept briefs should match full-width and half-width forms through the shared concept key"
+);
+
+let conceptKeyPersistenceSnapshot = "";
+const conceptKeyPersistence = createAITimelinePersistenceStore({
+  read: () => conceptKeyPersistenceSnapshot,
+  write: (serialized) => {
+    conceptKeyPersistenceSnapshot = serialized;
+  }
+});
+const conceptKeyPersistenceResult = conceptKeyPersistence.saveConceptBriefs(
+  [
+    { ...fullWidthRagBrief, id: "full-width-rag-brief", concept: "ＲＡＧ" },
+    { ...fullWidthRagBrief, id: "half-width-rag-brief", concept: "RAG" }
+  ],
+  "2026-06-10T00:01:00.000Z"
+);
+
+assert.equal(
+  conceptKeyPersistenceResult.conceptBriefs.length,
+  1,
+  "persistence should upsert full-width and half-width concept labels under one shared key"
+);
+assert.equal(
+  conceptKeyPersistenceResult.conceptBriefs[0]?.concept,
+  "RAG",
+  "the latest concept brief should replace an equivalent full-width concept entry"
 );
 
 const briefSourcePost = deterministicSamplingResult.posts[0];
@@ -1276,6 +1471,77 @@ for (const orderedAliases of [chainedAliases, [...chainedAliases].reverse()]) {
   );
 }
 
+const conflictingSourceAliases = [
+  { canonical: "Alpha Auto", aliases: ["ＲＡＧ"], decidedBy: "auto", decidedAt: "2026-07-06T02:00:00.000Z" },
+  { canonical: "Zulu User", aliases: ["RAG"], decidedBy: "user", decidedAt: "2026-07-06T01:00:00.000Z" }
+];
+
+for (const orderedAliases of [conflictingSourceAliases, [...conflictingSourceAliases].reverse()]) {
+  assert.equal(
+    resolveConcept("ＲＡＧ", orderedAliases),
+    "Zulu User",
+    "user alias decisions should override conflicting automatic aliases regardless of record order"
+  );
+}
+
+const aliasProvenanceRecords = [
+  { canonical: "Alpha Mixed", aliases: ["Provenance Alias"], decidedBy: "auto", decidedAt: "2026-07-06T05:00:00.000Z" },
+  { canonical: "Alpha Mixed", aliases: ["Different User Alias"], decidedBy: "user", decidedAt: "2026-07-06T06:00:00.000Z" },
+  { canonical: "Zulu Explicit", aliases: ["Provenance Alias"], decidedBy: "user", decidedAt: "2026-07-06T04:00:00.000Z" }
+];
+
+for (const orderedAliases of [aliasProvenanceRecords, [...aliasProvenanceRecords].reverse()]) {
+  assert.equal(
+    resolveConcept("Provenance Alias", orderedAliases),
+    "Zulu Explicit",
+    "alias conflict priority should retain each raw edge's decision provenance"
+  );
+}
+
+let aliasProvenancePersistenceJson = "";
+const aliasProvenancePersistence = createAITimelinePersistenceStore({
+  read: () => aliasProvenancePersistenceJson,
+  write: (serialized) => {
+    aliasProvenancePersistenceJson = serialized;
+  }
+});
+const persistedAliasProvenance = aliasProvenancePersistence.saveConceptAliases(
+  aliasProvenanceRecords,
+  "2026-07-06T07:00:00.000Z"
+).conceptAliases;
+
+assert.equal(
+  resolveConcept("Provenance Alias", persistedAliasProvenance),
+  "Zulu Explicit",
+  "persistence normalization should preserve per-alias user/auto provenance"
+);
+
+const samePriorityAliases = [
+  { canonical: "Zulu Auto", aliases: ["Shared Alias"], decidedBy: "auto", decidedAt: "2026-07-06T03:00:00.000Z" },
+  { canonical: "Alpha Auto", aliases: ["Shared Alias"], decidedBy: "auto", decidedAt: "2026-07-06T03:00:00.000Z" }
+];
+
+for (const orderedAliases of [samePriorityAliases, [...samePriorityAliases].reverse()]) {
+  assert.equal(
+    resolveConcept("Shared Alias", orderedAliases),
+    "Alpha Auto",
+    "same-priority alias conflicts should use a deterministic canonical-key tie-break"
+  );
+}
+
+const newestSamePriorityAliases = [
+  { canonical: "Older User", aliases: ["Latest Alias"], decidedBy: "user", decidedAt: "2026-07-06T03:00:00.000Z" },
+  { canonical: "Newer User", aliases: ["Latest Alias"], decidedBy: "user", decidedAt: "2026-07-06T04:00:00.000Z" }
+];
+
+for (const orderedAliases of [newestSamePriorityAliases, [...newestSamePriorityAliases].reverse()]) {
+  assert.equal(
+    resolveConcept("Latest Alias", orderedAliases),
+    "Newer User",
+    "same-priority alias conflicts should prefer the newest decision regardless of record order"
+  );
+}
+
 const userAliasGraph = buildKnowledgeGraph(
   [
     makeSmokePost({ id: "alias-user-1", title: "English label", concepts: ["Speculative Decoding"] }),
@@ -1498,6 +1764,23 @@ const limitedNote = createConnectionNoteForImport({
 });
 
 assert.equal(limitedNote, null, "daily connection-note limit should drop notes after two in a day");
+
+const shanghaiBoundaryLimitedNote = createConnectionNoteForImport({
+  existingPosts: [
+    ...connectionOldPosts,
+    { ...batchNote, id: "connection-note-shanghai-boundary", createdAt: "2026-07-05T16:30:00.000Z" }
+  ],
+  newPosts: [connectionNewPost],
+  now: "2026-07-06T15:30:00.000Z",
+  dailyLimit: 1,
+  timeZone: "Asia/Shanghai"
+});
+
+assert.equal(
+  shanghaiBoundaryLimitedNote,
+  null,
+  "connection-note daily limits should compare civil days in the configured timezone"
+);
 
 const fakePlayerResponse = {
   videoDetails: {
@@ -3413,6 +3696,171 @@ const pureExposureSignal = {
   skippedQuickly: false,
   createdAt: "2026-07-10T00:00:00.000Z"
 };
+const makeCoalescedDwellRecord = (id, dwellTimeMs, createdAt, patch = {}) => ({
+  id,
+  signal: {
+    ...pureExposureSignal,
+    ...patch,
+    postId: "coalesced-read",
+    dwellTimeMs,
+    createdAt
+  },
+  createdAt
+});
+const coalescedPureExposureRecord = makeCoalescedDwellRecord(
+  "coalesced-exposure",
+  0,
+  "2026-07-10T00:30:00.000Z"
+);
+const sameDayCumulativeDwellRecords = [
+  coalescedPureExposureRecord,
+  coalescedPureExposureRecord,
+  makeCoalescedDwellRecord("coalesced-dwell-12", 12000, "2026-07-10T01:00:00.000Z", { liked: true }),
+  makeCoalescedDwellRecord("coalesced-dwell-15", 15000, "2026-07-10T02:00:00.000Z", { saved: true }),
+  makeCoalescedDwellRecord("coalesced-dwell-18", 18000, "2026-07-10T03:00:00.000Z")
+];
+const sameDayCoalescedSignals = coalesceInteractionSignals(sameDayCumulativeDwellRecords, "UTC");
+const sameDayCoalescedDwell = sameDayCoalescedSignals.find((signal) => signal.dwellTimeMs > 0);
+const sameDayLifecycleStats = summarizeLifecycleSignals(sameDayCumulativeDwellRecords, "UTC").get("coalesced-read");
+
+assert.equal(
+  sameDayCoalescedSignals.filter(isPureExposureSignal).length,
+  1,
+  "coalescing should de-duplicate pure exposure records by record id without carrying dwell into them"
+);
+assert.equal(sameDayCoalescedDwell?.dwellTimeMs, 18000, "same-day cumulative dwell should use the maximum report");
+assert.equal(sameDayCoalescedDwell?.liked, true, "same-day coalescing should retain earlier discrete actions");
+assert.equal(sameDayCoalescedDwell?.saved, true, "same-day coalescing should OR discrete actions across reports");
+assert.equal(
+  sameDayCoalescedDwell?.createdAt,
+  "2026-07-10T03:00:00.000Z",
+  "same-day coalescing should keep the latest report timestamp"
+);
+assert.equal(sameDayLifecycleStats?.readCount, 1, "12 -> 15 -> 18 second cumulative dwell should count as one daily read");
+assert.deepEqual(
+  countSeenReadSignalsByPostId(sameDayCumulativeDwellRecords, "UTC"),
+  { "coalesced-read": 1 },
+  "same-day cumulative dwell should produce one seen-read penalty input"
+);
+
+const cumulativeDwellWeeklyRecap = buildWeeklyRecap(
+  {
+    posts: [
+      {
+        id: "coalesced-read",
+        concepts: ["Lifecycle"],
+        createdAt: "2026-07-06T00:00:00.000Z"
+      }
+    ],
+    reviewStates: [],
+    interactionSignals: sameDayCumulativeDwellRecords.slice(2),
+    timeZone: "UTC"
+  },
+  "2026-07-06"
+);
+
+assert.equal(
+  cumulativeDwellWeeklyRecap?.stats.topConcepts[0]?.count,
+  1,
+  "weekly recap should count a 12 -> 15 -> 18 second cumulative dwell sequence once"
+);
+assert.equal(
+  cumulativeDwellWeeklyRecap?.stats.topConcepts[0]?.score,
+  5.4,
+  "weekly recap should score only the daily max dwell while retaining discrete actions"
+);
+
+const coalescedReadCard = makeLifecycleCard("coalesced-read");
+const sameDayRankedCard = rankPersonalizedTimeline({
+  cards: [coalescedReadCard],
+  recentSignals: sameDayCumulativeDwellRecords,
+  timeZone: "UTC",
+  now: "2026-07-10T04:00:00.000Z"
+})[0];
+const sameDayDueRankedCard = rankPersonalizedTimeline({
+  cards: [coalescedReadCard],
+  recentSignals: sameDayCumulativeDwellRecords,
+  dueReviewPostIds: [coalescedReadCard.id],
+  timeZone: "UTC",
+  now: "2026-07-10T04:00:00.000Z"
+})[0];
+
+assert.equal(
+  Math.round((sameDayDueRankedCard.score - sameDayRankedCard.score) * 10) / 10,
+  42,
+  "ranker should apply one 12-point seen penalty to cumulative same-day dwell, plus the 30-point due boost"
+);
+
+const longHistoryReadSignal = {
+  id: "long-history-read-signal",
+  signal: {
+    ...pureExposureSignal,
+    postId: "long-history-read",
+    dwellTimeMs: 18000,
+    createdAt: "2026-07-01T00:00:00.000Z"
+  },
+  createdAt: "2026-07-01T00:00:00.000Z"
+};
+const recentExposureFillers = Array.from({ length: 80 }, (_, index) => {
+  const createdAt = new Date(Date.UTC(2026, 6, 10, 0, index)).toISOString();
+
+  return {
+    id: `recent-exposure-filler-${index}`,
+    signal: {
+      ...pureExposureSignal,
+      postId: `recent-exposure-filler-${index}`,
+      topicId: "Other",
+      conceptIds: ["Other"],
+      createdAt
+    },
+    createdAt
+  };
+});
+const longHistoryRankedCard = rankPersonalizedTimeline({
+  cards: [makeLifecycleCard("long-history-read")],
+  recentSignals: [longHistoryReadSignal, ...recentExposureFillers],
+  timeZone: "UTC",
+  now: "2026-07-10T02:00:00.000Z"
+})[0];
+
+assert.ok(
+  longHistoryRankedCard.scoreReasons.some((reason) => /Already read/i.test(reason)),
+  "seen-read penalty should use full coalesced history even when recent-signal scoring is capped at 80"
+);
+
+const crossDayCumulativeDwellRecords = [
+  ...sameDayCumulativeDwellRecords,
+  makeCoalescedDwellRecord("coalesced-dwell-next-day", 18000, "2026-07-11T01:00:00.000Z")
+];
+const crossDayCoalescedDwell = coalesceInteractionSignals(crossDayCumulativeDwellRecords, "UTC").filter(
+  (signal) => signal.dwellTimeMs > 0
+);
+
+assert.equal(crossDayCoalescedDwell.length, 2, "cumulative dwell on two calendar days should remain two daily groups");
+assert.equal(
+  summarizeLifecycleSignals(crossDayCumulativeDwellRecords, "UTC").get("coalesced-read")?.readCount,
+  2,
+  "the same post read on two calendar days should count once per day"
+);
+
+const timeZoneBoundaryDwellRecords = [
+  makeCoalescedDwellRecord("timezone-dwell-before-midnight", 12000, "2026-07-10T15:30:00.000Z"),
+  makeCoalescedDwellRecord("timezone-dwell-after-midnight", 18000, "2026-07-10T16:30:00.000Z")
+];
+
+assert.equal(
+  coalesceInteractionSignals(timeZoneBoundaryDwellRecords, "UTC").filter((signal) => signal.dwellTimeMs > 0).length,
+  1,
+  "UTC dwell coalescing should keep both boundary reports in one UTC day"
+);
+assert.equal(
+  coalesceInteractionSignals(timeZoneBoundaryDwellRecords, "Asia/Shanghai").filter(
+    (signal) => signal.dwellTimeMs > 0
+  ).length,
+  2,
+  "Asia/Shanghai dwell coalescing should split reports across local midnight"
+);
+
 const lifecycleSignals = [
   ...Array.from({ length: 5 }, (_, index) => ({
     ...pureExposureSignal,
@@ -3797,6 +4245,37 @@ assert.equal(
 assert.ok(
   followupLoopPlan.expansionPlan.suppressions.some((suppression) => suppression.postId === followupLoopPostId),
   "follow-up card signals should be recorded as suppressed at the expansion source"
+);
+
+const connectionNoteDwellSignal = {
+  ...interestSignal,
+  postId: "connection-note-old-new-smoke",
+  dwellTimeMs: 18000,
+  openedThread: false,
+  liked: false,
+  saved: false,
+  askedQuestion: false,
+  reviewed: false,
+  skippedQuickly: false,
+  createdAt: "2026-06-10T00:02:00.000Z"
+};
+const connectionNoteDwellPlan = createBackgroundCurationPlan({
+  signals: [connectionNoteDwellSignal],
+  feedback: [evaluateInteraction(connectionNoteDwellSignal, interestedTopicState)],
+  topicStates: [interestedTopicState],
+  generatedAt: "2026-06-10T00:02:00.000Z"
+});
+
+assert.equal(
+  connectionNoteDwellPlan.jobs.length,
+  0,
+  "passive dwell on a connection-note card should not enqueue production jobs"
+);
+assert.ok(
+  connectionNoteDwellPlan.expansionPlan.suppressions.some(
+    (suppression) => suppression.postId === connectionNoteDwellSignal.postId
+  ),
+  "connection-note dwell should be suppressed at the expansion source"
 );
 
 const skipSignal = {

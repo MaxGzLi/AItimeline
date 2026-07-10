@@ -1,5 +1,7 @@
 import { createExpansionPlan, shouldContinueSeries } from "../harness/expansionPolicy.js";
 import type { ContentLanguage } from "../harness/contentLanguage.js";
+import { normalizeConceptKey } from "../graph/conceptAliases.js";
+import { getDayKey } from "../time/calendarKeys.js";
 import type {
   AgentExpansionJob,
   AgentExpansionPlan,
@@ -106,6 +108,7 @@ export interface ApplyDailyAutoJobBudgetInput {
   budget?: DailyAutoJobBudgetRecord;
   limit: number;
   now?: string | Date;
+  timeZone?: string;
 }
 
 export interface DailyAutoJobBudgetResult {
@@ -236,7 +239,7 @@ export function createBackgroundCurationPlan(input: CreateBackgroundCurationPlan
 
 export function applyDailyAutoJobBudget(input: ApplyDailyAutoJobBudgetInput): DailyAutoJobBudgetResult {
   const now = normalizeDate(input.now ?? input.plan.generatedAt);
-  const date = now.toISOString().slice(0, 10);
+  const date = getDayKey(now, input.timeZone);
   const limit = Math.max(0, Math.floor(input.limit));
   const startingUsed = input.budget?.date === date ? input.budget.used : 0;
   const startingDiscarded = input.budget?.date === date ? input.budget.discarded : 0;
@@ -338,15 +341,23 @@ function selectSourceCandidates(
 }
 
 function candidateMatchesJob(candidate: BackgroundSourceCandidate, expansionJob: AgentExpansionJob): boolean {
-  if (candidate.topicId && candidate.topicId === expansionJob.topicId) {
+  if (
+    candidate.topicId &&
+    normalizeConceptKey(candidate.topicId) === normalizeConceptKey(expansionJob.topicId)
+  ) {
     return true;
   }
 
-  return candidate.conceptIds.some((conceptId) => expansionJob.conceptIds.includes(conceptId));
+  const expansionConceptKeys = new Set(expansionJob.conceptIds.map(normalizeConceptKey).filter(Boolean));
+
+  return candidate.conceptIds.some((conceptId) => expansionConceptKeys.has(normalizeConceptKey(conceptId)));
 }
 
 function scoreSourceCandidate(candidate: BackgroundSourceCandidate, expansionJob: AgentExpansionJob): number {
-  const overlapCount = candidate.conceptIds.filter((conceptId) => expansionJob.conceptIds.includes(conceptId)).length;
+  const expansionConceptKeys = new Set(expansionJob.conceptIds.map(normalizeConceptKey).filter(Boolean));
+  const overlapCount = candidate.conceptIds.filter((conceptId) =>
+    expansionConceptKeys.has(normalizeConceptKey(conceptId))
+  ).length;
   const overlapScore = expansionJob.conceptIds.length ? overlapCount / expansionJob.conceptIds.length : 0;
   const score =
     candidate.relevanceScore * 0.45 +

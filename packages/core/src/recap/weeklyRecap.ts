@@ -1,7 +1,18 @@
 import type { ContentLanguage } from "../harness/contentLanguage.js";
 import type { InteractionSignal, KnowledgeCardKind, ReviewState, TopicState } from "../types.js";
-
-const DAY_MS = 24 * 60 * 60 * 1000;
+import { normalizeConceptKey, normalizeConceptLabel } from "../graph/conceptAliases.js";
+import {
+  coalesceInteractionSignals,
+  type InteractionSignalInput
+} from "../interaction/coalesceInteractionSignals.js";
+import {
+  addDaysToDayKey,
+  differenceInDayKeys,
+  getDayKey,
+  getIsoWeekKey,
+  getIsoWeekStartKey,
+  getStartOfDayInstant
+} from "../time/calendarKeys.js";
 
 export interface WeeklyRecapPostInput {
   id: string;
@@ -32,11 +43,16 @@ export type WeeklyRecapTopicStateInput = TopicState & { updatedAt?: string };
 
 export interface WeeklyRecapInput {
   contentLanguage?: ContentLanguage;
-  interactionSignals: WeeklyRecapInteractionSignalInput[];
+  interactionSignals: InteractionSignalInput[];
   posts: WeeklyRecapPostInput[];
   reviewStates: WeeklyRecapReviewStateInput[];
   topicStates?: WeeklyRecapTopicStateInput[];
+  timeZone?: string;
 }
+
+type CoalescedWeeklyRecapInput = Omit<WeeklyRecapInput, "interactionSignals"> & {
+  interactionSignals: WeeklyRecapInteractionSignalInput[];
+};
 
 export interface WeeklyRecapTopConcept {
   concept: string;
@@ -81,29 +97,41 @@ export interface WeeklyRecapRecord {
 }
 
 export function buildWeeklyRecap(input: WeeklyRecapInput, weekStart: string | Date): WeeklyRecapRecord | null {
-  const normalizedWeekStart = getIsoWeekStart(weekStart);
-  const weekEndExclusive = addUtcDays(normalizedWeekStart, 7);
-  const weekEnd = addUtcDays(weekEndExclusive, -1);
-  const earliestLibraryDate = getEarliestLibraryDate(input);
+  const timeZone = input.timeZone;
+  const validInteractionSignals = input.interactionSignals.filter((record) =>
+    Boolean(tryGetDayKey(getInteractionSignalCreatedAt(record), timeZone))
+  );
+  const interactionSignals = coalesceInteractionSignals(validInteractionSignals, timeZone);
+  const normalizedInput: CoalescedWeeklyRecapInput = { ...input, interactionSignals };
+  const normalizedWeekStart = getIsoWeekStartKey(weekStart, timeZone);
+  const weekEndExclusive = addDaysToDayKey(normalizedWeekStart, 7);
+  const weekEnd = addDaysToDayKey(weekEndExclusive, -1);
+  const earliestLibraryDate = getEarliestLibraryDayKey(normalizedInput, timeZone);
 
-  if (!earliestLibraryDate || earliestLibraryDate.getTime() > normalizedWeekStart.getTime()) {
+  if (!earliestLibraryDate || earliestLibraryDate > normalizedWeekStart) {
     return null;
   }
 
-  const conceptFirstSeen = collectConceptFirstSeen(input.posts, weekEndExclusive);
+  const conceptFirstSeen = collectConceptFirstSeen(input.posts, weekEndExclusive, timeZone);
   const newConceptCount = Array.from(conceptFirstSeen.values()).filter((record) =>
-    isInRange(record.date, normalizedWeekStart, weekEndExclusive)
+    isDayKeyInRange(record.date, normalizedWeekStart, weekEndExclusive)
   ).length;
   const newCardCount = input.posts.filter((post) =>
-    isInRange(parseDate(post.createdAt), normalizedWeekStart, weekEndExclusive)
+    isValueInDayKeyRange(post.createdAt, normalizedWeekStart, weekEndExclusive, timeZone)
   ).length;
   const completedReviewPostIds = collectCompletedReviewPostIds(
     input.reviewStates,
-    input.interactionSignals,
+    interactionSignals,
     normalizedWeekStart,
-    weekEndExclusive
+    weekEndExclusive,
+    timeZone
   );
-  const dueReviewPostIds = collectDueReviewPostIds(input.reviewStates, normalizedWeekStart, weekEndExclusive);
+  const dueReviewPostIds = collectDueReviewPostIds(
+    input.reviewStates,
+    normalizedWeekStart,
+    weekEndExclusive,
+    timeZone
+  );
 
   for (const postId of completedReviewPostIds) {
     dueReviewPostIds.add(postId);
@@ -114,53 +142,47 @@ export function buildWeeklyRecap(input: WeeklyRecapInput, weekStart: string | Da
     newConceptCount,
     reviewCompletedCount: completedReviewPostIds.size,
     reviewDueCount: dueReviewPostIds.size,
-    topConcepts: collectTopConcepts(input, normalizedWeekStart, weekEndExclusive)
+    topConcepts: collectTopConcepts(normalizedInput, normalizedWeekStart, weekEndExclusive, timeZone)
   };
   const narrative = buildNarrative(stats, input.contentLanguage ?? "zh");
 
   return {
-    id: buildWeeklyRecapId(normalizedWeekStart),
-    weekStart: formatDate(normalizedWeekStart),
-    weekEnd: formatDate(weekEnd),
+    id: buildWeeklyRecapId(normalizedWeekStart, timeZone),
+    weekStart: normalizedWeekStart,
+    weekEnd,
     stats,
     conceptTrend: buildConceptTrend(conceptFirstSeen, earliestLibraryDate, normalizedWeekStart, weekEnd),
     narrative
   };
 }
 
-export function getMostRecentCompletedIsoWeekStart(now: string | Date = new Date()): string {
-  const currentWeekStart = getIsoWeekStart(now);
+export function getMostRecentCompletedIsoWeekStart(now: string | Date = new Date(), timeZone?: string): string {
+  const currentWeekStart = getIsoWeekStartKey(now, timeZone);
 
-  return formatDate(addUtcDays(currentWeekStart, -7));
+  return addDaysToDayKey(currentWeekStart, -7);
 }
 
-export function buildWeeklyRecapId(weekStart: string | Date): string {
-  const { week, year } = getIsoWeekYearAndNumber(getIsoWeekStart(weekStart));
-
-  return `weekly-recap-${year}-W${String(week).padStart(2, "0")}`;
+export function buildWeeklyRecapId(weekStart: string | Date, timeZone?: string): string {
+  return `weekly-recap-${getIsoWeekKey(weekStart, timeZone)}`;
 }
 
-export function getIsoWeekStart(value: string | Date): Date {
-  const date = toUtcDay(value);
-  const mondayOffset = (date.getUTCDay() + 6) % 7;
-
-  return addUtcDays(date, -mondayOffset);
+export function getIsoWeekStart(value: string | Date, timeZone?: string): Date {
+  return getStartOfDayInstant(getIsoWeekStartKey(value, timeZone), timeZone);
 }
 
 function collectConceptFirstSeen(
   posts: WeeklyRecapPostInput[],
-  weekEndExclusive: Date
-): Map<string, { concept: string; date: Date }> {
-  const firstSeen = new Map<string, { concept: string; date: Date }>();
+  weekEndExclusive: string,
+  timeZone?: string
+): Map<string, { concept: string; date: string }> {
+  const firstSeen = new Map<string, { concept: string; date: string }>();
 
   for (const post of posts) {
-    const createdAt = parseDate(post.createdAt);
+    const day = tryGetDayKey(post.createdAt, timeZone);
 
-    if (!createdAt || createdAt.getTime() >= weekEndExclusive.getTime()) {
+    if (!day || day >= weekEndExclusive) {
       continue;
     }
-
-    const day = toUtcDay(createdAt);
 
     for (const rawConcept of post.concepts ?? []) {
       const concept = normalizeConceptLabel(rawConcept);
@@ -172,7 +194,7 @@ function collectConceptFirstSeen(
 
       const existing = firstSeen.get(key);
 
-      if (!existing || day.getTime() < existing.date.getTime()) {
+      if (!existing || day < existing.date) {
         firstSeen.set(key, { concept, date: day });
       }
     }
@@ -182,53 +204,57 @@ function collectConceptFirstSeen(
 }
 
 function buildConceptTrend(
-  conceptFirstSeen: Map<string, { concept: string; date: Date }>,
-  earliestLibraryDate: Date,
-  weekStart: Date,
-  weekEnd: Date
+  conceptFirstSeen: Map<string, { concept: string; date: string }>,
+  earliestLibraryDate: string,
+  weekStart: string,
+  weekEnd: string
 ): WeeklyConceptTrend {
-  const start = earliestLibraryDate.getTime() < weekStart.getTime() ? earliestLibraryDate : weekStart;
+  const start = earliestLibraryDate < weekStart ? earliestLibraryDate : weekStart;
   const orderedFirstSeenDates = Array.from(conceptFirstSeen.values())
-    .map((record) => record.date.getTime())
-    .sort((left, right) => left - right);
+    .map((record) => record.date)
+    .sort();
   const points: WeeklyConceptTrendPoint[] = [];
   let cursor = 0;
   let totalConcepts = 0;
 
-  for (let day = start; day.getTime() <= weekEnd.getTime(); day = addUtcDays(day, 1)) {
-    while (cursor < orderedFirstSeenDates.length && orderedFirstSeenDates[cursor] <= day.getTime()) {
+  for (let day = start; day <= weekEnd; day = addDaysToDayKey(day, 1)) {
+    while (cursor < orderedFirstSeenDates.length && orderedFirstSeenDates[cursor] <= day) {
       totalConcepts += 1;
       cursor += 1;
     }
 
     points.push({
-      date: formatDate(day),
+      date: day,
       totalConcepts
     });
   }
 
   return {
     points,
-    weekStartIndex: Math.max(0, Math.round((weekStart.getTime() - start.getTime()) / DAY_MS))
+    weekStartIndex: Math.max(0, differenceInDayKeys(weekStart, start))
   };
 }
 
 function collectCompletedReviewPostIds(
   reviewStates: WeeklyRecapReviewStateInput[],
   interactionSignals: WeeklyRecapInteractionSignalInput[],
-  weekStart: Date,
-  weekEndExclusive: Date
+  weekStart: string,
+  weekEndExclusive: string,
+  timeZone?: string
 ): Set<string> {
   const postIds = new Set<string>();
 
   for (const state of reviewStates) {
-    if (state.lastReviewedAt && isInRange(parseDate(state.lastReviewedAt), weekStart, weekEndExclusive)) {
+    if (
+      state.lastReviewedAt &&
+      isValueInDayKeyRange(state.lastReviewedAt, weekStart, weekEndExclusive, timeZone)
+    ) {
       postIds.add(state.postId);
     }
   }
 
   for (const signal of interactionSignals) {
-    if (signal.reviewed && isInRange(parseDate(signal.createdAt), weekStart, weekEndExclusive)) {
+    if (signal.reviewed && isValueInDayKeyRange(signal.createdAt, weekStart, weekEndExclusive, timeZone)) {
       postIds.add(signal.postId);
     }
   }
@@ -238,13 +264,14 @@ function collectCompletedReviewPostIds(
 
 function collectDueReviewPostIds(
   reviewStates: WeeklyRecapReviewStateInput[],
-  weekStart: Date,
-  weekEndExclusive: Date
+  weekStart: string,
+  weekEndExclusive: string,
+  timeZone?: string
 ): Set<string> {
   const postIds = new Set<string>();
 
   for (const state of reviewStates) {
-    if (isInRange(parseDate(state.dueAt), weekStart, weekEndExclusive)) {
+    if (isValueInDayKeyRange(state.dueAt, weekStart, weekEndExclusive, timeZone)) {
       postIds.add(state.postId);
     }
   }
@@ -253,14 +280,15 @@ function collectDueReviewPostIds(
 }
 
 function collectTopConcepts(
-  input: WeeklyRecapInput,
-  weekStart: Date,
-  weekEndExclusive: Date
+  input: CoalescedWeeklyRecapInput,
+  weekStart: string,
+  weekEndExclusive: string,
+  timeZone?: string
 ): WeeklyRecapTopConcept[] {
   const byConcept = new Map<string, { concept: string; count: number; score: number }>();
 
   for (const signal of input.interactionSignals) {
-    if (!isInRange(parseDate(signal.createdAt), weekStart, weekEndExclusive)) {
+    if (!isValueInDayKeyRange(signal.createdAt, weekStart, weekEndExclusive, timeZone)) {
       continue;
     }
 
@@ -362,62 +390,51 @@ function buildNarrative(stats: WeeklyRecapStats, language: ContentLanguage): Wee
   };
 }
 
-function getEarliestLibraryDate(input: WeeklyRecapInput): Date | null {
+function getEarliestLibraryDayKey(input: CoalescedWeeklyRecapInput, timeZone?: string): string | null {
   const dates = [
-    ...input.posts.map((post) => parseDate(post.createdAt)),
-    ...input.reviewStates.flatMap((state) => [parseDate(state.dueAt), state.lastReviewedAt ? parseDate(state.lastReviewedAt) : null]),
-    ...input.interactionSignals.map((signal) => parseDate(signal.createdAt)),
-    ...(input.topicStates ?? []).map((state) => (state.updatedAt ? parseDate(state.updatedAt) : null))
+    ...input.posts.map((post) => tryGetDayKey(post.createdAt, timeZone)),
+    ...input.reviewStates.flatMap((state) => [
+      tryGetDayKey(state.dueAt, timeZone),
+      state.lastReviewedAt ? tryGetDayKey(state.lastReviewedAt, timeZone) : null
+    ]),
+    ...input.interactionSignals.map((signal) => tryGetDayKey(signal.createdAt, timeZone)),
+    ...(input.topicStates ?? []).map((state) =>
+      state.updatedAt ? tryGetDayKey(state.updatedAt, timeZone) : null
+    )
   ]
-    .filter((date): date is Date => Boolean(date))
-    .map(toUtcDay)
-    .sort((left, right) => left.getTime() - right.getTime());
+    .filter((date): date is string => Boolean(date))
+    .sort();
 
   return dates[0] ?? null;
 }
 
-function getIsoWeekYearAndNumber(weekStart: Date): { week: number; year: number } {
-  const thursday = addUtcDays(weekStart, 3);
-  const year = thursday.getUTCFullYear();
-  const firstThursday = new Date(Date.UTC(year, 0, 4));
-  const firstWeekStart = getIsoWeekStart(firstThursday);
-  const week = Math.floor((weekStart.getTime() - firstWeekStart.getTime()) / (7 * DAY_MS)) + 1;
-
-  return { week, year };
-}
-
-function isInRange(date: Date | null, start: Date, endExclusive: Date): boolean {
-  return Boolean(date && date.getTime() >= start.getTime() && date.getTime() < endExclusive.getTime());
-}
-
-function parseDate(value: string | Date | undefined): Date | null {
+function tryGetDayKey(value: string | Date | undefined, timeZone?: string): string | null {
   if (!value) {
     return null;
   }
 
-  const date = value instanceof Date ? value : new Date(value);
-
-  return Number.isFinite(date.getTime()) ? date : null;
+  try {
+    return getDayKey(value, timeZone);
+  } catch {
+    return null;
+  }
 }
 
-function toUtcDay(value: string | Date): Date {
-  const date = value instanceof Date ? value : new Date(value);
-
-  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+function getInteractionSignalCreatedAt(input: InteractionSignalInput): string | undefined {
+  return "signal" in input ? input.signal.createdAt || input.createdAt : input.createdAt;
 }
 
-function addUtcDays(date: Date, days: number): Date {
-  return new Date(date.getTime() + days * DAY_MS);
+function isValueInDayKeyRange(
+  value: string | Date | undefined,
+  start: string,
+  endExclusive: string,
+  timeZone?: string
+): boolean {
+  const dayKey = tryGetDayKey(value, timeZone);
+
+  return Boolean(dayKey && isDayKeyInRange(dayKey, start, endExclusive));
 }
 
-function formatDate(date: Date): string {
-  return date.toISOString().slice(0, 10);
-}
-
-function normalizeConceptLabel(value: string): string {
-  return value.trim();
-}
-
-function normalizeConceptKey(value: string): string {
-  return normalizeConceptLabel(value).toLowerCase();
+function isDayKeyInRange(dayKey: string, start: string, endExclusive: string): boolean {
+  return dayKey >= start && dayKey < endExclusive;
 }

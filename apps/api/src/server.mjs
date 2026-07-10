@@ -12,9 +12,9 @@ import {
   buildConceptDigest,
   buildDiscoveryConfirmationQuestions,
   buildSkillTree,
+  coalesceInteractionSignals,
   createAutomaticConceptAliases,
   createConceptBriefInputFromCards,
-  countSeenReadSignalsByPostId,
   createAITimelinePersistenceStore,
   applyDailyAutoJobBudget,
   createBackgroundCurationPlan,
@@ -39,6 +39,7 @@ import {
   fetchYouTubeTranscript,
   filterTimelineLifecycle,
   getMostRecentCompletedIsoWeekStart,
+  getDayKey,
   getHardDismissedPostIds,
   getSoftDismissalReturnAt,
   isTimelineDismissalActive,
@@ -51,7 +52,7 @@ import {
   rankPersonalizedTimeline,
   runConversationTurn,
   runDueBackgroundCurationJobs,
-  normalizeConceptKey as normalizeCoreConceptKey,
+  normalizeConceptKey,
   normalizeSubscriptionFeedUrl,
   parseSubscriptionFeed,
   generateConceptBrief,
@@ -239,7 +240,12 @@ export function createApiServer(options = {}) {
         const topicKey = topic ? normalizeConceptKey(topic) : "";
         const goalId = url.searchParams.get("goalId");
         const records = snapshot.deepReadArticles
-          .filter((record) => !topicKey || normalizeConceptKey(record.topic) === topicKey || record.topicKey === topicKey)
+          .filter(
+            (record) =>
+              !topicKey ||
+              normalizeConceptKey(record.topic) === topicKey ||
+              normalizeConceptKey(record.topicKey ?? "") === topicKey
+          )
           .filter((record) => !goalId || record.goalId === goalId);
 
         sendJson(response, 200, { records });
@@ -543,16 +549,29 @@ export function createApiServer(options = {}) {
         }
 
         const nextReviewState = createReviewStateForGrade(reviewState, reviewedAt, grade);
-        const observedTopicState = deriveTopicState(reviewedSignal);
+        const historicalSignalRecords = filterHistoricalInteractionSignalRecords(
+          snapshot.interactionSignals,
+          "review topic feedback"
+        );
+        const pendingReviewedRecord = {
+          id: signalRecordId,
+          signal: reviewedSignal,
+          createdAt: reviewedSignal.createdAt
+        };
+        const previousEffectiveSignal = findCoalescedDailySignal(historicalSignalRecords, reviewedSignal);
+        const effectiveSignal =
+          findCoalescedDailySignal([...historicalSignalRecords, pendingReviewedRecord], reviewedSignal) ?? reviewedSignal;
+        const observedTopicState = deriveTopicState(effectiveSignal);
         const currentTopicState = snapshot.topicStates.find((record) => record.topicId === observedTopicState.topicId);
-        const feedback = evaluateInteraction(reviewedSignal, observedTopicState);
-        const topicState = updateTopicStateFromFeedback(
+        const feedback = evaluateInteraction(effectiveSignal, observedTopicState);
+        const topicUpdate = updateTopicStateFromCoalescedDelta({
           currentTopicState,
           observedTopicState,
-          reviewedSignal,
-          feedback,
-          reviewedAt
-        );
+          previousSignal: previousEffectiveSignal,
+          nextSignal: effectiveSignal,
+          updatedAt: reviewedAt
+        });
+        const topicState = topicUpdate.topicState;
         const signalRecord = {
           id: signalRecordId,
           signal: reviewedSignal,
@@ -564,7 +583,9 @@ export function createApiServer(options = {}) {
 
         let nextSnapshot = persistenceStore.saveReviewStates([nextReviewState], reviewedAt);
         nextSnapshot = persistenceStore.saveInteractionSignalRecords([signalRecord], reviewedAt);
-        nextSnapshot = persistenceStore.saveTopicStateRecords([topicState], reviewedAt);
+        if (topicUpdate.changed) {
+          nextSnapshot = persistenceStore.saveTopicStateRecords([topicState], reviewedAt);
+        }
         const masteryResult =
           grade === "forgot"
             ? { snapshot: nextSnapshot, promotions: [], learningGoalAchievements: [] }
@@ -860,19 +881,85 @@ export function createApiServer(options = {}) {
 
         requireSupportedSourceCandidates(requestCandidates);
 
-        const persistedCandidates = findMatchingSourceCandidateRecords(currentSnapshot, signal);
-        const feedback = evaluateInteraction(signal, observedTopicState);
-        const contentLanguage = resolveContentLanguage(persistenceStore, process.env);
-        const topicState = updateTopicStateFromFeedback(
-          currentTopicState,
-          observedTopicState,
+        const pendingSignalRecord = {
+          id: signalRecordId,
           signal,
-          feedback,
-          generatedAt
+          createdAt: signal.createdAt
+        };
+        const historicalSignalRecords = filterHistoricalInteractionSignalRecords(
+          currentSnapshot.interactionSignals,
+          "signal coalescing"
         );
+        const previousEffectiveSignal = findCoalescedDailySignal(historicalSignalRecords, signal);
+        const nextSignalRecords = [...historicalSignalRecords, pendingSignalRecord];
+        const effectiveSignal = findCoalescedDailySignal(nextSignalRecords, signal) ?? signal;
+        const effectiveObservedTopicState = body.topicState
+          ? requireTopicState(body.topicState, effectiveSignal.topicId)
+          : deriveTopicState(effectiveSignal);
+        const feedback = evaluateInteraction(effectiveSignal, effectiveObservedTopicState);
+        const contentLanguage = resolveContentLanguage(persistenceStore, process.env);
+        const topicUpdate = updateTopicStateFromCoalescedDelta({
+          currentTopicState,
+          observedTopicState: effectiveObservedTopicState,
+          previousSignal: previousEffectiveSignal,
+          nextSignal: effectiveSignal,
+          updatedAt: generatedAt
+        });
+        const shouldUpdateTopicState = topicUpdate.changed;
+        const topicState = topicUpdate.topicState;
+        const shouldEnqueueProduction = shouldEnqueueCoalescedProduction(
+          previousEffectiveSignal,
+          effectiveSignal
+        );
+
+        if (!shouldUpdateTopicState && !shouldEnqueueProduction) {
+          const plan = createEmptyCurationPlan(generatedAt);
+          const signalResult = { topicState, plan, records: [] };
+          const signalRecord = {
+            ...pendingSignalRecord,
+            feedback,
+            signalResult
+          };
+          const snapshot = persistenceStore.saveInteractionSignalRecords([signalRecord], generatedAt);
+
+          sendJson(response, 200, {
+            feedback,
+            ...signalResult,
+            coalescedReplay: true,
+            idempotentReplay: false,
+            snapshotSummary: summarizeSnapshot(snapshot)
+          });
+          return;
+        }
+
+        if (!shouldEnqueueProduction) {
+          const plan = createEmptyCurationPlan(generatedAt);
+          const signalResult = { topicState, plan, records: [] };
+          const signalRecord = {
+            ...pendingSignalRecord,
+            feedback,
+            signalResult
+          };
+          persistenceStore.saveInteractionSignalRecords([signalRecord], generatedAt);
+          const snapshot = shouldUpdateTopicState
+            ? persistenceStore.saveTopicStateRecords([topicState], generatedAt)
+            : persistenceStore.getSnapshot();
+
+          sendJson(response, 200, {
+            feedback,
+            ...signalResult,
+            coalescedReplay: true,
+            idempotentReplay: false,
+            snapshotSummary: summarizeSnapshot(snapshot)
+          });
+          return;
+        }
+
+        const persistedCandidates = findMatchingSourceCandidateRecords(currentSnapshot, effectiveSignal);
+        const planningFeedback = evaluateInteraction(signal, observedTopicState);
         const rawPlan = createBackgroundCurationPlan({
           signals: [signal],
-          feedback: [feedback],
+          feedback: [planningFeedback],
           topicStates: [topicState],
           sourceCandidates: dedupeSourceCandidates([
             ...requestCandidates,
@@ -901,7 +988,7 @@ export function createApiServer(options = {}) {
         persistenceStore.saveTopicStateRecords([topicState], generatedAt);
         persistenceStore.saveDailyAutoJobBudgetRecords([budgetResult.budget], generatedAt);
         let snapshot = persistenceStore.saveCurationJobRecords(records, generatedAt);
-        const initialReviewState = maybeCreateInitialReviewState(snapshot, signal, generatedAt);
+        const initialReviewState = maybeCreateInitialReviewState(snapshot, effectiveSignal, generatedAt);
 
         if (initialReviewState) {
           snapshot = persistenceStore.saveReviewStates([initialReviewState], generatedAt);
@@ -1772,7 +1859,7 @@ function maybeCreateSupplyDroughtNotification({ persistenceStore, status, conten
     return existing;
   }
 
-  const droughtStartDay = droughtStartAt.slice(0, 10);
+  const droughtStartDay = getDayKey(droughtStartAt);
   const notification = {
     id: `notification-${hashText(`supply_drought|${droughtStartDay}`)}`,
     kind: "supply_drought",
@@ -2037,7 +2124,7 @@ function getWeeklyRecapResponse(persistenceStore, nowValue, contentLanguage) {
     {
       posts: snapshot.posts,
       reviewStates: snapshot.reviewStates,
-      interactionSignals: snapshot.interactionSignals.map((record) => record.signal),
+      interactionSignals: filterHistoricalInteractionSignalRecords(snapshot.interactionSignals, "weekly recap"),
       topicStates: snapshot.topicStates,
       contentLanguage
     },
@@ -4207,19 +4294,19 @@ function queueGapConceptBriefsForSkillTrees({
   limit
 }) {
   const nowIso = normalizeIsoDate(now);
-  const existingBriefKeys = new Set(snapshot.conceptBriefs.map((brief) => normalizeCoreConceptKey(brief.concept)));
+  const existingBriefKeys = new Set(snapshot.conceptBriefs.map((brief) => normalizeConceptKey(brief.concept)));
   const existingJobKeys = new Set(
     curationStore
       .list()
       .filter((record) => record.job.kind === "concept_brief" && record.status !== "failed")
-      .map((record) => normalizeCoreConceptKey(record.job.topicId))
+      .map((record) => normalizeConceptKey(record.job.topicId))
   );
   const selectedConcepts = [];
   const selectedKeys = new Set();
 
   for (const tree of trees) {
     for (const node of tree.nodes) {
-      const key = normalizeCoreConceptKey(node.concept);
+      const key = normalizeConceptKey(node.concept);
 
       if (
         !node.gap ||
@@ -4282,7 +4369,7 @@ function queueGapConceptBriefsForSkillTrees({
     budget: budgetResult.budget,
     discardedJobIds: budgetResult.discardedJobIds,
     skippedConcepts: selectedConcepts.filter(
-      (concept) => !records.some((record) => normalizeCoreConceptKey(record.job.topicId) === normalizeCoreConceptKey(concept))
+      (concept) => !records.some((record) => normalizeConceptKey(record.job.topicId) === normalizeConceptKey(concept))
     )
   };
 }
@@ -4295,7 +4382,7 @@ function queueDailyLearningGoalProductionGuarantee({
   now
 }) {
   const nowIso = normalizeIsoDate(now);
-  const date = nowIso.slice(0, 10);
+  const date = getDayKey(nowIso);
   const snapshot = persistenceStore.getSnapshot();
   const jobs = [];
   // Goals with overlapping closures must not pick the same demand twice in one
@@ -4323,7 +4410,7 @@ function queueDailyLearningGoalProductionGuarantee({
 
     if (demand) {
       if (demand.kind === "concept_brief") {
-        selectedBriefKeys.add(normalizeCoreConceptKey(demand.topicId));
+        selectedBriefKeys.add(normalizeConceptKey(demand.topicId));
       } else {
         selectedFollowupKeys.add(`${demand.postId}|${demand.nextAction}`);
       }
@@ -4373,7 +4460,10 @@ function hasGoalProductionForDate({ snapshot, curationStore, tree, date }) {
 
   if (
     snapshot.conceptBriefs.some(
-      (brief) => brief.generatedAt?.slice(0, 10) === date && closureKeys.has(normalizeCoreConceptKey(brief.concept))
+      (brief) =>
+        brief.generatedAt &&
+        getDayKey(brief.generatedAt) === date &&
+        closureKeys.has(normalizeConceptKey(brief.concept))
     )
   ) {
     return true;
@@ -4384,23 +4474,25 @@ function hasGoalProductionForDate({ snapshot, curationStore, tree, date }) {
     .some(
       (record) =>
         record.status !== "failed" &&
-        [record.createdAt, record.completedAt, record.updatedAt].some((value) => value?.slice(0, 10) === date) &&
+        [record.createdAt, record.completedAt, record.updatedAt].some(
+          (value) => value && getDayKey(value) === date
+        ) &&
         isLearningGoalProductionJob(record.job) &&
         jobOverlapsTree(record.job, closureKeys)
     );
 }
 
 function selectGoalGapConceptBriefDemand({ snapshot, curationStore, tree, contentLanguage, now, selectedBriefKeys }) {
-  const existingBriefKeys = new Set(snapshot.conceptBriefs.map((brief) => normalizeCoreConceptKey(brief.concept)));
+  const existingBriefKeys = new Set(snapshot.conceptBriefs.map((brief) => normalizeConceptKey(brief.concept)));
   const existingJobKeys = new Set(
     curationStore
       .list()
       .filter((record) => record.job.kind === "concept_brief" && record.status !== "failed")
-      .map((record) => normalizeCoreConceptKey(record.job.topicId))
+      .map((record) => normalizeConceptKey(record.job.topicId))
   );
 
   for (const node of tree.nodes) {
-    const key = normalizeCoreConceptKey(node.concept);
+    const key = normalizeConceptKey(node.concept);
 
     if (
       !node.gap ||
@@ -4436,7 +4528,7 @@ function selectGoalFollowupDemand({ snapshot, curationStore, tree, goal, now, da
   const candidates = snapshot.posts
     .filter((post) => post.kind !== "connection_note")
     .map((post) => {
-      const overlap = post.concepts.filter((concept) => closureKeys.has(normalizeCoreConceptKey(concept)));
+      const overlap = post.concepts.filter((concept) => closureKeys.has(normalizeConceptKey(concept)));
       const nextAction = selectFollowupNextAction(post.nextActions ?? []);
 
       return { post, overlap, nextAction };
@@ -4489,11 +4581,11 @@ function isLearningGoalProductionJob(job) {
 }
 
 function jobOverlapsTree(job, closureKeys) {
-  return [job.topicId, ...(job.conceptIds ?? [])].some((concept) => closureKeys.has(normalizeCoreConceptKey(concept)));
+  return [job.topicId, ...(job.conceptIds ?? [])].some((concept) => closureKeys.has(normalizeConceptKey(concept)));
 }
 
 function createTreeConceptKeySet(tree) {
-  return new Set(tree.nodes.map((node) => normalizeCoreConceptKey(node.concept)).filter(Boolean));
+  return new Set(tree.nodes.map((node) => normalizeConceptKey(node.concept)).filter(Boolean));
 }
 
 function omitSnapshotFromProductionResult(result) {
@@ -4706,7 +4798,7 @@ function getDailyAutoJobBudgetLimit(env) {
 }
 
 function getDailyAutoJobBudgetRecord(snapshot, nowValue) {
-  const date = new Date(nowValue).toISOString().slice(0, 10);
+  const date = getDayKey(nowValue);
 
   return snapshot.autoJobBudget.find((record) => record.date === date);
 }
@@ -4911,7 +5003,7 @@ function handleDeepReadRequest({ body, persistenceStore, curationStore, contentL
   }
 
   const nowIso = normalizeIsoDate(now);
-  const date = nowIso.slice(0, 10);
+  const date = getDayKey(nowIso);
   const existingForDay = findDeepReadForDay(snapshot, curationStore, userId, date);
 
   if (existingForDay) {
@@ -4945,7 +5037,9 @@ function handleDeepReadRequest({ body, persistenceStore, curationStore, contentL
         record.status === "failed" &&
         record.job.deepReadArticle?.userId === userId &&
         normalizeConceptKey(record.job.topicId) === normalizeConceptKey(topic) &&
-        [record.createdAt, record.updatedAt, record.completedAt].some((value) => value?.slice(0, 10) === date)
+        [record.createdAt, record.updatedAt, record.completedAt].some(
+          (value) => value && getDayKey(value) === date
+        )
     ).length;
   const job = createDeepReadArticleJob({
     topic,
@@ -5007,7 +5101,7 @@ async function handleDeepReadArticleJob(job, persistenceStore, modelClients, con
 }
 
 function createDeepReadArticleJob({ topic, goalId, userId, contentLanguage, now, attempt = 0 }) {
-  const date = now.slice(0, 10);
+  const date = getDayKey(now);
   const attemptSuffix = attempt > 0 ? `|retry-${attempt}` : "";
 
   return {
@@ -5028,7 +5122,11 @@ function createDeepReadArticleJob({ topic, goalId, userId, contentLanguage, now,
 }
 
 function findDeepReadForDay(snapshot, curationStore, userId, date) {
-  if (snapshot.deepReadArticles.some((record) => record.userId === userId && record.createdAt.slice(0, 10) === date)) {
+  if (
+    snapshot.deepReadArticles.some(
+      (record) => record.userId === userId && getDayKey(record.createdAt) === date
+    )
+  ) {
     return true;
   }
 
@@ -5039,7 +5137,9 @@ function findDeepReadForDay(snapshot, curationStore, userId, date) {
         record.job.kind === "deep_read_article" &&
         record.status !== "failed" &&
         record.job.deepReadArticle?.userId === userId &&
-        [record.createdAt, record.updatedAt, record.completedAt].some((value) => value?.slice(0, 10) === date)
+        [record.createdAt, record.updatedAt, record.completedAt].some(
+          (value) => value && getDayKey(value) === date
+        )
     );
 }
 
@@ -5084,7 +5184,7 @@ function buildConceptBriefInput(snapshot, concept, contentLanguage, now) {
 
 function createConceptBriefJob(concept, cardCount, now) {
   return {
-    id: `concept-brief-${hashText(`${normalizeConceptKey(concept)}|${cardCount}|${now.slice(0, 10)}`)}`,
+    id: `concept-brief-${hashText(`${normalizeConceptKey(concept)}|${cardCount}|${getDayKey(now)}`)}`,
     kind: "concept_brief",
     topicId: concept,
     conceptIds: [concept],
@@ -5452,16 +5552,17 @@ function normalizeSourceCandidate(input, now) {
 }
 
 function findMatchingSourceCandidateRecords(snapshot, signal) {
-  const signalConcepts = new Set(signal.conceptIds ?? []);
+  const signalTopicKey = normalizeConceptKey(signal.topicId);
+  const signalConceptKeys = new Set((signal.conceptIds ?? []).map(normalizeConceptKey).filter(Boolean));
 
   return snapshot.sourceCandidates
     .filter((record) => record.status === "pending")
     .filter((record) => {
-      if (record.candidate.topicId && record.candidate.topicId === signal.topicId) {
+      if (record.candidate.topicId && normalizeConceptKey(record.candidate.topicId) === signalTopicKey) {
         return true;
       }
 
-      return record.candidate.conceptIds.some((conceptId) => signalConcepts.has(conceptId));
+      return record.candidate.conceptIds.some((conceptId) => signalConceptKeys.has(normalizeConceptKey(conceptId)));
     })
     .sort((left, right) => scoreCandidateRecord(right) - scoreCandidateRecord(left))
     .slice(0, 8);
@@ -5571,7 +5672,7 @@ function getTimelineResponse(snapshot, nowValue, userId = "local-user", contentL
   const dueReviewPostIdSet = new Set(dueReviewPostIds);
   const reviewPosts = snapshot.posts.filter((post) => dueReviewPostIdSet.has(post.id));
   const candidatePosts = dedupePostsById([...posts, ...reviewPosts]);
-  const interactionSignals = snapshot.interactionSignals.map((record) => record.signal);
+  const interactionSignals = snapshot.interactionSignals;
   const lifecyclePosts = filterTimelineLifecycle({
     posts: candidatePosts,
     interactionSignals,
@@ -5587,7 +5688,6 @@ function getTimelineResponse(snapshot, nowValue, userId = "local-user", contentL
     memory: memoryRecord?.memory,
     topicStates: snapshot.topicStates,
     recentSignals: interactionSignals,
-    seenReadCounts: countSeenReadSignalsByPostId(interactionSignals),
     dueReviewPostIds,
     conceptAliases: snapshot.conceptAliases,
     learningGoalConcepts: collectActiveLearningGoalConcepts(snapshot, userId),
@@ -5655,18 +5755,14 @@ function collectActiveLearningGoalBlockTopics(snapshot, userId = "local-user") {
 }
 
 function aggregateTodayDwellMsByBlockTopic({ snapshot, now, activeGoalBlockTopics }) {
-  const date = normalizeIsoDate(now).slice(0, 10);
+  const date = getDayKey(normalizeIsoDate(now));
   const postById = new Map(snapshot.posts.map((post) => [post.id, post]));
-  // Dwell reports are cumulative per card and re-sent as they grow, so take the
-  // per-post daily maximum before summing by topic; summing raw records would
-  // count the same reading time many times over.
   const dwellByPost = new Map();
 
-  for (const record of snapshot.interactionSignals) {
-    const signal = record.signal;
-    const createdAt = signal.createdAt ?? record.createdAt;
+  for (const signal of coalesceInteractionSignals(snapshot.interactionSignals)) {
+    const createdAt = signal.createdAt;
 
-    if (!createdAt || normalizeIsoDate(createdAt).slice(0, 10) !== date) {
+    if (!createdAt || getDayKey(createdAt) !== date) {
       continue;
     }
 
@@ -5678,11 +5774,7 @@ function aggregateTodayDwellMsByBlockTopic({ snapshot, now, activeGoalBlockTopic
       continue;
     }
 
-    const previous = dwellByPost.get(signal.postId);
-
-    if (!previous || dwellTimeMs > previous.dwellTimeMs) {
-      dwellByPost.set(signal.postId, { dwellTimeMs, fallbackTopicId: signal.topicId || "general" });
-    }
+    dwellByPost.set(signal.postId, { dwellTimeMs, fallbackTopicId: signal.topicId || "general" });
   }
 
   const dwellMsByTopic = {};
@@ -5954,6 +6046,129 @@ function deriveTopicState(signal) {
   };
 }
 
+function findCoalescedDailySignal(records, targetSignal) {
+  const targetDayKey = getDayKey(targetSignal.createdAt);
+
+  return coalesceInteractionSignals(records).find(
+    (signal) =>
+      !isPureExposureSignal(signal) &&
+      signal.postId === targetSignal.postId &&
+      getDayKey(signal.createdAt) === targetDayKey
+  );
+}
+
+const coalescedActionFields = ["openedThread", "liked", "saved", "askedQuestion", "reviewed", "skippedQuickly"];
+
+function shouldEnqueueCoalescedProduction(previousSignal, nextSignal) {
+  if (!previousSignal) {
+    return true;
+  }
+
+  if (getNewCoalescedActionFields(previousSignal, nextSignal).length > 0) {
+    return true;
+  }
+
+  return !isProductionQualifiedSignal(previousSignal) && isProductionQualifiedSignal(nextSignal);
+}
+
+function updateTopicStateFromCoalescedDelta({
+  currentTopicState,
+  observedTopicState,
+  previousSignal,
+  nextSignal,
+  updatedAt
+}) {
+  if (!currentTopicState || !previousSignal) {
+    const feedback = evaluateInteraction(nextSignal, observedTopicState);
+
+    return {
+      changed: true,
+      topicState: updateTopicStateFromFeedback(
+        currentTopicState,
+        observedTopicState,
+        nextSignal,
+        feedback,
+        updatedAt
+      )
+    };
+  }
+
+  let topicState = currentTopicState;
+  let changed = false;
+  const newActionFields = getNewCoalescedActionFields(previousSignal, nextSignal);
+
+  if (newActionFields.length > 0) {
+    const actionSignal = {
+      ...nextSignal,
+      impression: false,
+      dwellTimeMs: 0
+    };
+
+    for (const field of coalescedActionFields) {
+      actionSignal[field] = newActionFields.includes(field);
+    }
+
+    const actionFeedback = evaluateInteraction(actionSignal, observedTopicState);
+    topicState = updateTopicStateFromFeedback(
+      topicState,
+      observedTopicState,
+      actionSignal,
+      actionFeedback,
+      updatedAt
+    );
+    changed = true;
+  }
+
+  const previousDwellOnCurrentActions = {
+    ...nextSignal,
+    dwellTimeMs: previousSignal.dwellTimeMs
+  };
+  const previousDwellFeedback = evaluateInteraction(previousDwellOnCurrentActions, observedTopicState);
+  const nextDwellFeedback = evaluateInteraction(nextSignal, observedTopicState);
+  const previousReadBonus = previousSignal.dwellTimeMs >= 12000 ? 0.08 : 0;
+  const nextReadBonus = nextSignal.dwellTimeMs >= 12000 ? 0.08 : 0;
+  let interestDelta = nextReadBonus - previousReadBonus;
+  let fatigueDelta = 0;
+
+  if (
+    previousDwellFeedback.inferredState === "interested" &&
+    nextDwellFeedback.inferredState === "interested"
+  ) {
+    interestDelta +=
+      getInterestedStrengthContribution(nextDwellFeedback) -
+      getInterestedStrengthContribution(previousDwellFeedback);
+  }
+
+  if (
+    previousDwellFeedback.inferredState === "not_relevant" &&
+    nextDwellFeedback.inferredState === "not_relevant"
+  ) {
+    const previousPenalty = previousSignal.dwellTimeMs < 2500 ? 0.16 : 0.06;
+    const nextPenalty = nextSignal.dwellTimeMs < 2500 ? 0.16 : 0.06;
+    fatigueDelta = nextPenalty - previousPenalty;
+  }
+
+  if (interestDelta !== 0 || fatigueDelta !== 0) {
+    topicState = {
+      ...topicState,
+      interestScore: roundScore(clampScore(topicState.interestScore + interestDelta)),
+      fatigueScore: roundScore(clampScore(topicState.fatigueScore + fatigueDelta)),
+      updatedAt: new Date(updatedAt).toISOString()
+    };
+    changed = true;
+  }
+
+  return { changed, topicState };
+}
+
+function getNewCoalescedActionFields(previousSignal, nextSignal) {
+  return coalescedActionFields.filter((field) => nextSignal[field] && !previousSignal[field]);
+}
+
+function isProductionQualifiedSignal(signal) {
+  return signal.dwellTimeMs >= 9000 || coalescedActionFields.some((field) => signal[field]);
+}
+
 function buildInteractionSignalRecordId(signal) {
   const signature = [
     signal.postId,
@@ -5976,10 +6191,9 @@ function updateTopicStateFromFeedback(currentState, observedState, signal, feedb
   let interestScore = blendScores(currentState?.interestScore, observedState.interestScore, 0.45);
   let fatigueScore = blendScores(currentState?.fatigueScore, observedState.fatigueScore, 0.55);
   let comprehensionScore = blendScores(currentState?.comprehensionScore, observedState.comprehensionScore, 0.35);
-  const strength = Math.max(-5, Math.min(20, feedback.signalStrength)) / 20;
 
   if (feedback.inferredState === "interested") {
-    interestScore += 0.12 + Math.max(0, strength) * 0.18;
+    interestScore += 0.12 + getInterestedStrengthContribution(feedback);
     fatigueScore *= 0.55;
   }
 
@@ -6033,6 +6247,15 @@ function updateTopicStateFromFeedback(currentState, observedState, signal, feedb
     cooldownUntil,
     updatedAt: now.toISOString()
   };
+}
+
+function getInterestedStrengthContribution(feedback) {
+  const strength = Math.max(0, Math.min(20, feedback.signalStrength)) / 20;
+
+  // Topic scores are persisted at two decimals. Quantize this replaceable
+  // component at the same boundary so cumulative dwell updates converge with
+  // a single report containing the final daily max.
+  return roundScore(strength * 0.18);
 }
 
 function blendScores(currentValue, observedValue, observedWeight) {
@@ -6414,10 +6637,6 @@ function normalizeStringArray(value) {
   return Array.isArray(value)
     ? Array.from(new Set(value.filter((item) => typeof item === "string").map((item) => item.trim()).filter(Boolean)))
     : [];
-}
-
-function normalizeConceptKey(value) {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
 
 function filterHistoricalInteractionSignalRecords(records, context) {
