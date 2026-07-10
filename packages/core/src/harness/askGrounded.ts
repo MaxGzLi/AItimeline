@@ -1,6 +1,7 @@
 import { getChunksForSource, getRegistryChunk, getRegistrySource } from "../source/sourceRegistry.js";
 import type { KnowledgeChunk, KnowledgePost, SourceOrigin, SourceRegistry } from "../types.js";
 import { getGroundedAnswerLanguagePolicy, type ContentLanguage } from "./contentLanguage.js";
+import { validateClaimSupport } from "./groundingGate.js";
 import type { ModelClient } from "./modelRunner.js";
 
 export interface GroundedAnswerCitation {
@@ -44,13 +45,18 @@ export async function askGrounded(
   input: AskGroundedInput,
   options: AskGroundedOptions = {}
 ): Promise<GroundedAnswer> {
+  const contentLanguage = options.contentLanguage ?? "zh";
   const excerpts = resolveExcerpts(input.post, input.registry, options.maxChunks ?? defaultMaxChunks);
 
-  if (!options.client) {
-    return buildDeterministicAnswer(input, excerpts, options.contentLanguage ?? "zh");
+  if (!excerpts.length) {
+    return buildInsufficientEvidenceAnswer(contentLanguage, "deterministic");
   }
 
-  return buildModelAnswer(input, excerpts, options.client, options.temperature ?? 0.2, options.contentLanguage ?? "zh");
+  if (!options.client) {
+    return buildDeterministicAnswer(input, excerpts, contentLanguage);
+  }
+
+  return buildModelAnswer(input, excerpts, options.client, options.temperature ?? 0.2, contentLanguage);
 }
 
 function resolveExcerpts(post: KnowledgePost, registry: SourceRegistry, maxChunks: number): GroundedExcerpt[] {
@@ -113,23 +119,42 @@ async function buildModelAnswer(
 
   if (parsed) {
     const citations = mapCitedExcerpts(parsed.citedExcerpts, excerpts);
+    const support = validateClaimSupport(
+      parsed.answer,
+      citations.map((citation) => citation.quote),
+      {
+        minOverlap: 1,
+        minimumSharedTokens: 2,
+        checkProperNouns: true,
+        allowBeyondSource: false
+      }
+    );
 
-    return {
-      answer: parsed.answer,
-      citations,
-      grounded: citations.length > 0,
-      runnerKind: "model"
-    };
+    if (citations.length && support.supported) {
+      return {
+        answer: parsed.answer,
+        citations,
+        grounded: true,
+        runnerKind: "model"
+      };
+    }
   }
 
-  // The model did not return the JSON contract; keep its text and attribute the excerpts it was given.
-  const fallbackCitations = excerpts.map(toCitation);
+  return buildInsufficientEvidenceAnswer(contentLanguage, "model");
+}
 
+function buildInsufficientEvidenceAnswer(
+  contentLanguage: ContentLanguage,
+  runnerKind: GroundedAnswer["runnerKind"]
+): GroundedAnswer {
   return {
-    answer: response.content.trim(),
-    citations: fallbackCitations,
-    grounded: fallbackCitations.length > 0,
-    runnerKind: "model"
+    answer:
+      contentLanguage === "en"
+        ? "There is not enough evidence in your library to answer this question."
+        : "库内暂无足够依据回答这个问题。",
+    citations: [],
+    grounded: false,
+    runnerKind
   };
 }
 
@@ -213,11 +238,14 @@ function parseModelAnswer(content: string): ParsedModelAnswer | null {
       return null;
     }
 
-    const citedExcerpts = Array.isArray(parsed.citedExcerpts)
-      ? parsed.citedExcerpts.filter((value): value is number => typeof value === "number" && Number.isFinite(value))
-      : [];
+    if (
+      !Array.isArray(parsed.citedExcerpts) ||
+      !parsed.citedExcerpts.every((value): value is number => typeof value === "number" && Number.isInteger(value))
+    ) {
+      return null;
+    }
 
-    return { answer: parsed.answer.trim(), citedExcerpts };
+    return { answer: parsed.answer.trim(), citedExcerpts: parsed.citedExcerpts };
   } catch {
     return null;
   }
@@ -247,13 +275,13 @@ function extractJsonPayload(content: string): string {
 
 function mapCitedExcerpts(citedExcerpts: number[], excerpts: GroundedExcerpt[]): GroundedAnswerCitation[] {
   const byIndex = new Map(excerpts.map((excerpt) => [excerpt.index, excerpt]));
-  const cited = citedExcerpts
-    .map((index) => byIndex.get(index))
-    .filter((excerpt): excerpt is GroundedExcerpt => excerpt !== undefined)
-    .map(toCitation);
 
-  // If the model answered but cited nothing usable, still surface the excerpts it was grounded on.
-  return cited.length ? dedupeCitations(cited) : excerpts.map(toCitation);
+  return dedupeCitations(
+    citedExcerpts
+      .map((index) => byIndex.get(index))
+      .filter((excerpt): excerpt is GroundedExcerpt => excerpt !== undefined)
+      .map(toCitation)
+  );
 }
 
 function dedupeCitations(citations: GroundedAnswerCitation[]): GroundedAnswerCitation[] {

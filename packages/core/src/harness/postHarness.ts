@@ -11,6 +11,10 @@ import type {
   Source
 } from "../types.js";
 import type { ContentLanguage } from "./contentLanguage.js";
+import {
+  isConceptPolarityCompatibleWithText,
+  normalizedConceptAppearsInText
+} from "./groundingGate.js";
 
 export interface KnowledgePostHarnessInput {
   source: Source;
@@ -25,7 +29,13 @@ export const harnessVersion = "harness-v0";
 
 export function createKnowledgePost(input: KnowledgePostHarnessInput): KnowledgePost {
   const language = input.contentLanguage ?? "zh";
-  const concepts = input.chunk.conceptHints?.length ? input.chunk.conceptHints : [defaultImportedConcept(language)];
+  const supportedConceptHints = (input.chunk.conceptHints ?? []).filter((concept) =>
+    normalizedConceptAppearsInText(concept, input.chunk.content) &&
+    isConceptPolarityCompatibleWithText(concept, input.chunk.content)
+  );
+  const concepts = supportedConceptHints.length
+    ? supportedConceptHints
+    : [inferSourceConcept(input.chunk.content, language)];
   const primaryConcept = concepts[0];
   const citation: Citation = {
     sourceId: input.source.id,
@@ -35,11 +45,15 @@ export function createKnowledgePost(input: KnowledgePostHarnessInput): Knowledge
     endTimeSeconds: input.chunk.endTimeSeconds
   };
   const thesis = buildThesis(input.chunk.content, primaryConcept);
+  const groundedTitle = buildTitle(input.chunk.content, primaryConcept, language);
+  const title = isLocalFollowupSource(input.source)
+    ? trimTo(`${language === "zh" ? "跟进：" : "Follow-up: "}${groundedTitle}`, 96)
+    : groundedTitle;
 
   return {
     id: `${input.source.id}-post-${input.index + 1}`,
-    title: buildTitle(input.chunk.content, primaryConcept, language),
-    hook: buildHook(input.chunk.content, primaryConcept, language),
+    title,
+    hook: markBeyondSource(buildHook(input.chunk.content, primaryConcept, language), language),
     thesis,
     shortBody: buildShortBody(input.chunk.content),
     summary: input.chunk.content,
@@ -47,15 +61,25 @@ export function createKnowledgePost(input: KnowledgePostHarnessInput): Knowledge
     concepts,
     sources: [input.source],
     citations: [citation],
-    recommendedBecause: input.recommendedBecause,
+    // Recommendation rationale describes system/user context, not source
+    // content, so deterministic output labels that provenance explicitly.
+    recommendedBecause: markBeyondSource(input.recommendedBecause, language),
     trustState: "emerging",
     createdAt: input.createdAt,
     estimatedReadMinutes: Math.max(1, Math.ceil(input.chunk.content.length / 900)),
     difficulty: inferDifficulty(concepts),
     confidence: inferConfidence(input.source, input.chunk),
-    thread: buildThread(input.chunk, concepts, language),
+    thread: buildThread(input.chunk, concepts, language).map((block) => ({
+      ...block,
+      title: markBeyondSource(block.title, language),
+      body: markBeyondSource(block.body, language),
+      prompt: block.prompt ? markBeyondSource(block.prompt, language) : block.prompt
+    })),
     graphEdges: buildGraphEdges(input.chunk, concepts),
-    reviewPrompts: buildReviewPrompts(input.chunk, concepts, language),
+    reviewPrompts: buildReviewPrompts(input.chunk, concepts, language).map((prompt) => ({
+      ...prompt,
+      prompt: markBeyondSource(prompt.prompt, language)
+    })),
     nextActions: buildNextActions(concepts),
     harnessVersion
   };
@@ -122,29 +146,15 @@ function buildShortBody(text: string): string {
   return trimTo(text, 260);
 }
 
-function buildKeyTakeaway(text: string, thesis: string): string {
-  if (/memory/i.test(text)) {
-    return "The agent should extract what can become durable memory, not just compress the source.";
-  }
-
-  if (/resurfacing/i.test(text)) {
-    return "Grounded source knowledge becomes more valuable when it returns at the right moment.";
-  }
-
-  if (/ranker/i.test(text)) {
-    return "Recommendation should explain why a post appears and what learning gap it fills.";
-  }
-
-  if (/citations/i.test(text)) {
-    return "A source-grounded answer should also test whether the generated post improved recall.";
-  }
-
+function buildKeyTakeaway(_text: string, thesis: string): string {
+  // The deterministic path cannot safely invent an interpretation. Reuse the
+  // source-backed thesis and leave richer takeaways to a validated model run.
   return thesis;
 }
 
 function buildThread(chunk: KnowledgeChunk, concepts: string[], language: ContentLanguage): KnowledgeThreadBlock[] {
   const primaryConcept = concepts[0] ?? defaultImportedConcept(language);
-  const secondaryConcept = concepts[1] ?? "Memory";
+  const secondaryConcept = concepts[1] ?? primaryConcept;
   const shortBody = buildShortBody(chunk.content);
 
   if (language === "zh") {
@@ -153,7 +163,7 @@ function buildThread(chunk: KnowledgeChunk, concepts: string[], language: Conten
         id: `${chunk.id}-thread-explain`,
         kind: "explain",
         title: "这是什么意思",
-        body: `这张卡不是把来源再压缩一遍,而是把 ${primaryConcept} 变成一个可操作的判断:${shortBody}。它的运作方式是先从来源里抓住一个稳定主张,再把主张放进时间线、引用、复习和图谱关系里。这样设计的原因是,用户之后需要的不是一段孤立摘要,而是能被追问、复习、连接和重新推荐的知识单元。`
+        body: `这张卡会把 ${primaryConcept} 变成一个可操作的判断:${shortBody}。它的运作方式是先从来源里抓住一个稳定主张,再把主张放进时间线、引用、复习和图谱关系里。这样设计的原因是让用户得到能被追问、复习、连接和重新推荐的知识单元。`
       },
       {
         id: `${chunk.id}-thread-example`,
@@ -177,7 +187,7 @@ function buildThread(chunk: KnowledgeChunk, concepts: string[], language: Conten
         id: `${chunk.id}-thread-quiz`,
         kind: "quiz",
         title: "快速检查",
-        body: `如果你现在要把这条来源材料放进自己的学习流,你会把它当作一次性摘要,还是当作之后会回到时间线的知识卡?请用一个场景回答:什么时候只需要读完即走,什么时候必须保留引用、图谱关系和复习提示。能说清这个选择,才算真正理解了 ${primaryConcept} 的用途。`
+        body: `${shortBody}。请根据来源说明 ${primaryConcept} 应该怎样进入学习流。请指出 ${primaryConcept} 需要保留哪些引用或复习提示。回答时应始终围绕 ${primaryConcept} 的来源措辞展开,并把 ${primaryConcept} 的证据限制条件一并保留下来。`
       }
     ];
   }
@@ -187,7 +197,7 @@ function buildThread(chunk: KnowledgeChunk, concepts: string[], language: Conten
       id: `${chunk.id}-thread-explain`,
       kind: "explain",
       title: "What this means",
-      body: `This card does not merely compress the source. It turns ${primaryConcept} into one teachable judgment: ${shortBody}. The mechanism is to isolate a stable claim from the cited chunk, then place that claim inside a timeline object with citations, review prompts, and graph edges. The design choice matters because a learner needs a unit that can be questioned, reviewed, connected, and recommended later, not a paragraph that disappears after the import.`
+      body: `This card turns ${primaryConcept} into one teachable judgment: ${shortBody}. The mechanism is to isolate a stable claim from the cited chunk, then place that claim inside a timeline object with citations, review prompts, and graph edges. The design gives the learner a unit that can be questioned, reviewed, connected, and recommended later.`
     },
     {
       id: `${chunk.id}-thread-example`,
@@ -211,7 +221,7 @@ function buildThread(chunk: KnowledgeChunk, concepts: string[], language: Conten
       id: `${chunk.id}-thread-quiz`,
       kind: "quiz",
       title: "Quick check",
-      body: `Suppose you are deciding whether this imported idea should stay as a one-time summary or become a card that returns in the timeline. What evidence would make you keep citations, graph links, and a review prompt? Answer with a concrete scenario, not a definition of ${primaryConcept}. If you can justify that decision, you have understood what the card is for.`
+      body: `${shortBody}. Explain how ${primaryConcept} should enter a learning timeline using this evidence. Name the citations or review prompts that should remain attached to ${primaryConcept}. ${primaryConcept} remains the evidence anchor for both the explanation plus the review decision.`
     }
   ];
 }
@@ -239,14 +249,17 @@ function buildGraphEdges(chunk: KnowledgeChunk, concepts: string[]): KnowledgeGr
 
 function buildReviewPrompts(chunk: KnowledgeChunk, concepts: string[], language: ContentLanguage): KnowledgeReviewPrompt[] {
   const primaryConcept = concepts[0] ?? defaultImportedConcept(language);
-  const secondaryConcept = concepts[1] ?? "Memory";
+  // A deterministic compare prompt cannot prove that two separately extracted
+  // concepts co-occur in one claim-local evidence span. Keep one grounded
+  // anchor; a validated model run can introduce a supported comparison.
+  const secondaryConcept = primaryConcept;
 
   return [
     {
       id: `${chunk.id}-review-recall`,
       kind: "recall",
       prompt: language === "zh" ? `${primaryConcept} 的核心启发是什么?` : `What is the core lesson about ${primaryConcept}?`,
-      answerHint: buildKeyTakeaway(chunk.content, primaryConcept),
+      answerHint: trimTo(chunk.content, 180),
       dueInDays: 1
     },
     {
@@ -256,10 +269,7 @@ function buildReviewPrompts(chunk: KnowledgeChunk, concepts: string[], language:
         language === "zh"
           ? `${primaryConcept} 和 ${secondaryConcept} 怎么连起来?`
           : `How does ${primaryConcept} connect to ${secondaryConcept}?`,
-      answerHint:
-        language === "zh"
-          ? "关注来源如何把概念连成学习系统,而不只是做摘要。"
-          : `Look for how the source links concepts into a learning system, not only a summary.`,
+      answerHint: trimTo(chunk.content, 180),
       dueInDays: 3
     }
   ];
@@ -293,6 +303,39 @@ function defaultImportedConcept(language: ContentLanguage): string {
   return language === "zh" ? "导入知识" : "Imported Knowledge";
 }
 
+function inferSourceConcept(text: string, language: ContentLanguage): string {
+  const normalized = text.normalize("NFKC").trim();
+  const cjkPhrase = normalized.match(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]{2,12}/u)?.[0];
+
+  if (cjkPhrase) {
+    return cjkPhrase;
+  }
+
+  const ignored = new Set(["a", "an", "and", "the", "this", "that", "from", "into", "with"]);
+  const word = Array.from(new Intl.Segmenter(undefined, { granularity: "word" }).segment(normalized))
+    .filter((entry) => entry.isWordLike)
+    .map((entry) => entry.segment.trim())
+    .find(
+      (candidate) =>
+        (candidate.length >= 4 || /^[A-Z0-9]{2,}$/.test(candidate)) &&
+        !ignored.has(candidate.toLowerCase())
+    );
+
+  return word?.slice(0, 48) || defaultImportedConcept(language);
+}
+
+function markBeyondSource(value: string, language: ContentLanguage): string {
+  if (/^\s*\[(?:beyond source|超出来源)\]/i.test(value)) {
+    return value;
+  }
+
+  return `${language === "en" ? "[beyond source]" : "[超出来源]"} ${value}`;
+}
+
+function isLocalFollowupSource(source: Source): boolean {
+  return source.id.startsWith("followup-") || source.url.includes("aitimeline.local/followups/");
+}
+
 function inferRelation(concept: string, nextConcept: string): KnowledgeGraphEdge["relation"] {
   if (concept === "Evaluation" || nextConcept === "Evaluation") {
     return "evaluates";
@@ -310,11 +353,26 @@ function inferRelation(concept: string, nextConcept: string): KnowledgeGraphEdge
 }
 
 function firstUsefulSentence(text: string): string | undefined {
-  return text.split(/[.!?。！？]/).map((part) => part.trim()).find((part) => part.length > 16);
+  const sentences = text.split(/[.!?。！？]/).map((part) => part.trim()).filter(Boolean);
+
+  // Prefer a substantive sentence, but never replace a short source with an
+  // invented generic thesis. Short deterministic inputs must remain verbatim.
+  return sentences.find((part) => part.length > 16) ?? sentences[0];
 }
 
 function trimTo(text: string, maxLength: number): string {
-  return text.length > maxLength ? `${text.slice(0, maxLength - 3)}...` : text;
+  if (text.length <= maxLength) {
+    return text;
+  }
+
+  const prefix = text.slice(0, maxLength).trimEnd();
+  const lastWhitespace = Math.max(prefix.lastIndexOf(" "), prefix.lastIndexOf("\n"), prefix.lastIndexOf("\t"));
+
+  // Factual deterministic fields must remain literal source substrings. Avoid
+  // an ellipsis or a partial Latin word; CJK text can safely use the raw prefix.
+  return lastWhitespace >= Math.floor(maxLength * 0.6)
+    ? prefix.slice(0, lastWhitespace).trimEnd()
+    : prefix;
 }
 
 function slugConcept(concept: string): string {

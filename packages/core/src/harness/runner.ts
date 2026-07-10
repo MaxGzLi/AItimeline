@@ -82,9 +82,8 @@ export function runDeterministicAgentHarness(input: AgentHarnessRunInput): Agent
         })
       );
   const validation = validateHarnessPosts(posts, config, sourceRegistry);
-  const status = validation.some((result) => result.issues.some((issue) => issue.severity === "error"))
-    ? "failed"
-    : "succeeded";
+  const acceptedPosts = posts.filter((_post, index) => isHarnessValidationAccepted(validation[index]));
+  const status = acceptedPosts.length ? "succeeded" : "failed";
 
   return {
     run: {
@@ -98,10 +97,10 @@ export function runDeterministicAgentHarness(input: AgentHarnessRunInput): Agent
       completedAt: new Date().toISOString(),
       sourceSnapshotIds: sourceRegistry.snapshots.map((snapshot) => snapshot.id),
       inputChunkIds: chunks.map((chunk) => chunk.id),
-      outputPostIds: posts.map((post) => post.id),
+      outputPostIds: acceptedPosts.map((post) => post.id),
       validation
     },
-    posts,
+    posts: acceptedPosts,
     validation,
     sourceRegistry
   };
@@ -290,17 +289,29 @@ export function validateHarnessPosts(
   config: AgentHarnessConfig = defaultAgentHarnessConfig,
   sourceRegistry?: SourceRegistry
 ): HarnessValidationResult[] {
-  return posts.map((candidate) => {
+  const duplicatePostIds = collectDuplicatePostIds(posts);
+  const maxPostsPerRun = normalizeMaxPostsPerRun(config.maxPostsPerRun);
+
+  return posts.map((candidate, index) => {
     const result = validateKnowledgePost(candidate);
+    const batchIssues = validatePostBatchEntry(candidate, index, maxPostsPerRun, duplicatePostIds);
 
     if (!result.valid || !isKnowledgePostLike(candidate)) {
-      return result;
+      return {
+        ...result,
+        valid: result.valid && !batchIssues.some((issue) => issue.severity === "error"),
+        issues: [...result.issues, ...batchIssues]
+      };
     }
 
     const post = candidate;
     const policyIssues = validatePostPolicies(post, config);
     const mediaIssues = sourceRegistry ? validatePostMedia(post, sourceRegistry) : [];
-    const grounding = sourceRegistry ? validateGrounding(post, sourceRegistry) : undefined;
+    const grounding = sourceRegistry
+      ? validateGrounding(post, sourceRegistry, {
+          sameSourceFollowup: config.objective === "followup_generation"
+        })
+      : undefined;
     const groundingIssues = grounding?.issues ?? [];
 
     return {
@@ -309,11 +320,78 @@ export function validateHarnessPosts(
         result.valid &&
         !policyIssues.some((issue) => issue.severity === "error") &&
         !mediaIssues.some((issue) => issue.severity === "error") &&
-        !groundingIssues.some((issue) => issue.severity === "error"),
-      issues: [...result.issues, ...policyIssues, ...mediaIssues, ...groundingIssues],
+        !groundingIssues.some((issue) => issue.severity === "error") &&
+        !batchIssues.some((issue) => issue.severity === "error"),
+      issues: [...result.issues, ...policyIssues, ...mediaIssues, ...groundingIssues, ...batchIssues],
       grounding
     };
   });
+}
+
+function validatePostBatchEntry(
+  candidate: unknown,
+  index: number,
+  maxPostsPerRun: number,
+  duplicatePostIds: ReadonlySet<string>
+): HarnessValidationIssue[] {
+  const issues: HarnessValidationIssue[] = [];
+  const postId = getCandidatePostId(candidate);
+
+  if (index >= maxPostsPerRun) {
+    // The model-declared order is stable, so invalidating the tail gives us a deterministic
+    // truncation after repair attempts without discarding an otherwise valid leading batch.
+    issues.push({
+      path: "$",
+      message: `post exceeds the configured maxPostsPerRun limit of ${maxPostsPerRun}.`,
+      severity: "error"
+    });
+  }
+
+  if (postId && duplicatePostIds.has(postId)) {
+    issues.push({
+      path: "$.id",
+      message: `post id "${postId}" must be unique within a harness run.`,
+      severity: "error"
+    });
+  }
+
+  return issues;
+}
+
+function collectDuplicatePostIds(posts: readonly unknown[]): Set<string> {
+  const counts = new Map<string, number>();
+
+  for (const candidate of posts) {
+    const postId = getCandidatePostId(candidate);
+
+    if (postId) {
+      counts.set(postId, (counts.get(postId) ?? 0) + 1);
+    }
+  }
+
+  return new Set(
+    Array.from(counts.entries())
+      .filter(([, count]) => count > 1)
+      .map(([postId]) => postId)
+  );
+}
+
+function getCandidatePostId(candidate: unknown): string | undefined {
+  if (typeof candidate !== "object" || candidate === null || !("id" in candidate)) {
+    return undefined;
+  }
+
+  return typeof candidate.id === "string" ? candidate.id : undefined;
+}
+
+function normalizeMaxPostsPerRun(value: number): number {
+  return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+}
+
+function isHarnessValidationAccepted(result: HarnessValidationResult | undefined): boolean {
+  return Boolean(
+    result?.valid && !result.issues.some((issue) => issue.severity === "error")
+  );
 }
 
 export function validateGeneratedKnowledgePost(

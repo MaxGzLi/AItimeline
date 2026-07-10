@@ -1,5 +1,6 @@
 import type { ContentLanguage } from "../harness/contentLanguage.js";
 import type { ModelClient } from "../harness/modelRunner.js";
+import { validateClaimSupport } from "../harness/groundingGate.js";
 import { createConceptAliasResolver, normalizeConceptKey, normalizeConceptLabel } from "../graph/conceptAliases.js";
 import { buildSkillTree, type SkillTreeView } from "../graph/skillTree.js";
 import type {
@@ -692,7 +693,8 @@ export async function gateDeepReadParagraph(
   const issues = [
     ...validateDeepReadCitationExistence(paragraph, context),
     ...validateDeepReadKeyFactsLiteral(paragraph, contract, context),
-    ...validateMechanicalAntiSlop(paragraph)
+    ...validateMechanicalAntiSlop(paragraph),
+    ...validateDeepReadDeterministicSupport(paragraph, contract, context)
   ];
 
   if (paragraph.kind === "fact" && paragraph.citations.length === 0) {
@@ -713,6 +715,108 @@ export async function gateDeepReadParagraph(
     issues,
     checkedAt: options.checkedAt ?? new Date().toISOString()
   };
+}
+
+export function validateDeepReadDeterministicSupport(
+  paragraph: Pick<DeepReadParagraph, "kind" | "text" | "citations">,
+  contract: Pick<DeepReadChapterContract, "question" | "gapStatement" | "singleSource" | "keyFacts">,
+  context: DeepReadMaterialContext
+): string[] {
+  const evidenceTexts = paragraph.citations.flatMap((citation) => {
+    const content = context.chunkByPointerKey.get(toChunkKey(citation.sourceId, citation.chunkId))?.content.trim();
+
+    return content ? [content] : [];
+  });
+
+  if (!evidenceTexts.length) {
+    // Citation existence owns unresolved pointers, and the fact rule owns
+    // uncited facts. An uncited synthesis must still fail unless it is the
+    // contract's explicit source-gap declaration.
+    if (paragraph.citations.length || paragraph.kind === "fact") {
+      return [];
+    }
+
+    return contract.gapStatement && normalizeTextKey(paragraph.text) === normalizeTextKey(contract.gapStatement)
+      ? []
+      : ["deterministic support gate rejected uncited synthesis paragraph"];
+  }
+
+  // Match each claim clause against evidence clauses so negation from one
+  // source clause cannot contaminate an unrelated neighboring clause.
+  const normalizedParagraph = normalizeTextKey(paragraph.text);
+  const contractLiteralAnchors = contract.keyFacts
+    .filter((fact) => fact.kind === "proper_noun")
+    .map((fact) => fact.value);
+  const paragraphLiteralAnchors = uniqueStrings([
+    ...context.literalAllowlistValues,
+    ...contractLiteralAnchors
+  ]).filter((value) => normalizedParagraph.includes(normalizeTextKey(value)));
+  const supportEvidenceTexts = evidenceTexts.flatMap((text) => {
+    // The literal gate already proves common full-name/acronym equivalence.
+    // Add those derived aliases as lexical anchors without relaxing support for
+    // any other generated term.
+    const acronyms = (paragraph.text.match(/\b[A-Z]{2,10}\b/g) ?? []).filter((candidate) =>
+      isAbbreviationForEvidencePhrase(candidate, text)
+    );
+    const lexicalAnchors = uniqueStrings([...paragraphLiteralAnchors, ...acronyms]);
+
+    return splitSupportClauses(text).flatMap((clause) => [
+      clause,
+      `${lexicalAnchors.join(" ")} ${clause}`.trim()
+    ]);
+  });
+
+  const unsupportedSupport = splitSupportClauses(paragraph.text)
+    .map((clause) =>
+      validateClaimSupport(clause, supportEvidenceTexts, {
+        minOverlap: 1,
+        minimumSharedTokens: 2,
+        // Deep-read's literal gate already handles proper nouns with its chapter
+        // key-fact and acronym allowlists; do not undo those deliberate exemptions.
+        checkProperNouns: false,
+        allowBeyondSource: false
+      })
+    )
+    .find((support) => !support.supported);
+
+  if (!unsupportedSupport || isDeterministicBoundarySynthesis(paragraph, contract)) {
+    return [];
+  }
+
+  return [`deterministic support gate rejected paragraph clause: ${unsupportedSupport.reason}`];
+}
+
+function splitSupportClauses(value: string): string[] {
+  return Array.from(new Intl.Segmenter(undefined, { granularity: "sentence" }).segment(value))
+    .flatMap(({ segment }) =>
+      segment.split(/[;；\n]+|\b(?:and|but|while|whereas)\b|(?:并且|而且|但是|同时)/giu)
+    )
+    .map((clause) => clause.trim())
+    .filter(Boolean);
+}
+
+function isDeterministicBoundarySynthesis(
+  paragraph: Pick<DeepReadParagraph, "kind" | "text">,
+  contract: Pick<DeepReadChapterContract, "question" | "gapStatement" | "singleSource">
+): boolean {
+  if (paragraph.kind !== "synthesis") {
+    return false;
+  }
+
+  const normalized = normalizeTextKey(paragraph.text);
+
+  if (contract.gapStatement && normalized === normalizeTextKey(contract.gapStatement)) {
+    return true;
+  }
+
+  const boundaryStatements = [
+    `把这些材料放在一起看,本章的有限结论是:「${contract.question}」只能在这些引用覆盖的范围内回答。`,
+    `Read together, the limited conclusion is that "${contract.question}" can only be answered within the cited scope.`,
+    "这一章目前只有单一来源支撑,不能写成多方共识。",
+    "This chapter is currently supported by a single source and should not be presented as consensus."
+  ];
+
+  return boundaryStatements.some((statement) => normalized === normalizeTextKey(statement));
 }
 
 export function validateDeepReadCitationExistence(
@@ -850,9 +954,12 @@ function canDowngradeFactParagraph(
 function isStrictLiteralGateIssue(issue: string): boolean {
   return (
     issue.includes("strict numeric/date/version") ||
+    issue.includes("proper-noun tokens absent from cited chunks") ||
     issue.includes("fact paragraph has no resolvable cited evidence") ||
     issue.includes("fact paragraphs must include at least one citation") ||
-    issue.includes("points to an unknown sourceId/chunkId")
+    issue.includes("points to an unknown sourceId/chunkId") ||
+    issue.includes("deterministic support gate") ||
+    issue.includes("fact entailment judge")
   );
 }
 
@@ -1387,10 +1494,8 @@ function generateDeterministicParagraphs(
     kind: "fact",
     text: formatLine(
       contentLanguage,
-      `来源片段显示:${firstMeaningfulSentence(material.chunkText) ?? trimText(material.chunkText, 180)}`,
-      // No capitalized template words here: the literal fact gate extracts
-      // proper nouns from fact paragraphs and requires them in the cited chunk.
-      `${firstMeaningfulSentence(material.chunkText) ?? trimText(material.chunkText, 180)} (quoted from the cited chunk)`
+      firstMeaningfulSentence(material.chunkText) ?? trimText(material.chunkText, 180),
+      firstMeaningfulSentence(material.chunkText) ?? trimText(material.chunkText, 180)
     ),
     citations: [material.pointer]
   }));
@@ -1520,10 +1625,27 @@ async function validateFactParagraphEntailment(
       ]
     });
     const parsed = parseJsonObject(response.content);
+    const decision = parseModelJudgeDecision(parsed);
 
-    return parsed?.passed === false ? normalizeStringArray(parsed.issues).slice(0, 4) : [];
-  } catch {
-    return [];
+    if (!decision) {
+      return ["fact entailment judge gate error: model returned an invalid decision"];
+    }
+
+    if (decision.passed === true && decision.issues.length === 0) {
+      return [];
+    }
+
+    if (decision.passed === false) {
+      const reportedIssues = decision.issues.slice(0, 4);
+
+      return reportedIssues.length
+        ? reportedIssues.map((issue) => `fact entailment judge rejected paragraph: ${issue}`)
+        : ["fact entailment judge rejected paragraph without an explanation"];
+    }
+
+    return ["fact entailment judge gate error: model returned a passing decision with issues"];
+  } catch (error) {
+    return [`fact entailment judge gate error: ${formatJudgeError(error)}`];
   }
 }
 
@@ -1559,11 +1681,54 @@ async function validateSynthesisParagraphOverstatement(
       ]
     });
     const parsed = parseJsonObject(response.content);
+    const decision = parseModelJudgeDecision(parsed);
 
-    return parsed?.passed === false ? normalizeStringArray(parsed.issues).slice(0, 4) : [];
-  } catch {
-    return [];
+    if (!decision) {
+      return ["synthesis overstatement judge gate error: model returned an invalid decision"];
+    }
+
+    if (decision.passed === true && decision.issues.length === 0) {
+      return [];
+    }
+
+    if (decision.passed === false) {
+      const reportedIssues = decision.issues.slice(0, 4);
+
+      return reportedIssues.length
+        ? reportedIssues.map((issue) => `synthesis overstatement judge rejected paragraph: ${issue}`)
+        : ["synthesis overstatement judge rejected paragraph without an explanation"];
+    }
+
+    return ["synthesis overstatement judge gate error: model returned a passing decision with issues"];
+  } catch (error) {
+    return [`synthesis overstatement judge gate error: ${formatJudgeError(error)}`];
   }
+}
+
+function parseModelJudgeDecision(
+  parsed: Record<string, unknown> | undefined
+): { passed: boolean; issues: string[] } | undefined {
+  if (
+    !parsed ||
+    typeof parsed.passed !== "boolean" ||
+    !Array.isArray(parsed.issues) ||
+    !parsed.issues.every((issue) => typeof issue === "string")
+  ) {
+    return undefined;
+  }
+
+  return {
+    passed: parsed.passed,
+    issues: parsed.issues.map((issue) => issue.trim()).filter(Boolean)
+  };
+}
+
+function formatJudgeError(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message.trim();
+  }
+
+  return "model judge request failed";
 }
 
 function buildChapterContract(input: {

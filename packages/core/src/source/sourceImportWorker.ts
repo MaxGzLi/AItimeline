@@ -179,8 +179,16 @@ export async function runSourceImport(
       config: input.config,
       userContext: input.userContext
     });
-    const status = harnessResult.run.status === "succeeded" ? "ready" : "failed";
+    const acceptedPosts = collectAcceptedHarnessPosts(harnessResult);
+    const runSucceeded = harnessResult.run.status === "succeeded" && acceptedPosts.length > 0;
+    const status = runSucceeded ? "ready" : "failed";
     const errorMessage = status === "failed" ? summarizeValidationFailure(harnessResult) : undefined;
+    const exposedPosts = runSucceeded ? acceptedPosts : [];
+    const harnessRun: AgentHarnessRun = {
+      ...harnessResult.run,
+      status: runSucceeded ? "succeeded" : "failed",
+      outputPostIds: exposedPosts.map((post) => post.id)
+    };
 
     return {
       importRecord: createImportRecord(input, createdAt, status, errorMessage),
@@ -188,9 +196,9 @@ export async function runSourceImport(
       assets,
       chunks: input.chunks,
       sourceRegistry: harnessResult.sourceRegistry ?? sourceRegistry,
-      posts: harnessResult.posts,
+      posts: exposedPosts,
       validation: harnessResult.validation,
-      harnessRun: harnessResult.run,
+      harnessRun,
       qualityGate: qualityGateVerdict,
       errorMessage
     };
@@ -209,6 +217,60 @@ export async function runSourceImport(
       errorMessage
     };
   }
+}
+
+function collectAcceptedHarnessPosts(result: AgentHarnessRunResult): KnowledgePost[] {
+  const postIdCounts = new Map<string, number>();
+  const outputPostIdCounts = new Map<string, number>();
+
+  for (const post of result.posts) {
+    postIdCounts.set(post.id, (postIdCounts.get(post.id) ?? 0) + 1);
+  }
+
+  for (const postId of result.run.outputPostIds) {
+    outputPostIdCounts.set(postId, (outputPostIdCounts.get(postId) ?? 0) + 1);
+  }
+
+  return result.posts.filter((post, index) => {
+    if (postIdCounts.get(post.id) !== 1 || outputPostIdCounts.get(post.id) !== 1) {
+      return false;
+    }
+
+    const resultValidation = findPostValidation(result.validation, result.posts, post.id, index);
+    const runValidation = findPostValidation(result.run.validation, result.posts, post.id, index);
+
+    return (
+      isAcceptedValidationSet(resultValidation) &&
+      isAcceptedValidationSet(runValidation)
+    );
+  });
+}
+
+function findPostValidation(
+  validation: readonly HarnessValidationResult[],
+  posts: readonly KnowledgePost[],
+  postId: string,
+  index: number
+): HarnessValidationResult[] {
+  const globalRecords = validation.filter((record) => !record.postId);
+  const idMatches = validation.filter((record) => record.postId === postId);
+
+  if (idMatches.length) {
+    return [...globalRecords, ...idMatches];
+  }
+
+  const indexMatch = validation.length === posts.length ? validation[index] : undefined;
+
+  return indexMatch ? [...globalRecords, indexMatch] : globalRecords;
+}
+
+function isAcceptedValidationSet(validation: readonly HarnessValidationResult[]): boolean {
+  return (
+    validation.length > 0 &&
+    validation.every(
+      (record) => record.valid && !record.issues.some((issue) => issue.severity === "error")
+    )
+  );
 }
 
 function createImportRecord(

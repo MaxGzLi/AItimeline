@@ -4,7 +4,7 @@ const { transformArticleUrl } = await import("../packages/core/dist/transform/ar
 const { transformYouTubeUrl } = await import("../packages/core/dist/transform/youtubeImport.js");
 const { agentHarnessSystemPrompt } = await import("../packages/core/dist/harness/systemPrompt.js");
 const { createModelKnowledgePostRunner } = await import("../packages/core/dist/harness/modelRunner.js");
-const { deterministicKnowledgePostRunner } = await import("../packages/core/dist/harness/runner.js");
+const { createAgentHarnessConfig, deterministicKnowledgePostRunner } = await import("../packages/core/dist/harness/runner.js");
 const { calculateCjkRatio } = await import("../packages/core/dist/harness/contentLanguage.js");
 const { askGrounded, askSystemPrompt } = await import("../packages/core/dist/harness/askGrounded.js");
 const { followupHarnessSystemPrompt } = await import("../packages/core/dist/harness/followupHarness.js");
@@ -68,7 +68,7 @@ assert.equal(deterministic.importRecord.status, "ready", "deterministic import s
 // 2) Inject a fake ModelClient that returns canned, valid KnowledgePost JSON. We derive the
 //    canned post from the grounded deterministic card and tag the hook, so the test stays robust
 //    (real grounding/citations) while still proving the model output is what reaches the card.
-const sentinelHook = "Model-written hook proves the LLM output reached the card";
+const sentinelHook = "[beyond source] Model-written hook proves the LLM output reached the card";
 const modelPost = { ...deterministic.cards[0], hook: sentinelHook };
 let modelCalls = 0;
 const modelRunner = createModelKnowledgePostRunner({
@@ -113,7 +113,7 @@ const makePaperChunk = (kind, index, text) => ({
   id: `${paperSource.id}-${kind}-${index}`,
   sourceId: paperSource.id,
   content: `${text} ${kind} sample ${index} ${index === 5 ? "should stay out of the sampled prompt" : "reaches the paper prompt"}.`,
-  conceptHints: ["AI Agent", "Memory"]
+  conceptHints: []
 });
 const motivationChunks = Array.from({ length: 5 }, (_, index) =>
   makePaperChunk(
@@ -268,7 +268,19 @@ assert.notEqual(
 
 // 4) The language gate is opt-in: English model output repairs when enabled, and passes when disabled.
 const englishModelPost = toEnglishUserFacingPost(deterministic.cards[0]);
-const zhModelPost = toChineseUserFacingPost(deterministic.cards[0]);
+const zhGroundedEvidence =
+  `这张知识卡说明，AI Agent 会把导入材料整理成可以长期复习的知识，并且保留引用、提取概念、` +
+  `建立学习界面，让读者以后能够重新查看和验证。${deterministic.chunks[0].content}`;
+const zhModelPost = toChineseUserFacingPost(deterministic.cards[0], zhGroundedEvidence);
+const languageGateChunks = deterministic.chunks.map((chunk) =>
+  chunk.id === deterministic.cards[0].citations[0].chunkId
+    ? { ...chunk, content: zhGroundedEvidence }
+    : chunk
+);
+const languageGateRegistry = {
+  ...deterministic.sourceRegistry,
+  chunks: languageGateChunks
+};
 let languageGateCalls = 0;
 let languageRepairPrompt = "";
 const languageGateRunner = createModelKnowledgePostRunner({
@@ -289,8 +301,8 @@ const languageGateRunner = createModelKnowledgePostRunner({
 });
 const languageGateResult = await languageGateRunner.run({
   source: deterministic.source,
-  chunks: deterministic.chunks,
-  sourceRegistry: deterministic.sourceRegistry,
+  chunks: languageGateChunks,
+  sourceRegistry: languageGateRegistry,
   createdAt,
   recommendedBecause: "这次 smoke 用来确认英文模型输出会被中文语言门禁修复。"
 });
@@ -313,7 +325,7 @@ let overlapRepairCalls = 0;
 let overlapRepairPrompt = "";
 const weakOverlapPost = {
   ...zhModelPost,
-  summary: "这句话只用中文转述，没有保留被引证据里的关键术语。"
+  summary: "这句话只用中文转述，遗漏了被引证据里的关键术语。"
 };
 const overlapRepairRunner = createModelKnowledgePostRunner({
   contentLanguage: "zh",
@@ -333,8 +345,8 @@ const overlapRepairRunner = createModelKnowledgePostRunner({
 });
 const overlapRepairResult = await overlapRepairRunner.run({
   source: deterministic.source,
-  chunks: deterministic.chunks,
-  sourceRegistry: deterministic.sourceRegistry,
+  chunks: languageGateChunks,
+  sourceRegistry: languageGateRegistry,
   createdAt,
   recommendedBecause: "这次 smoke 用来确认中文 source-fact 重合度失败会得到可操作修复提示。"
 });
@@ -393,8 +405,8 @@ const salvageRunner = createModelKnowledgePostRunner({
 });
 const salvageResult = await salvageRunner.run({
   source: deterministic.source,
-  chunks: deterministic.chunks,
-  sourceRegistry: deterministic.sourceRegistry,
+  chunks: languageGateChunks,
+  sourceRegistry: languageGateRegistry,
   createdAt,
   recommendedBecause: "这次 smoke 用来确认单张坏卡不会拖垮整批卡片。"
 });
@@ -406,6 +418,66 @@ assert.equal(salvageResult.posts[0].id, zhModelPost.id, "the accepted post shoul
 assert.ok(
   salvageResult.validation.some((result) => !result.valid),
   "the dropped post's validation issues should stay observable on the run"
+);
+
+// 4c) Batch acceptance is fail-closed: maxPostsPerRun is enforced before
+// acceptance, and duplicate IDs are never resolved by arbitrary first-wins.
+const overLimitPosts = Array.from({ length: 3 }, (_, index) => ({
+  ...modelPost,
+  id: `${modelPost.id}-limit-${index + 1}`
+}));
+const overLimitRunner = createModelKnowledgePostRunner({
+  maxRepairAttempts: 0,
+  client: {
+    async complete() {
+      return { content: JSON.stringify({ posts: overLimitPosts }) };
+    }
+  }
+});
+const overLimitResult = await overLimitRunner.run({
+  source: deterministic.source,
+  chunks: deterministic.chunks,
+  sourceRegistry: deterministic.sourceRegistry,
+  createdAt,
+  config: createAgentHarnessConfig({ maxPostsPerRun: 1 })
+});
+
+assert.equal(overLimitResult.validation.length, 3, "every over-limit candidate should retain a validation record");
+assert.equal(overLimitResult.posts.length, 1, "maxPostsPerRun=1 should deterministically retain only the first valid post");
+assert.equal(overLimitResult.posts[0].id, overLimitPosts[0].id, "max-post truncation should preserve model order");
+assert.equal(overLimitResult.run.outputPostIds.length, 1, "run output IDs should contain only accepted posts");
+assert.equal(
+  overLimitResult.validation.filter((result) =>
+    result.issues.some((issue) => issue.severity === "error" && /maxPostsPerRun/.test(issue.message))
+  ).length,
+  2,
+  "every tail post beyond maxPostsPerRun should be rejected explicitly"
+);
+
+const duplicateIdRunner = createModelKnowledgePostRunner({
+  maxRepairAttempts: 0,
+  client: {
+    async complete() {
+      return { content: JSON.stringify({ posts: [modelPost, { ...modelPost }] }) };
+    }
+  }
+});
+const duplicateIdResult = await duplicateIdRunner.run({
+  source: deterministic.source,
+  chunks: deterministic.chunks,
+  sourceRegistry: deterministic.sourceRegistry,
+  createdAt,
+  config: createAgentHarnessConfig({ maxPostsPerRun: 4 })
+});
+
+assert.equal(duplicateIdResult.posts.length, 0, "duplicate post IDs should reject every ambiguous candidate");
+assert.equal(duplicateIdResult.run.status, "failed", "a duplicate-only model batch should fail closed");
+assert.equal(
+  duplicateIdResult.validation.filter((result) =>
+    result.issues.some((issue) => issue.severity === "error" && /must be unique/.test(issue.message))
+  ).length,
+  2,
+  "both candidates sharing a post ID should carry uniqueness errors"
 );
 
 // 5) The same runner option threads through the YouTube transform path.
@@ -490,7 +562,7 @@ const askModelResult = await askGrounded(
         askCalls += 1;
         return {
           content: JSON.stringify({
-            answer: "An AI agent should extract claims and keep citations.",
+            answer: "An AI Agent can turn source material into durable knowledge when it keeps citations.",
             citedExcerpts: [1]
           })
         };
@@ -501,9 +573,172 @@ const askModelResult = await askGrounded(
 
 assert.equal(askCalls, 1, "askGrounded should call the model client once");
 assert.equal(askModelResult.runnerKind, "model", "askGrounded with a client should use the model path");
-assert.ok(askModelResult.answer.includes("extract claims"), "ask answer should come from the model output");
+assert.ok(askModelResult.answer.includes("durable knowledge"), "ask answer should come from the model output");
 assert.ok(askModelResult.citations.length >= 1, "ask should resolve at least one grounded citation");
 assert.equal(askModelResult.grounded, true, "an answer citing an excerpt should be grounded");
+
+const askWithoutExplicitCitation = await askGrounded(
+  {
+    post: deterministic.cards[0],
+    registry: deterministic.sourceRegistry,
+    question: "Can you answer without citing the excerpt?"
+  },
+  {
+    contentLanguage: "zh",
+    client: {
+      async complete() {
+        return {
+          content: JSON.stringify({
+            answer: "An AI Agent can turn source material into durable knowledge when it keeps citations.",
+            citedExcerpts: []
+          })
+        };
+      }
+    }
+  }
+);
+
+assert.equal(askWithoutExplicitCitation.grounded, false, "an answer with no explicit citation must fail closed");
+assert.deepEqual(askWithoutExplicitCitation.citations, [], "askGrounded must not attach every excerpt as a fallback");
+assert.equal(
+  askWithoutExplicitCitation.answer,
+  "库内暂无足够依据回答这个问题。",
+  "citation rejection should use the final-user Chinese message"
+);
+
+const askWithUnsupportedCitedAnswer = await askGrounded(
+  {
+    post: deterministic.cards[0],
+    registry: deterministic.sourceRegistry,
+    question: "What is the Moon made of?"
+  },
+  {
+    contentLanguage: "en",
+    client: {
+      async complete() {
+        return {
+          content: JSON.stringify({
+            answer: "The Moon is made of cheese and cures every disease.",
+            citedExcerpts: [1]
+          })
+        };
+      }
+    }
+  }
+);
+
+assert.equal(
+  askWithUnsupportedCitedAnswer.grounded,
+  false,
+  "a valid excerpt index must not ground an answer unsupported by that excerpt"
+);
+assert.deepEqual(askWithUnsupportedCitedAnswer.citations, [], "unsupported cited answers should expose no citations");
+
+const askWithTwoAnchorHallucination = await askGrounded(
+  {
+    post: deterministic.cards[0],
+    registry: deterministic.sourceRegistry,
+    question: "What does the source material guarantee?"
+  },
+  {
+    contentLanguage: "en",
+    client: {
+      async complete() {
+        return {
+          content: JSON.stringify({
+            answer: "Source material guarantees immortality and cancer cures.",
+            citedExcerpts: [1]
+          })
+        };
+      }
+    }
+  }
+);
+
+assert.equal(
+  askWithTwoAnchorHallucination.grounded,
+  false,
+  "two retrieval anchors must not ground an unsupported ask answer"
+);
+assert.deepEqual(
+  askWithTwoAnchorHallucination.citations,
+  [],
+  "a rejected two-anchor ask hallucination must expose no citations"
+);
+
+const askWithHighCopyHallucination = await askGrounded(
+  {
+    post: deterministic.cards[0],
+    registry: deterministic.sourceRegistry,
+    question: "Can copied evidence support an extra claim?"
+  },
+  {
+    contentLanguage: "en",
+    client: {
+      async complete() {
+        return {
+          content: JSON.stringify({
+            answer:
+              "An AI Agent can turn source material into durable knowledge when it keeps citations guaranteeing immortality.",
+            citedExcerpts: [1]
+          })
+        };
+      }
+    }
+  }
+);
+
+assert.equal(
+  askWithHighCopyHallucination.grounded,
+  false,
+  "a high-copy ask answer with an unsupported tail must fail closed"
+);
+
+const askWithInvalidStructure = await askGrounded(
+  {
+    post: deterministic.cards[0],
+    registry: deterministic.sourceRegistry,
+    question: "What if the response is not JSON?"
+  },
+  {
+    contentLanguage: "en",
+    client: {
+      async complete() {
+        return { content: "The model returned unstructured prose without citations." };
+      }
+    }
+  }
+);
+
+assert.equal(askWithInvalidStructure.grounded, false, "an unparsable model answer must fail closed");
+assert.deepEqual(askWithInvalidStructure.citations, [], "an unparsable model answer must expose no citations");
+assert.equal(
+  askWithInvalidStructure.answer,
+  "There is not enough evidence in your library to answer this question.",
+  "citation rejection should use the final-user English message"
+);
+
+let emptyEvidenceModelCalls = 0;
+const askWithNoEvidence = await askGrounded(
+  {
+    post: deterministic.cards[0],
+    registry: { ...deterministic.sourceRegistry, chunks: [], chunkVersions: [] },
+    question: "Can an empty library answer?"
+  },
+  {
+    contentLanguage: "en",
+    client: {
+      async complete() {
+        emptyEvidenceModelCalls += 1;
+        return { content: JSON.stringify({ answer: "guess", citedExcerpts: [1] }) };
+      }
+    }
+  }
+);
+
+assert.equal(emptyEvidenceModelCalls, 0, "askGrounded should not call a model when no evidence exists");
+assert.equal(askWithNoEvidence.grounded, false, "empty evidence must fail closed");
+assert.deepEqual(askWithNoEvidence.citations, [], "empty evidence must return no citations");
 
 // 7) askGrounded: no client falls back to a deterministic grounded answer.
 const askDeterministic = await askGrounded({
@@ -521,55 +756,46 @@ console.log("Model import smoke passed");
 function toEnglishUserFacingPost(post) {
   return {
     ...post,
-    title: "AI Agent turns source material into durable knowledge",
-    hook: "AI Agent keeps citations, extracts concepts, and builds a learning surface.",
-    thesis: "An AI Agent can turn source material into durable knowledge when it keeps citations and extracts concepts.",
-    shortBody:
-      "An AI Agent keeps citations, extracts concepts, and builds a learning surface the reader can revisit later.",
-    summary:
-      "An AI Agent turns source material into durable knowledge by keeping citations, extracting concepts, and building a learning surface.",
-    keyTakeaway:
-      "The key lesson is that AI Agent work becomes durable knowledge through citations, concepts, and a learning surface.",
-    recommendedBecause: "Smoke test selected this English card to prove the language gate repairs it.",
+    title: post.title,
+    hook: post.summary,
+    thesis: post.thesis,
+    shortBody: post.shortBody,
+    summary: post.summary,
+    keyTakeaway: post.keyTakeaway,
+    recommendedBecause: "[beyond source] Smoke test selected this English card to prove the language gate repairs it.",
     thread: post.thread.map((block) => ({
       ...block,
-      body:
-        "AI Agent output becomes durable knowledge when it keeps citations, extracts concepts, and gives the reader a learning surface to revisit."
+      body: post.summary
     })),
     reviewPrompts: post.reviewPrompts.map((prompt) => ({
       ...prompt,
-      prompt: "How do citations and concepts help an AI Agent create durable knowledge?"
+      prompt: "[beyond source] How do citations and concepts help an AI Agent create durable knowledge?"
     }))
   };
 }
 
-function toChineseUserFacingPost(post) {
+function toChineseUserFacingPost(post, groundedChineseSentence) {
   return {
     ...post,
-    title: "AI Agent 把来源变成知识卡",
-    hook: "这张卡要用中文重写：AI Agent 不是照抄原文，而是保留 citations、抽取 concepts，让读者之后能复习。",
-    thesis: "来源的核心是：AI Agent 通过 citations 和 concepts，把材料整理成之后可回看的知识。",
-    shortBody:
-      "这段内容说明，AI Agent 需要保留 citations、抽取 concepts，并把来源材料变成读者以后还能回来的学习表面。",
-    summary: "来源说，AI Agent 会保留 citations、抽取 concepts，并建立可回看的知识表面。",
-    keyTakeaway: "要点是把 AI Agent 的输出做成可复习知识：保留 citations、抽取 concepts，而不是只做摘要。",
-    recommendedBecause: "这次 smoke 用来确认英文模型输出会被中文语言门禁修复。",
-    thread: post.thread.map((block, index) => ({
+    title: "AI Agent 会把导入材料整理成可以长期复习的知识",
+    hook: groundedChineseSentence,
+    thesis: groundedChineseSentence,
+    shortBody: groundedChineseSentence,
+    summary: groundedChineseSentence,
+    keyTakeaway: groundedChineseSentence,
+    recommendedBecause: "[超出来源] 这次 smoke 用来确认英文模型输出会被中文语言门禁修复。",
+    thread: post.thread.map((block) => ({
       ...block,
-      body: [
-        "用中文解释：AI Agent 先保留 citations，再抽取 concepts，所以来源不会变成一次性摘要。",
-        "例子：读者导入文章后，AI Agent 生成带 citations 的卡片，并把 concepts 接到后续复习。",
-        "对比来看，普通摘要只压缩文本；这张卡强调 citations、concepts 和可复习的知识结构。",
-        "下一步可以追问：AI Agent 如何把 concepts 连到用户已有的知识图谱。",
-        "快速复习：请说出 citations 和 concepts 为什么能让这条知识以后再次出现。"
-      ][index] ?? "这条线程继续用中文说明 AI Agent 如何保留 citations 和 concepts。"
+      body: `[超出来源] ${groundedChineseSentence} 这道学习活动用于复习。`
     })),
+    graphEdges: post.graphEdges.map((edge) => ({ ...edge, evidence: groundedChineseSentence })),
     reviewPrompts: post.reviewPrompts.map((prompt, index) => ({
       ...prompt,
       prompt:
         index === 0
-          ? "请用自己的话说明：AI Agent 为什么要保留 citations，并从来源里抽取 concepts？"
-          : "复习时怎么判断：AI Agent 生成的知识卡是否保留了 citations 和 concepts？"
+          ? "[超出来源] 请说明 AI Agent 为什么要保留 citations 与 concepts？"
+          : "[超出来源] 请判断 AI Agent 知识卡怎样保留 citations 与 concepts？",
+      answerHint: groundedChineseSentence
     }))
   };
 }
