@@ -1,5 +1,6 @@
 import type { ModelClient, ModelMessage } from "../harness/modelRunner.js";
 import type { ContentLanguage } from "../harness/contentLanguage.js";
+import { validateClaimSupport } from "../harness/groundingGate.js";
 import type {
   ConceptBrief,
   ConceptBriefAdjacentConcept,
@@ -195,7 +196,7 @@ function normalizeModelConceptBrief(
   }
 
   const cards = normalizeCards(input.cards);
-  const allowedCardIds = new Set(cards.map((card) => card.id));
+  const cardsById = new Map(cards.map((card) => [card.id, card]));
   const sentences: ConceptBriefSentence[] = parsed.sentences.flatMap((sentence, index) => {
     if (!isRecord(sentence) || typeof sentence.text !== "string" || typeof sentence.cardId !== "string") {
       return [];
@@ -204,7 +205,9 @@ function normalizeModelConceptBrief(
     const text = sentence.text.trim();
     const cardId = sentence.cardId.trim();
 
-    if (!text || !allowedCardIds.has(cardId)) {
+    const citedCard = cardsById.get(cardId);
+
+    if (!text || !citedCard || !isConceptBriefSentenceSupported(text, citedCard)) {
       return [];
     }
 
@@ -235,6 +238,53 @@ function normalizeModelConceptBrief(
     adjacentConcepts: collectAdjacentConcepts(input.concept, cards).slice(0, 4),
     sentences
   };
+}
+
+function isConceptBriefSentenceSupported(text: string, card: ConceptBriefCardInput): boolean {
+  const evidenceText = [
+    card.title,
+    card.keyTakeaway,
+    ...card.concepts,
+    ...(card.graphEdges ?? []).map(
+      (edge) =>
+        `${edge.sourceConcept} ${edge.relation} ${edge.targetConcept} (weight ${edge.weight}): ${edge.evidence}`
+    )
+  ]
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .join("\n");
+
+  if (!evidenceText) {
+    return false;
+  }
+
+  // Compare with evidence clauses so negation/direction come from the matching
+  // clause, not an unrelated neighboring clause in the same card field.
+  const evidenceTexts = splitSupportClauses(evidenceText);
+
+  // A model item may contain several grammatical sentences even though the
+  // response schema calls it one sentence. Validate every one so a supported
+  // first sentence cannot carry an unsupported second sentence into the brief.
+  return splitSupportClauses(text).every(
+    (clause) =>
+      validateClaimSupport(clause, evidenceTexts, {
+        // Briefs are short and cite one card, so require a substantial lexical
+        // anchor. False negatives safely fall back to the deterministic brief.
+        minOverlap: 1,
+        minimumSharedTokens: 2,
+        checkProperNouns: true,
+        allowBeyondSource: false
+      }).supported
+  );
+}
+
+function splitSupportClauses(value: string): string[] {
+  return Array.from(new Intl.Segmenter(undefined, { granularity: "sentence" }).segment(value))
+    .flatMap(({ segment }) =>
+      segment.split(/[;；\n]+|\b(?:and|but|while|whereas)\b|(?:并且|而且|但是|同时)/giu)
+    )
+    .map((clause) => clause.trim())
+    .filter(Boolean);
 }
 
 function buildChineseSentences(

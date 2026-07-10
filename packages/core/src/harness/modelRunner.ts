@@ -138,6 +138,7 @@ export async function runModelAgentHarness(
   }
 
   // 按卡保留:修复轮次用尽后,仍然接受逐卡校验通过的卡片,只丢弃未通过的那几张。
+  // validateHarnessPosts 已在此 acceptance 之前把超出 maxPostsPerRun 的尾部和重复 ID 标为 error。
   const acceptedPosts = collectAcceptedPosts(finalAttempt.candidates, finalAttempt.validation);
   const status = acceptedPosts.length ? "succeeded" : "failed";
 
@@ -440,7 +441,15 @@ function collectAcceptedPosts(
   candidates: readonly unknown[],
   validation: readonly HarnessValidationResult[]
 ): KnowledgePost[] {
-  return candidates.filter((candidate, index) => validation[index]?.valid && isKnowledgePostLike(candidate)) as KnowledgePost[];
+  return candidates.filter((candidate, index) => {
+    const result = validation[index];
+
+    return (
+      result?.valid &&
+      !result.issues.some((issue) => issue.severity === "error") &&
+      isKnowledgePostLike(candidate)
+    );
+  }) as KnowledgePost[];
 }
 
 function hasValidationErrors(validation: readonly HarnessValidationResult[]): boolean {
@@ -488,12 +497,14 @@ function formatHardRequirementLanguagePolicy(contentLanguage?: ContentLanguage):
 
   if (contentLanguage === "en") {
     return [
-      "- All user-facing fields (title, hook, thesis, shortBody, keyTakeaway, summary, thread, reviewPrompts, recommendedBecause) must be written in natural English; keep technical terms in their original wording; graphEdges evidence stays in the source language."
+      "- All user-facing fields (title, hook, thesis, shortBody, keyTakeaway, summary, thread, reviewPrompts, recommendedBecause) must be written in natural English; keep technical terms in their original wording; graphEdges evidence stays in the source language.",
+      "- recommendedBecause describes system or learner context rather than source evidence, so it must start with \"[beyond source]\"."
     ];
   }
 
   return [
-    "- 所有面向用户的字段(title、hook、thesis、shortBody、keyTakeaway、summary、thread、reviewPrompts、recommendedBecause)必须以简体中文书写,技术术语保留英文;graphEdges 的 evidence 保持来源原文语言。"
+    "- 所有面向用户的字段(title、hook、thesis、shortBody、keyTakeaway、summary、thread、reviewPrompts、recommendedBecause)必须以简体中文书写,技术术语保留英文;graphEdges 的 evidence 保持来源原文语言。",
+    "- recommendedBecause 描述系统或学习者上下文而非来源证据,因此必须以 \"[超出来源]\" 开头。"
   ];
 }
 

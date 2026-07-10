@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const { applyDailyAutoJobBudget, createBackgroundCurationPlan } = await import("../packages/core/dist/agents/backgroundCuration.js");
-const { createDeterministicConceptBrief } = await import("../packages/core/dist/agents/conceptBrief.js");
+const { createDeterministicConceptBrief, generateConceptBrief } = await import("../packages/core/dist/agents/conceptBrief.js");
 const { runConversationTurn } = await import("../packages/core/dist/agents/conversationAgent.js");
 const {
   createDeepReadArticle,
@@ -36,7 +36,7 @@ const {
   calculateCjkRatio,
   validateKnowledgePostContentLanguage
 } = await import("../packages/core/dist/harness/contentLanguage.js");
-const { validateGrounding } = await import("../packages/core/dist/harness/groundingGate.js");
+const { validateClaimSupport, validateGrounding } = await import("../packages/core/dist/harness/groundingGate.js");
 const { validateKnowledgePost } = await import("../packages/core/dist/harness/schema.js");
 const { createAgentHarnessConfig, defaultAgentHarnessConfig, runDeterministicAgentHarness, selectAgentHarnessInputChunks, validateHarnessPosts } = await import(
   "../packages/core/dist/harness/runner.js"
@@ -986,6 +986,129 @@ assert.ok(
   conceptBrief.sentences.every((sentence) => conceptBriefCardIds.has(sentence.cardId)),
   "concept_brief fallback should make every sentence traceable to a source card id"
 );
+
+const briefSourcePost = deterministicSamplingResult.posts[0];
+const modelConceptBriefInput = {
+  concept: "Sampling Concept",
+  cards: [
+    {
+      id: briefSourcePost.id,
+      title: briefSourcePost.title,
+      keyTakeaway: briefSourcePost.keyTakeaway,
+      concepts: briefSourcePost.concepts,
+      createdAt: briefSourcePost.createdAt,
+      graphEdges: briefSourcePost.graphEdges
+    }
+  ],
+  reviewCount: 1,
+  contentLanguage: "en",
+  createdAt: "2026-06-10T00:00:00.000Z"
+};
+const hallucinatedModelBrief = await generateConceptBrief(modelConceptBriefInput, {
+  client: {
+    async complete() {
+      return {
+        content: JSON.stringify({
+          sentences: [
+            {
+              text: "Aspirin guarantees immortality and cures cancer.",
+              cardId: briefSourcePost.id
+            }
+          ]
+        })
+      };
+    }
+  }
+});
+
+assert.equal(
+  hallucinatedModelBrief.runnerKind,
+  "deterministic",
+  "concept brief should fall back when a model sentence is not supported by its cited card"
+);
+
+const markedHallucinatedModelBrief = await generateConceptBrief(modelConceptBriefInput, {
+  client: {
+    async complete() {
+      return {
+        content: JSON.stringify({
+          sentences: [
+            {
+              text: "[beyond source] Aspirin guarantees immortality.",
+              cardId: briefSourcePost.id
+            }
+          ]
+        })
+      };
+    }
+  }
+});
+
+assert.equal(
+  markedHallucinatedModelBrief.runnerKind,
+  "deterministic",
+  "a beyond-source marker must not bypass Concept Brief card support"
+);
+
+const twoAnchorHallucinatedModelBrief = await generateConceptBrief(modelConceptBriefInput, {
+  client: {
+    async complete() {
+      return {
+        content: JSON.stringify({
+          sentences: [
+            {
+              text: "Article Sampling guarantees immortality and cancer cures.",
+              cardId: briefSourcePost.id
+            }
+          ]
+        })
+      };
+    }
+  }
+});
+
+assert.equal(
+  twoAnchorHallucinatedModelBrief.runnerKind,
+  "deterministic",
+  "two retrieval anchors must not carry an unsupported Concept Brief predicate"
+);
+
+const highCopyHallucinatedModelBrief = await generateConceptBrief(modelConceptBriefInput, {
+  client: {
+    async complete() {
+      return {
+        content: JSON.stringify({
+          sentences: [
+            {
+              text: `${briefSourcePost.keyTakeaway.replace(/[.!?。！？]+$/u, "")} guaranteeing immortality.`,
+              cardId: briefSourcePost.id
+            }
+          ]
+        })
+      };
+    }
+  }
+});
+
+assert.equal(
+  highCopyHallucinatedModelBrief.runnerKind,
+  "deterministic",
+  "a high-copy Concept Brief sentence with an unsupported tail must fall back"
+);
+
+const supportedModelBrief = await generateConceptBrief(modelConceptBriefInput, {
+  client: {
+    async complete() {
+      return {
+        content: JSON.stringify({
+          sentences: [{ text: briefSourcePost.keyTakeaway, cardId: briefSourcePost.id }]
+        })
+      };
+    }
+  }
+});
+
+assert.equal(supportedModelBrief.runnerKind, "model", "a card-supported concept brief sentence should use the model path");
 assert.equal(
   normalizeMathDelimiters("Inline \\(a+b\\) and display \\[c=d\\]"),
   "Inline $a+b$ and display $$c=d$$",
@@ -1917,6 +2040,46 @@ assert.equal(
   false,
   "grounding gate should reject citations without a chunkId"
 );
+
+const registeredOtherSource = {
+  id: "registered-other-source",
+  title: "Registered other source",
+  url: "https://example.com/registered-other-source",
+  type: "article"
+};
+const registeredOtherChunk = {
+  id: "registered-other-chunk",
+  sourceId: registeredOtherSource.id,
+  content: "This chunk belongs only to the registered other source."
+};
+const sourceChunkMismatchRegistry = {
+  ...result.sourceRegistry,
+  sources: [...result.sourceRegistry.sources, registeredOtherSource],
+  chunks: [...result.sourceRegistry.chunks, registeredOtherChunk]
+};
+const sourceChunkMismatchCard = {
+  ...contractCard,
+  citations: [
+    {
+      ...contractCard.citations[0],
+      sourceId: registeredOtherSource.id,
+      chunkId: contractCard.citations[0].chunkId
+    }
+  ]
+};
+const sourceChunkMismatchGrounding = validateGrounding(sourceChunkMismatchCard, sourceChunkMismatchRegistry);
+
+assert.equal(
+  sourceChunkMismatchGrounding.valid,
+  false,
+  "citation sourceId/chunkId pairs should fail when both exist but the chunk belongs to another source"
+);
+assert.ok(
+  sourceChunkMismatchGrounding.issues.some(
+    (issue) => issue.severity === "error" && /must belong to the cited sourceId/.test(issue.message)
+  ),
+  "source/chunk ownership failures should be explicit gate errors"
+);
 assert.ok(contractCard.graphEdges.length > 0, "contract card should include graph edges");
 assert.equal(
   validateKnowledgePost({
@@ -1954,6 +2117,36 @@ const nonImageMediaCard = {
   id: `${contractCard.id}-non-image-media`,
   media: [{ assetId: result.asset.id, caption: "Text asset is not media.", origin: "paper" }]
 };
+const hallucinatedMediaCaptionCard = {
+  ...contractCard,
+  id: `${contractCard.id}-hallucinated-media-caption`,
+  media: [
+    {
+      assetId: smokeImageAsset.id,
+      caption: `${smokeImageAsset.caption} 999 unicorns prove immortality.`,
+      origin: "paper"
+    }
+  ]
+};
+const signedCaptionRegistry = {
+  ...registryWithSmokeImage,
+  assets: registryWithSmokeImage.assets.map((asset) =>
+    asset.id === smokeImageAsset.id && asset.kind === "image"
+      ? { ...asset, caption: "Figure 1: Accuracy increased by +5%." }
+      : asset
+  )
+};
+const signedCaptionReversalCard = {
+  ...contractCard,
+  id: `${contractCard.id}-signed-caption-reversal`,
+  media: [
+    {
+      assetId: smokeImageAsset.id,
+      caption: "Figure 1: Accuracy increased by -5%.",
+      origin: "paper"
+    }
+  ]
+};
 
 assert.equal(validateKnowledgePost(validMediaCard).valid, true, "valid media shape should pass schema validation");
 assert.equal(
@@ -1970,6 +2163,16 @@ assert.equal(
   validateHarnessPosts([nonImageMediaCard], defaultAgentHarnessConfig, registryWithSmokeImage)[0].valid,
   false,
   "media should fail when assetId points to a non-image asset"
+);
+assert.equal(
+  validateHarnessPosts([hallucinatedMediaCaptionCard], defaultAgentHarnessConfig, registryWithSmokeImage)[0].valid,
+  false,
+  "media captions should fail when they do not match the registered image caption"
+);
+assert.equal(
+  validateHarnessPosts([signedCaptionReversalCard], defaultAgentHarnessConfig, signedCaptionRegistry)[0].valid,
+  false,
+  "media caption comparison must preserve semantically meaningful numeric signs"
 );
 assert.equal(
   validateHarnessPosts([contractCard], defaultAgentHarnessConfig, registryWithSmokeImage)[0].valid,
@@ -2023,6 +2226,675 @@ if (evidenceNumber) {
 
   assert.equal(groundedNumberCheck?.status, "passed", "numbers present in cited evidence should pass grounding");
 }
+
+const probeChunkId = contractCard.citations[0].chunkId;
+const validateSummaryAgainstEvidence = (summary, evidenceText) => {
+  const probeRegistry = {
+    ...result.sourceRegistry,
+    chunks: result.sourceRegistry.chunks.map((chunk) =>
+      chunk.id === probeChunkId ? { ...chunk, content: evidenceText, conceptHints: [] } : chunk
+    )
+  };
+
+  return validateGrounding({ ...contractCard, summary }, probeRegistry);
+};
+
+const aspirinHallucination = validateSummaryAgainstEvidence(
+  "Aspirin guarantees immortality and cures cancer.",
+  "Aspirin can reduce ordinary pain."
+);
+
+assert.equal(
+  aspirinHallucination.checks.find((check) => check.fieldPath === "$.summary")?.status,
+  "failed",
+  "a single shared noun must not support an unrelated strong factual claim"
+);
+
+const appendedAspirinHallucination = validateSummaryAgainstEvidence(
+  "Aspirin can reduce ordinary pain, guaranteeing immortality.",
+  "Aspirin can reduce ordinary pain."
+);
+
+assert.equal(
+  appendedAspirinHallucination.checks.find((check) => check.fieldPath === "$.summary")?.status,
+  "failed",
+  "a supported clause must not mask an appended unsupported factual clause"
+);
+
+const reversedDirectionGrounding = validateSummaryAgainstEvidence(
+  "Throughput decreased by -5% in 2024.",
+  "Throughput increased by +5% in 2024."
+);
+const reversedDirectionCheck = reversedDirectionGrounding.checks.find((check) => check.fieldPath === "$.summary");
+
+assert.equal(reversedDirectionCheck?.status, "failed", "sign and increase/decrease reversal should fail grounding");
+assert.match(
+  reversedDirectionCheck?.reason ?? "",
+  /same sign|direction/i,
+  "direction reversal should report a deterministic numeric or directional mismatch"
+);
+
+const directionOnlyGrounding = validateSummaryAgainstEvidence(
+  "Throughput decreased by +5% in 2024.",
+  "Throughput increased by +5% in 2024."
+);
+
+assert.equal(
+  directionOnlyGrounding.checks.find((check) => check.fieldPath === "$.summary")?.status,
+  "failed",
+  "increase/decrease reversal should fail even when the signed number is unchanged"
+);
+assert.match(
+  directionOnlyGrounding.checks.find((check) => check.fieldPath === "$.summary")?.reason ?? "",
+  /direction/i,
+  "the standalone direction fixture should exercise the direction checker"
+);
+
+const negationReversalGrounding = validateSummaryAgainstEvidence(
+  "The treatment reduces pain.",
+  "The treatment does not reduce pain."
+);
+
+assert.equal(
+  negationReversalGrounding.checks.find((check) => check.fieldPath === "$.summary")?.status,
+  "failed",
+  "dropping source negation should fail grounding"
+);
+
+const chineseNegationReversal = validateSummaryAgainstEvidence(
+  "模型已通过测试。",
+  "模型未通过测试。"
+);
+
+assert.equal(
+  chineseNegationReversal.checks.find((check) => check.fieldPath === "$.summary")?.status,
+  "failed",
+  "bare Chinese 未/不 polarity must be checked deterministically"
+);
+
+const unitReversalGrounding = validateSummaryAgainstEvidence(
+  "The measured latency was 5 seconds.",
+  "The measured latency was 5 milliseconds."
+);
+
+assert.equal(
+  unitReversalGrounding.checks.find((check) => check.fieldPath === "$.summary")?.status,
+  "failed",
+  "a number copied with a different unit should fail grounding"
+);
+
+for (const [claim, evidence, label] of [
+  ["Revenue was $5.", "Revenue was €5.", "currency symbol"],
+  ["Revenue was 5€.", "Revenue was 5£.", "currency suffix"],
+  ["Temperature reached 5°C.", "Temperature reached 5°F.", "temperature unit"],
+  ["Temperature reached 5 Celsius.", "Temperature reached 5 Fahrenheit.", "spelled-out temperature unit"],
+  ["Mass changed by + 5 kg.", "Mass changed by - 5 kg.", "spaced sign"],
+  ["Accuracy was >5%.", "Accuracy was <5%.", "comparison sign"],
+  ["Accuracy was >=5%.", "Accuracy was <=5%.", "compound comparison sign"],
+  ["Accuracy was at least 5%.", "Accuracy was at most 5%.", "word comparison"]
+]) {
+  assert.equal(
+    validateClaimSupport(claim, [evidence], { minOverlap: 0.08, minimumSharedTokens: 2 }).supported,
+    false,
+    `${label} changes must not preserve numeric support`
+  );
+}
+
+for (const [claim, evidence, label] of [
+  ["Treatment reduces pain.", "It is not true that Treatment reduces pain.", "English scoped negation"],
+  ["Treatment reduces pain.", "Treatment reduces pain is false.", "English suffix negation"],
+  ["模型通过测试。", "并不是说模型通过测试。", "Chinese scoped negation"],
+  ["模型通过测试。", "模型通过测试并不属实。", "Chinese suffix negation"]
+]) {
+  assert.equal(
+    validateClaimSupport(claim, [evidence], { minOverlap: 1, minimumSharedTokens: 1 }).supported,
+    false,
+    `${label} must override an otherwise exact lexical substring`
+  );
+}
+
+assert.equal(
+  validateClaimSupport(
+    "Revenue increased 9%, costs decreased 5%.",
+    ["Revenue increased 5%, costs decreased 9%."],
+    { minOverlap: 0.08, minimumSharedTokens: 2 }
+  ).supported,
+  false,
+  "numbers from a neighboring evidence clause must not support the wrong metric"
+);
+
+assert.equal(
+  validateClaimSupport(
+    "Revenue increased 5%.",
+    ["Revenue increased 9%. Costs decreased 5%."],
+    { minOverlap: 0.08, minimumSharedTokens: 2 }
+  ).supported,
+  false,
+  "numbers from a neighboring evidence sentence must not support the selected sentence"
+);
+
+assert.equal(
+  validateClaimSupport(
+    "Revenue increased 5%.",
+    ["Revenue increased 9%, costs decreased 5%."],
+    { minOverlap: 0.08, minimumSharedTokens: 2 }
+  ).supported,
+  false,
+  "a single claim must not borrow a number from a neighboring evidence clause"
+);
+
+assert.equal(
+  validateClaimSupport(
+    "Aspirin reduces ordinary pain at score 5, guaranteeing immortality.",
+    ["Aspirin reduces ordinary pain at score 5."],
+    { minOverlap: 0.6, minimumSharedTokens: 2, checkProperNouns: true }
+  ).supported,
+  false,
+  "a digit before a clause comma must not disable unsupported-clause splitting"
+);
+
+for (const separator of [" - ", " because ", " therefore "]) {
+  assert.equal(
+    validateClaimSupport(
+      `Aspirin reduces ordinary pain${separator}Aspirin guarantees immortality.`,
+      ["Aspirin reduces ordinary pain."],
+      { minOverlap: 0.6, minimumSharedTokens: 2, checkProperNouns: true }
+    ).supported,
+    false,
+    `${separator.trim()} must delimit an independently supported factual clause`
+  );
+}
+
+assert.equal(
+  validateClaimSupport(
+    "Aspirin reduces ordinary pain (guaranteeing immortality).",
+    ["Aspirin reduces ordinary pain."],
+    { minOverlap: 0.65, minimumSharedTokens: 2, checkProperNouns: true }
+  ).supported,
+  false,
+  "a parenthetical factual continuation must receive independent support"
+);
+
+assert.equal(
+  validateClaimSupport(
+    "Revenue increased 9% as costs decreased 5%.",
+    ["Revenue increased 5% as costs decreased 9%."],
+    { minOverlap: 0.65, minimumSharedTokens: 2 }
+  ).supported,
+  false,
+  "as-separated metrics must not borrow each other's numbers"
+);
+
+assert.equal(
+  validateClaimSupport(
+    "Aspirin can reduce ordinary pain. Throughput increased +5%.",
+    ["Aspirin can reduce ordinary pain. Throughput increased +5%."],
+    { minOverlap: 0.6, minimumSharedTokens: 2, checkProperNouns: true }
+  ).supported,
+  true,
+  "an identical multi-sentence source excerpt with numbers must use the normalized fast path"
+);
+
+assert.equal(
+  validateClaimSupport(
+    "Aspirin pain guarantees immortality.",
+    ["Aspirin can reduce ordinary pain."],
+    { minOverlap: 0.6, minimumSharedTokens: 2, checkProperNouns: true }
+  ).supported,
+  false,
+  "shared retrieval words alone must not accept a strong unsupported factual continuation"
+);
+
+assert.equal(
+  validateClaimSupport(
+    "Aspirin ordinary pain guarantees immortality.",
+    ["Aspirin can reduce ordinary pain."],
+    { minOverlap: 0.65, minimumSharedTokens: 2, checkProperNouns: true }
+  ).supported,
+  false,
+  "a 60-percent lexical match remains retrieval evidence rather than factual acceptance"
+);
+
+assert.equal(
+  validateClaimSupport(
+    "Aspirin provides ordinary pain relief for adults under clinical guidance guaranteeing immortality.",
+    ["Aspirin provides ordinary pain relief for adults under clinical guidance."],
+    { minOverlap: 0.65, minimumSharedTokens: 2, checkProperNouns: true }
+  ).supported,
+  false,
+  "high lexical copying must remain retrieval-only when unsupported terms are appended"
+);
+
+assert.equal(
+  validateClaimSupport(
+    "Revenue and costs increased 9%.",
+    ["Revenue increased 5% and costs increased 9%."],
+    { minOverlap: 0.65, minimumSharedTokens: 2 }
+  ).supported,
+  false,
+  "a shared numeric predicate must be checked independently for every coordinated subject"
+);
+
+assert.equal(
+  validateClaimSupport("知识 库：证据链", ["知识库证据链"], { minOverlap: 0.08 }).supported,
+  true,
+  "NFKC/punctuation/whitespace normalization should preserve the CJK full-substring fast path"
+);
+
+for (const [claim, evidence, label] of [
+  ["RAG", "Storage improves retrieval.", "Latin token boundary"],
+  ["The model is not able.", "The model is notable.", "negation word boundary"],
+  ["C# enables managed code.", "C enables managed code.", "technical symbol"],
+  ["A/B testing is useful.", "AB testing is useful.", "slash symbol"],
+  ["Bob defeated Alice.", "Alice defeated Bob.", "ordered participant roles"],
+  ["Dog bites man bites dog.", "Dog bites man.", "repeated participant tail"]
+]) {
+  assert.equal(
+    validateClaimSupport(claim, [evidence], { minOverlap: 1, minimumSharedTokens: 1 }).supported,
+    false,
+    `${label} changes must not pass normalized or set-overlap support`
+  );
+}
+
+const directionQuestionRegistry = {
+  ...result.sourceRegistry,
+  chunks: result.sourceRegistry.chunks.map((chunk) =>
+    chunk.id === probeChunkId ? { ...chunk, content: "Throughput increased by +5%." } : chunk
+  )
+};
+const directionQuestionCard = {
+  ...contractCard,
+  reviewPrompts: contractCard.reviewPrompts.map((prompt, index) =>
+    index === 0 ? { ...prompt, prompt: "Why did throughput decrease by +5%?" } : prompt
+  )
+};
+
+assert.equal(
+  validateGrounding(directionQuestionCard, directionQuestionRegistry).checks.find(
+    (check) => check.fieldPath === "$.reviewPrompts[0].prompt"
+  )?.status,
+  "failed",
+  "a factual premise inside a question must not reverse evidence direction"
+);
+
+const negatedQuestionRegistry = {
+  ...result.sourceRegistry,
+  chunks: result.sourceRegistry.chunks.map((chunk) =>
+    chunk.id === probeChunkId ? { ...chunk, content: "The treatment does not reduce pain." } : chunk
+  )
+};
+const negatedQuestionCard = {
+  ...contractCard,
+  reviewPrompts: contractCard.reviewPrompts.map((prompt, index) =>
+    index === 0 ? { ...prompt, prompt: "What does the treatment reduce?" } : prompt
+  )
+};
+
+assert.equal(
+  validateGrounding(negatedQuestionCard, negatedQuestionRegistry).checks.find(
+    (check) => check.fieldPath === "$.reviewPrompts[0].prompt"
+  )?.status,
+  "failed",
+  "a question must not turn negated evidence into a positive factual premise"
+);
+
+const interpretationNumericRegistry = {
+  ...result.sourceRegistry,
+  chunks: result.sourceRegistry.chunks.map((chunk) =>
+    chunk.id === probeChunkId ? { ...chunk, content: "Accuracy increased to +5%." } : chunk
+  )
+};
+const interpretationNumericGrounding = validateGrounding(
+  { ...contractCard, keyTakeaway: "Accuracy increased to +999%." },
+  interpretationNumericRegistry
+);
+
+assert.equal(
+  interpretationNumericGrounding.checks.find((check) => check.fieldPath === "$.keyTakeaway")?.status,
+  "failed",
+  "numeric invariants should hard-fail unsupported interpretation fields too"
+);
+
+const interpretationProperNounRegistry = {
+  ...result.sourceRegistry,
+  chunks: result.sourceRegistry.chunks.map((chunk) =>
+    chunk.id === probeChunkId ? { ...chunk, content: "Ordinary medicine can reduce pain." } : chunk
+  )
+};
+const interpretationProperNounGrounding = validateGrounding(
+  { ...contractCard, keyTakeaway: "Mars medicine can reduce pain." },
+  interpretationProperNounRegistry
+);
+
+assert.equal(
+  interpretationProperNounGrounding.checks.find((check) => check.fieldPath === "$.keyTakeaway")?.status,
+  "failed",
+  "an unmarked proper noun in an interpretation must occur in cited evidence"
+);
+
+const highCopyExampleRegistry = {
+  ...result.sourceRegistry,
+  chunks: result.sourceRegistry.chunks.map((chunk) =>
+    chunk.id === probeChunkId
+      ? { ...chunk, content: "Aspirin provides ordinary pain relief for adults under clinical guidance." }
+      : chunk
+  )
+};
+const highCopyExampleCard = {
+  ...contractCard,
+  thread: contractCard.thread.map((block) =>
+    block.kind === "example"
+      ? {
+          ...block,
+          body: "Aspirin provides ordinary pain relief for adults under clinical guidance guaranteeing immortality."
+        }
+      : block
+  )
+};
+
+assert.equal(
+  validateGrounding(highCopyExampleCard, highCopyExampleRegistry).checks.find(
+    (check) => check.fieldPath.endsWith(".body") && check.kind === "example"
+  )?.status,
+  "failed",
+  "a high-copy example with an unsupported factual tail must fail closed"
+);
+
+const metadataOnlyConceptRegistry = {
+  ...result.sourceRegistry,
+  chunks: result.sourceRegistry.chunks.map((chunk) =>
+    chunk.id === probeChunkId
+      ? { ...chunk, content: "The source discusses ordinary evidence.", conceptHints: ["Unicorn"] }
+      : chunk
+  )
+};
+
+assert.equal(
+  validateGrounding({ ...contractCard, concepts: ["Unicorn"] }, metadataOnlyConceptRegistry).checks.find(
+    (check) => check.fieldPath === "$.concepts[0]"
+  )?.status,
+  "failed",
+  "concept metadata must not substitute for normalized occurrence in evidence text"
+);
+
+const semanticConceptRegistry = {
+  ...result.sourceRegistry,
+  chunks: result.sourceRegistry.chunks.map((chunk) =>
+    chunk.id === probeChunkId ? { ...chunk, content: "The C language is procedural." } : chunk
+  )
+};
+
+assert.equal(
+  validateGrounding({ ...contractCard, concepts: ["C++"] }, semanticConceptRegistry).checks.find(
+    (check) => check.fieldPath === "$.concepts[0]"
+  )?.status,
+  "failed",
+  "concept normalization must preserve meaning-bearing technical symbols"
+);
+
+assert.equal(
+  validateGrounding({ ...contractCard, concepts: ["C#"] }, semanticConceptRegistry).checks.find(
+    (check) => check.fieldPath === "$.concepts[0]"
+  )?.status,
+  "failed",
+  "concept normalization must preserve hash signs in technical names"
+);
+
+const ragTokenRegistry = {
+  ...result.sourceRegistry,
+  chunks: result.sourceRegistry.chunks.map((chunk) =>
+    chunk.id === probeChunkId ? { ...chunk, content: "Storage improves retrieval." } : chunk
+  )
+};
+
+assert.equal(
+  validateGrounding({ ...contractCard, concepts: ["RAG"] }, ragTokenRegistry).checks.find(
+    (check) => check.fieldPath === "$.concepts[0]"
+  )?.status,
+  "failed",
+  "a Latin concept must match whole evidence tokens rather than a substring inside storage"
+);
+
+const exactRagTokenRegistry = {
+  ...ragTokenRegistry,
+  chunks: ragTokenRegistry.chunks.map((chunk) =>
+    chunk.id === probeChunkId ? { ...chunk, content: "RAG improves retrieval." } : chunk
+  )
+};
+
+assert.equal(
+  validateGrounding({ ...contractCard, concepts: ["RAG"] }, exactRagTokenRegistry).checks.find(
+    (check) => check.fieldPath === "$.concepts[0]"
+  )?.status,
+  "passed",
+  "a whole-token Latin concept present in evidence must pass"
+);
+
+const metadataCannotGroundFactsRegistry = {
+  ...result.sourceRegistry,
+  sources: result.sourceRegistry.sources.map((source) =>
+    source.id === contractCard.citations[0].sourceId
+      ? { ...source, title: "999 Unicorns guarantee immortality" }
+      : source
+  ),
+  chunks: result.sourceRegistry.chunks.map((chunk) =>
+    chunk.id === probeChunkId
+      ? {
+          ...chunk,
+          content: "Aspirin can reduce ordinary pain.",
+          conceptHints: ["999 Unicorns guarantee immortality"]
+        }
+      : chunk
+  )
+};
+
+assert.equal(
+  validateGrounding(
+    { ...contractCard, summary: "999 Unicorns guarantee immortality." },
+    metadataCannotGroundFactsRegistry
+  ).checks.find((check) => check.fieldPath === "$.summary")?.status,
+  "failed",
+  "source metadata and concept hints must never substitute for resolved chunk evidence"
+);
+
+assert.equal(
+  validateGrounding({ ...contractCard, concepts: ["+++"] }, result.sourceRegistry).checks.find(
+    (check) => check.fieldPath === "$.concepts[0]"
+  )?.status,
+  "failed",
+  "a non-empty concept whose normalized form is empty must fail closed"
+);
+
+const hallucinatedVisibleFieldsCard = {
+  ...contractCard,
+  thread: contractCard.thread.map((block) =>
+    block.kind === "example"
+      ? { ...block, body: "999 unicorns guarantee immortality in this example." }
+      : block
+  ),
+  reviewPrompts: contractCard.reviewPrompts.map((prompt, index) =>
+    index === 0
+      ? {
+          ...prompt,
+          prompt: "How did 888 unicorns prove the claim?",
+          answerHint: "777 unicorns guarantee immortality."
+        }
+      : prompt
+  ),
+  concepts: [...contractCard.concepts, "Unicorn Cosmology"],
+  recommendedBecause: "Recommended because 666 unicorns proved immortality."
+};
+const hallucinatedVisibleFieldsGrounding = validateGrounding(
+  hallucinatedVisibleFieldsCard,
+  result.sourceRegistry
+);
+const failedVisibleFieldPaths = new Set(
+  hallucinatedVisibleFieldsGrounding.checks
+    .filter((check) => check.status === "failed")
+    .map((check) => check.fieldPath)
+);
+
+assert.equal(hallucinatedVisibleFieldsGrounding.valid, false, "hallucinated user-visible fields should fail the gate");
+assert.ok(
+  Array.from(failedVisibleFieldPaths).some((path) => path.startsWith("$.thread[") && path.endsWith(".body")),
+  "an unmarked hallucinated example should be hard-validated"
+);
+assert.ok(
+  failedVisibleFieldPaths.has("$.reviewPrompts[0].prompt"),
+  "a hallucinated review question should be hard-validated"
+);
+assert.ok(
+  failedVisibleFieldPaths.has("$.reviewPrompts[0].answerHint"),
+  "a hallucinated review answerHint should be hard-validated"
+);
+assert.ok(
+  failedVisibleFieldPaths.has(`$.concepts[${hallucinatedVisibleFieldsCard.concepts.length - 1}]`),
+  "a concept absent from normalized evidence should be hard-validated"
+);
+assert.ok(
+  failedVisibleFieldPaths.has("$.recommendedBecause"),
+  "a factual recommendation reason with a fabricated number should be hard-validated"
+);
+
+const pureChineseSource = {
+  id: "pure-chinese-grounding-source",
+  title: "纯中文来源",
+  url: "https://example.com/pure-chinese-grounding",
+  type: "manual"
+};
+const pureChineseChunk = {
+  id: "pure-chinese-grounding-chunk",
+  sourceId: pureChineseSource.id,
+  content: "知识库中的每一条生成内容都应当能够回到明确的原始证据，确定性摘要必须保留这条可追溯链路。"
+};
+const pureChineseRun = runDeterministicAgentHarness({
+  source: pureChineseSource,
+  chunks: [pureChineseChunk],
+  contentLanguage: "zh",
+  createdAt: "2026-06-10T00:00:00.000Z"
+});
+
+assert.equal(pureChineseRun.run.status, "succeeded", "a pure-Chinese deterministic import should pass grounding");
+assert.equal(pureChineseRun.posts.length, 1, "a pure-Chinese deterministic import should expose its accepted post");
+assert.equal(pureChineseRun.validation.length, 1, "pure-Chinese imports should retain non-vacuous validation");
+assert.equal(pureChineseRun.validation[0].valid, true, "pure-Chinese deterministic summaries should validate");
+assert.equal(
+  pureChineseRun.validation[0].grounding?.checks.find((check) => check.fieldPath === "$.summary")?.status,
+  "passed",
+  "the normalized full-substring fast path should support an identical Chinese summary"
+);
+
+const shortChineseRun = runDeterministicAgentHarness({
+  source: {
+    id: "short-chinese-grounding-source",
+    title: "短中文来源",
+    url: "https://example.com/short-chinese-grounding",
+    type: "manual"
+  },
+  chunks: [
+    {
+      id: "short-chinese-grounding-chunk",
+      sourceId: "short-chinese-grounding-source",
+      content: "模型未通过测试。",
+      conceptHints: ["测试"]
+    }
+  ],
+  contentLanguage: "zh",
+  createdAt: "2026-06-10T00:00:00.000Z"
+});
+
+assert.equal(shortChineseRun.run.status, "succeeded", "a short pure-Chinese source must keep a grounded thesis");
+assert.equal(shortChineseRun.posts.length, 1, "short pure-Chinese deterministic fallback should retain its card");
+assert.equal(
+  shortChineseRun.posts[0]?.thesis,
+  "模型未通过测试",
+  "short deterministic theses must reuse source text instead of an invented generic fallback"
+);
+
+const negativeSourceRun = runDeterministicAgentHarness({
+  source: {
+    id: "negative-fallback-source",
+    title: "Negative fallback source",
+    url: "https://example.com/negative-fallback",
+    type: "manual"
+  },
+  chunks: [
+    {
+      id: "negative-fallback-chunk",
+      sourceId: "negative-fallback-source",
+      content: "The treatment does not reduce pain.",
+      conceptHints: ["pain"]
+    }
+  ],
+  contentLanguage: "en",
+  createdAt: "2026-06-10T00:00:00.000Z"
+});
+
+assert.equal(
+  negativeSourceRun.run.status,
+  "succeeded",
+  "a neutral deterministic activity about a supported concept must not inherit source negation"
+);
+assert.equal(negativeSourceRun.posts.length, 1, "negative-source deterministic fallback should retain its card");
+
+const negatedPredicateHintRun = runDeterministicAgentHarness({
+  source: {
+    id: "negative-predicate-hint-source",
+    title: "Negative predicate hint source",
+    url: "https://example.com/negative-predicate-hint",
+    type: "manual"
+  },
+  chunks: [
+    {
+      id: "negative-predicate-hint-chunk",
+      sourceId: "negative-predicate-hint-source",
+      content: "The treatment does not reduce pain.",
+      conceptHints: ["reduce pain"]
+    }
+  ],
+  contentLanguage: "en",
+  createdAt: "2026-06-10T00:00:00.000Z"
+});
+
+assert.equal(
+  negatedPredicateHintRun.run.status,
+  "succeeded",
+  "a negated predicate hint must be discarded without breaking deterministic fallback"
+);
+assert.ok(
+  negatedPredicateHintRun.posts[0]?.concepts.every((concept) => concept !== "reduce pain"),
+  "deterministic concepts must not turn a source-negated predicate into a positive label"
+);
+
+const technicalConceptRun = runDeterministicAgentHarness({
+  source: {
+    id: "technical-concept-source",
+    title: "Technical concept source",
+    url: "https://example.com/technical-concepts",
+    type: "manual"
+  },
+  chunks: [
+    {
+      id: "technical-concept-chunk",
+      sourceId: "technical-concept-source",
+      content: "C# and C++ enable deterministic technical concept checks.",
+      conceptHints: ["C#", "C++"]
+    }
+  ],
+  contentLanguage: "en",
+  createdAt: "2026-06-10T00:00:00.000Z"
+});
+
+assert.equal(
+  technicalConceptRun.run.status,
+  "succeeded",
+  "C# and C++ source concepts must survive the complete deterministic fallback"
+);
+assert.deepEqual(
+  technicalConceptRun.posts[0]?.concepts,
+  ["C#", "C++"],
+  "technical concept symbols must remain intact in accepted deterministic posts"
+);
 
 let repairCalls = 0;
 let repairPrompt = "";
@@ -2190,6 +3062,151 @@ assert.equal(deterministicImport.posts.length, 4, "deterministic import should c
 assert.equal(deterministicImport.sourceRegistry.assets.length, 1, "deterministic import should preserve assets");
 assert.equal(deterministicImport.harnessRun?.runnerKind, "deterministic");
 
+const failedPostValidation = {
+  postId: contractCard.id,
+  valid: false,
+  issues: [{ path: "$.summary", message: "fixture grounding failure", severity: "error" }]
+};
+const leakingFailedRunner = {
+  id: "leaking-failed-runner",
+  kind: "model",
+  async run(input) {
+    return {
+      run: {
+        ...deterministicImport.harnessRun,
+        id: "leaking-failed-run",
+        status: "failed",
+        outputPostIds: [contractCard.id],
+        validation: [failedPostValidation]
+      },
+      posts: [contractCard],
+      validation: [failedPostValidation],
+      sourceRegistry: input.sourceRegistry
+    };
+  }
+};
+const defensiveWorker = createSourceImportWorker({ runner: leakingFailedRunner, qualityGate: false });
+const failedWorkerImport = await defensiveWorker.run({
+  source: result.source,
+  assets: [result.asset],
+  chunks: result.chunks,
+  sourceRegistry: result.sourceRegistry,
+  createdAt: "2026-06-10T00:00:00.000Z",
+  skipQualityGate: true
+});
+
+assert.equal(failedWorkerImport.importRecord.status, "failed", "a failed harness run should fail the source import");
+assert.equal(failedWorkerImport.posts.length, 0, "the source worker must not expose posts leaked by a failed runner");
+assert.deepEqual(failedWorkerImport.harnessRun?.outputPostIds, [], "failed worker runs should expose no output post IDs");
+
+const validPostValidation = { postId: contractCard.id, valid: true, issues: [] };
+const contradictoryLedgerRunner = {
+  id: "contradictory-ledger-runner",
+  kind: "model",
+  async run(input) {
+    return {
+      run: {
+        ...deterministicImport.harnessRun,
+        id: "contradictory-ledger-run",
+        status: "succeeded",
+        outputPostIds: [contractCard.id],
+        validation: [failedPostValidation]
+      },
+      posts: [contractCard],
+      validation: [validPostValidation],
+      sourceRegistry: input.sourceRegistry
+    };
+  }
+};
+const contradictoryLedgerWorker = createSourceImportWorker({
+  runner: contradictoryLedgerRunner,
+  qualityGate: false
+});
+const contradictoryLedgerImport = await contradictoryLedgerWorker.run({
+  source: result.source,
+  assets: [result.asset],
+  chunks: result.chunks,
+  sourceRegistry: result.sourceRegistry,
+  createdAt: "2026-06-10T00:00:00.000Z",
+  skipQualityGate: true
+});
+
+assert.equal(
+  contradictoryLedgerImport.importRecord.status,
+  "failed",
+  "worker should fail closed when top-level and run validation ledgers disagree"
+);
+assert.equal(
+  contradictoryLedgerImport.posts.length,
+  0,
+  "a valid top-level record must not hide a run-level validation error"
+);
+
+let defensivePersistenceState = "";
+const defensivePersistence = createAITimelinePersistenceStore({
+  read: () => defensivePersistenceState,
+  write: (serialized) => {
+    defensivePersistenceState = serialized;
+  }
+});
+const leakedReadyImport = {
+  ...failedWorkerImport,
+  importRecord: { ...failedWorkerImport.importRecord, status: "ready" },
+  posts: [contractCard],
+  validation: [validPostValidation],
+  harnessRun: {
+    ...failedWorkerImport.harnessRun,
+    status: "succeeded",
+    outputPostIds: [],
+    validation: [
+      {
+        valid: false,
+        issues: [{ path: "$", message: "global run validation failure", severity: "error" }]
+      }
+    ]
+  }
+};
+const defensiveSnapshot = defensivePersistence.saveSourceImportResult(
+  leakedReadyImport,
+  "2026-06-10T00:00:00.000Z"
+);
+
+assert.equal(
+  defensiveSnapshot.posts.length,
+  0,
+  "persistence must reject a post omitted from output IDs or contradicted by a global run error"
+);
+assert.ok(defensiveSnapshot.validation.length > 0, "persistence should retain rejected validation for audit");
+
+let duplicatePersistenceState = "";
+const duplicateIdPersistence = createAITimelinePersistenceStore({
+  read: () => duplicatePersistenceState,
+  write: (serialized) => {
+    duplicatePersistenceState = serialized;
+  }
+});
+const duplicateIdPersistenceSnapshot = duplicateIdPersistence.saveSourceImportResult(
+  {
+    ...failedWorkerImport,
+    importRecord: { ...failedWorkerImport.importRecord, status: "ready" },
+    posts: [contractCard, { ...contractCard, summary: "Unvalidated last-wins content." }],
+    validation: [validPostValidation],
+    harnessRun: {
+      ...failedWorkerImport.harnessRun,
+      status: "succeeded",
+      outputPostIds: [contractCard.id],
+      validation: [validPostValidation]
+    }
+  },
+  "2026-06-10T00:00:00.000Z"
+);
+
+assert.equal(
+  duplicateIdPersistenceSnapshot.posts.length,
+  0,
+  "persistence must independently reject duplicate post IDs before last-wins upsert"
+);
+
 const seoImportInput = {
   source: {
     id: "seo-water-import-source",
@@ -2233,7 +3250,24 @@ assert.equal(
 const gateBypassedImport = await deterministicWorker.run({ ...seoImportInput, skipQualityGate: true });
 
 assert.equal(gateBypassedImport.qualityGate, undefined, "skipQualityGate should bypass the gate entirely");
-assert.equal(gateBypassedImport.importRecord.status, "ready", "gate-bypassed imports should proceed to generation");
+assert.equal(
+  gateBypassedImport.importRecord.status,
+  "ready",
+  "quality-bypassed deterministic imports should sanitize unsupported concept hints before generation"
+);
+assert.ok(gateBypassedImport.posts.length > 0, "sanitized quality-bypassed imports should expose grounded posts");
+assert.ok(
+  gateBypassedImport.posts.every((post) =>
+    post.concepts.every((concept) =>
+      seoImportInput.chunks.some((chunk) =>
+        chunk.content.normalize("NFKC").toLowerCase().replace(/[\p{P}\p{S}\s]+/gu, "").includes(
+          concept.normalize("NFKC").toLowerCase().replace(/[\p{P}\p{S}\s]+/gu, "")
+        )
+      )
+    )
+  ),
+  "deterministic imports should emit only concepts present in source text"
+);
 
 const modelWorker = createOpenAICompatibleSourceImportWorker(
   {
@@ -4287,6 +5321,159 @@ const changedNumberReport = await gateDeepReadParagraph(
 
 assert.equal(changedNumberReport.passed, false, "deep-read key fact gate should reject altered numbers");
 
+const judgePointer = firstContractWithMaterial.materialPointers[0];
+const judgeSupportedText =
+  deepContext.chunkByPointerKey.get(`${judgePointer.sourceId}|${judgePointer.chunkId}`)?.content ?? "";
+const noClientJudgeReport = await gateDeepReadParagraph(
+  {
+    id: "judge-no-client",
+    kind: "fact",
+    text: judgeSupportedText,
+    citations: [judgePointer]
+  },
+  firstContractWithMaterial,
+  deepContext,
+  { checkedAt: "2026-07-08T00:00:00.000Z" }
+);
+
+assert.equal(noClientJudgeReport.passed, true, "without a model client, conservative deterministic support should still work");
+assert.ok(
+  noClientJudgeReport.issues.every((issue) => !/judge/i.test(issue)),
+  "a no-client deterministic pass must not be represented as a model-judge pass"
+);
+
+const noClientHallucinationReport = await gateDeepReadParagraph(
+  {
+    id: "judge-no-client-hallucination",
+    kind: "fact",
+    text: "RAG cures cancer.",
+    citations: [judgePointer]
+  },
+  firstContractWithMaterial,
+  deepContext,
+  { checkedAt: "2026-07-08T00:00:00.000Z" }
+);
+
+assert.equal(
+  noClientHallucinationReport.passed,
+  false,
+  "without a model client, one shared entity must not support an unrelated predicate"
+);
+assert.ok(
+  noClientHallucinationReport.issues.some((issue) => /deterministic support gate/.test(issue)),
+  "no-client hallucinations should fail in the deterministic support layer"
+);
+
+const noClientTwoAnchorHallucinationReport = await gateDeepReadParagraph(
+  {
+    id: "judge-no-client-two-anchor-hallucination",
+    kind: "fact",
+    text: "RAG retrieval guarantees immortality.",
+    citations: [judgePointer]
+  },
+  firstContractWithMaterial,
+  deepContext,
+  { checkedAt: "2026-07-08T00:00:00.000Z" }
+);
+
+assert.equal(
+  noClientTwoAnchorHallucinationReport.passed,
+  false,
+  "two lexical anchors must not make a no-client DeepRead hallucination pass"
+);
+
+const noClientHighCopyHallucinationReport = await gateDeepReadParagraph(
+  {
+    id: "judge-no-client-high-copy-hallucination",
+    kind: "fact",
+    text: `${judgeSupportedText.replace(/[.!?。！？]+$/u, "")} guaranteeing immortality.`,
+    citations: [judgePointer]
+  },
+  firstContractWithMaterial,
+  deepContext,
+  { checkedAt: "2026-07-08T00:00:00.000Z" }
+);
+
+assert.equal(
+  noClientHighCopyHallucinationReport.passed,
+  false,
+  "a no-client DeepRead fact must reject an unsupported tail after copied evidence"
+);
+
+let normalJudgeCalls = 0;
+const normalJudgeReport = await gateDeepReadParagraph(
+  {
+    id: "judge-normal",
+    kind: "fact",
+    text: judgeSupportedText,
+    citations: [judgePointer]
+  },
+  firstContractWithMaterial,
+  deepContext,
+  {
+    checkedAt: "2026-07-08T00:00:00.000Z",
+    client: {
+      async complete() {
+        normalJudgeCalls += 1;
+        return { content: JSON.stringify({ passed: true, issues: [] }) };
+      }
+    }
+  }
+);
+
+assert.equal(normalJudgeCalls, 1, "a configured deep-read judge should be called after deterministic checks pass");
+assert.equal(normalJudgeReport.passed, true, "only an explicit passed:true judge decision should pass");
+
+const throwingJudgeReport = await gateDeepReadParagraph(
+  {
+    id: "judge-throws",
+    kind: "fact",
+    text: judgeSupportedText,
+    citations: [judgePointer]
+  },
+  firstContractWithMaterial,
+  deepContext,
+  {
+    checkedAt: "2026-07-08T00:00:00.000Z",
+    client: {
+      async complete() {
+        throw new Error("judge timeout fixture");
+      }
+    }
+  }
+);
+
+assert.equal(throwingJudgeReport.passed, false, "a configured judge exception must fail closed");
+assert.ok(
+  throwingJudgeReport.issues.some((issue) => /judge gate error.*timeout fixture/i.test(issue)),
+  "judge exceptions should remain observable as gate errors"
+);
+
+const invalidJudgeReport = await gateDeepReadParagraph(
+  {
+    id: "judge-invalid",
+    kind: "fact",
+    text: judgeSupportedText,
+    citations: [judgePointer]
+  },
+  firstContractWithMaterial,
+  deepContext,
+  {
+    checkedAt: "2026-07-08T00:00:00.000Z",
+    client: {
+      async complete() {
+        return { content: JSON.stringify({ passed: true }) };
+      }
+    }
+  }
+);
+
+assert.equal(invalidJudgeReport.passed, false, "an invalid judge structure must fail closed");
+assert.ok(
+  invalidJudgeReport.issues.some((issue) => /judge gate error.*invalid decision/i.test(issue)),
+  "invalid judge structures should be reported as gate errors"
+);
+
 const mlaPointer = { cardId: "deep-card-mla", sourceId: "deep-source-mla", chunkId: "deep-chunk-mla" };
 const mlaMaterial = {
   pointer: mlaPointer,
@@ -4424,14 +5611,13 @@ const downgradedFactChapter = await gateDeepReadChapter(
 );
 
 assert.equal(
-  downgradedFactChapter.chapter.paragraphs[0]?.kind,
-  "synthesis",
-  "deep-read gate should downgrade a cited fact paragraph with only proper-noun literal failure to synthesis"
+  downgradedFactChapter.chapter.status,
+  "gap",
+  "deep-read should fail closed when an unsupported proper noun is the chapter's only fact"
 );
-assert.deepEqual(
-  downgradedFactChapter.chapter.paragraphs[0]?.citations,
-  [firstContractWithMaterial.materialPointers[0]],
-  "deep-read fact-to-synthesis downgrade should retain citations"
+assert.ok(
+  downgradedFactChapter.chapter.paragraphs.every((paragraph) => !paragraph.text.includes("BetaSearch")),
+  "an unsupported proper noun must not be laundered from fact into synthesis"
 );
 // Strict numeric literals apply to synthesis prose too: a digit must not dodge
 // the gate by riding in a synthesis paragraph.
@@ -4479,7 +5665,7 @@ const synthesisNumberGrounded = await gateDeepReadParagraph(
   {
     id: "synthesis-number-grounded",
     kind: "synthesis",
-    text: "Read together, retrieval uses 3 steps in 2024.",
+    text: "Retrieval uses 3 steps in 2024.",
     citations: [threeStepsPointer]
   },
   firstContractWithMaterial,
@@ -4495,8 +5681,12 @@ assert.equal(
 
 assert.equal(
   downgradedFactChapter.deletedParagraphLog.length,
-  0,
-  "deep-read fact-to-synthesis downgrade should not log the retained paragraph as deleted"
+  1,
+  "deep-read should audit the removed unsupported proper-noun paragraph"
+);
+assert.ok(
+  downgradedFactChapter.deletedParagraphLog[0].reasons.some((reason) => /proper-noun tokens absent/.test(reason)),
+  "the deletion audit should name the unsupported proper-noun failure"
 );
 
 const degradedChapter = await gateDeepReadChapter(

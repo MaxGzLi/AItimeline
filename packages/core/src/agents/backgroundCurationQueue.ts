@@ -371,10 +371,12 @@ async function runSameSourceFollowupJob(
   plan.input.skipQualityGate = true;
 
   if (fallbackReason) {
+    // System-context sentence with failure detail: mark beyond-source so the
+    // grounding gate does not treat it as a source-backed claim.
     plan.input.recommendedBecause =
       handlers.contentLanguage === "en"
-        ? `No better source was found, so this same-source follow-up was generated after "${seedPost.title}". ${fallbackReason}`
-        : `没找到更好的来源,所以先基于《${seedPost.title}》生成同源跟进卡。${fallbackReason}`;
+        ? `[beyond source] No better source was found, so this same-source follow-up was generated after "${seedPost.title}". ${fallbackReason}`
+        : `[超出来源] 没找到更好的来源,所以先基于《${seedPost.title}》生成同源跟进卡。${fallbackReason}`;
   }
 
   const sourceImport = await handlers.sourceImportWorker.run(plan.input);

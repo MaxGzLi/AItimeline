@@ -1346,8 +1346,14 @@ function prepareSourceImportResultForPersistence(
   const mergedSources: MergedSourceRecord[] = [];
   const acceptedImportPosts: KnowledgePost[] = [];
   const skippedPostIds = new Set<string>();
+  const validationRejectedPostIds = new Set<string>();
 
-  for (const post of result.posts) {
+  for (const [index, post] of result.posts.entries()) {
+    if (!shouldPersistImportedPost(result, post, index)) {
+      validationRejectedPostIds.add(post.id);
+      continue;
+    }
+
     const duplicate = findNearDuplicatePost(post, Array.from(postsById.values()));
 
     if (duplicate) {
@@ -1374,14 +1380,21 @@ function prepareSourceImportResultForPersistence(
     acceptedImportPosts.push(post);
   }
 
-  if (skippedPostIds.size) {
+  const removedPostIds = new Set([...skippedPostIds, ...validationRejectedPostIds]);
+
+  if (removedPostIds.size) {
     result.posts = acceptedImportPosts;
-    result.validation = result.validation.filter((record) => !record.postId || !skippedPostIds.has(record.postId));
+
+    // Near-duplicate cards are represented by the merge record, while failed validation must
+    // remain in the ledger for audit even though its post is refused.
+    if (skippedPostIds.size && Array.isArray(result.validation)) {
+      result.validation = result.validation.filter((record) => !record.postId || !skippedPostIds.has(record.postId));
+    }
 
     if (result.harnessRun) {
       result.harnessRun = {
         ...result.harnessRun,
-        outputPostIds: result.harnessRun.outputPostIds.filter((postId) => !skippedPostIds.has(postId)),
+        outputPostIds: result.harnessRun.outputPostIds.filter((postId) => !removedPostIds.has(postId)),
         validation: result.harnessRun.validation.filter(
           (record) => !record.postId || !skippedPostIds.has(record.postId)
         )
@@ -1393,6 +1406,71 @@ function prepareSourceImportResultForPersistence(
     postsToSave: Array.from(postsToSaveById.values()),
     mergedSources
   };
+}
+
+function shouldPersistImportedPost(
+  result: SourceImportWorkerResult,
+  post: KnowledgePost,
+  index: number
+): boolean {
+  if (result.importRecord.status === "failed" || result.harnessRun?.status === "failed") {
+    return false;
+  }
+
+  if (result.posts.filter((candidate) => candidate.id === post.id).length !== 1) {
+    return false;
+  }
+
+  const resultValidation = Array.isArray(result.validation) ? result.validation : [];
+  const runValidation = Array.isArray(result.harnessRun?.validation) ? result.harnessRun.validation : [];
+
+  // Non-harness imports (for example local notes) predate validation records and remain valid.
+  // Once a harness run or any validation is present, missing validation fails closed.
+  if (!resultValidation.length && !runValidation.length) {
+    return !result.harnessRun;
+  }
+
+  const resultMatches = findPersistenceValidation(resultValidation, result.posts, post.id, index);
+
+  if (!result.harnessRun) {
+    return isAcceptedPersistenceValidation(resultMatches);
+  }
+
+  const outputIdCount = result.harnessRun.outputPostIds.filter((postId) => postId === post.id).length;
+  const runMatches = findPersistenceValidation(runValidation, result.posts, post.id, index);
+
+  return (
+    outputIdCount === 1 &&
+    isAcceptedPersistenceValidation(resultMatches) &&
+    isAcceptedPersistenceValidation(runMatches)
+  );
+}
+
+function findPersistenceValidation(
+  validation: readonly HarnessValidationResult[],
+  posts: readonly KnowledgePost[],
+  postId: string,
+  index: number
+): HarnessValidationResult[] {
+  const globalRecords = validation.filter((record) => !record.postId);
+  const idMatches = validation.filter((record) => record.postId === postId);
+
+  if (idMatches.length) {
+    return [...globalRecords, ...idMatches];
+  }
+
+  const indexMatch = validation.length === posts.length ? validation[index] : undefined;
+
+  return indexMatch ? [...globalRecords, indexMatch] : globalRecords;
+}
+
+function isAcceptedPersistenceValidation(validation: readonly HarnessValidationResult[]): boolean {
+  return (
+    validation.length > 0 &&
+    validation.every(
+      (record) => record.valid && !record.issues.some((issue) => issue.severity === "error")
+    )
+  );
 }
 
 function findNearDuplicatePost(
