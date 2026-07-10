@@ -1,11 +1,16 @@
 import type { InteractionSignal, KnowledgeCard } from "../types.js";
 import type { DismissedPostRecord } from "../storage/persistenceStore.js";
+import {
+  coalesceInteractionSignals,
+  type InteractionSignalInput
+} from "../interaction/coalesceInteractionSignals.js";
 
 export interface TimelineLifecycleFilterInput {
   posts: KnowledgeCard[];
-  interactionSignals?: InteractionSignal[];
+  interactionSignals?: InteractionSignalInput[];
   dismissedPosts?: DismissedPostRecord[];
   now?: string | Date;
+  timeZone?: string;
   dueReviewPostIds?: string[];
   /** 已复习、未到下次 dueAt 的休眠卡:到期前不进推荐流。 */
   restingReviewPostIds?: string[];
@@ -27,7 +32,7 @@ export function filterTimelineLifecycle(input: TimelineLifecycleFilterInput): Kn
   const dismissedPostIds = getTimelineDismissedPostIds(input.dismissedPosts ?? [], now);
   const dueReviewPostIds = new Set(input.dueReviewPostIds ?? []);
   const restingReviewPostIds = new Set(input.restingReviewPostIds ?? []);
-  const statsByPostId = summarizeLifecycleSignals(input.interactionSignals ?? []);
+  const statsByPostId = summarizeLifecycleSignals(input.interactionSignals ?? [], input.timeZone);
 
   return input.posts.filter((post) => {
     if (dismissedPostIds.has(post.id) || restingReviewPostIds.has(post.id)) {
@@ -93,10 +98,13 @@ export function getSoftDismissalReturnAt(record: DismissedPostRecord): Date {
   return new Date(normalizeDate(record.dismissedAt).getTime() + softDismissalDurationDays * 24 * 60 * 60 * 1000);
 }
 
-export function summarizeLifecycleSignals(signals: InteractionSignal[]): Map<string, TimelineLifecycleStats> {
+export function summarizeLifecycleSignals(
+  signals: readonly InteractionSignalInput[],
+  timeZone?: string
+): Map<string, TimelineLifecycleStats> {
   const statsByPostId = new Map<string, TimelineLifecycleStats>();
 
-  for (const signal of signals) {
+  for (const signal of coalesceInteractionSignals(signals, timeZone)) {
     const current =
       statsByPostId.get(signal.postId) ??
       ({
@@ -130,10 +138,13 @@ export function summarizeLifecycleSignals(signals: InteractionSignal[]): Map<str
   return statsByPostId;
 }
 
-export function countSeenReadSignalsByPostId(signals: InteractionSignal[]): Record<string, number> {
+export function countSeenReadSignalsByPostId(
+  signals: readonly InteractionSignalInput[],
+  timeZone?: string
+): Record<string, number> {
   const counts: Record<string, number> = {};
 
-  for (const signal of signals) {
+  for (const signal of coalesceInteractionSignals(signals, timeZone)) {
     if (isReadSignal(signal)) {
       counts[signal.postId] = (counts[signal.postId] ?? 0) + 1;
     }

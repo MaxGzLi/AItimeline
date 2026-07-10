@@ -19,8 +19,9 @@ export type UserMemoryEditKind =
   | "replace"
   | "clear"
   | "set"
-  | "auto_mastery_promotion"
-  | "auto_mastery_blacklist";
+  | "auto_mastery_promotion";
+
+export type UserMemoryEditEventKind = UserMemoryEditKind | "auto_mastery_blacklist";
 
 export interface UserMemoryEdit {
   id?: string;
@@ -34,7 +35,7 @@ export interface UserMemoryEdit {
 
 export interface UserMemoryEditEvent {
   id: string;
-  kind: UserMemoryEditKind;
+  kind: UserMemoryEditEventKind;
   field: UserMemoryEdit["field"];
   previousValue?: string | string[];
   nextValue?: string | string[];

@@ -10,6 +10,15 @@ export interface ConceptAliasOptions {
   conceptAliases?: ConceptAliasRecord[];
 }
 
+interface ConceptAliasResolutionEdge {
+  alias: string;
+  aliasKey: string;
+  canonical: string;
+  canonicalKey: string;
+  decidedBy: ConceptAliasRecord["decidedBy"];
+  decidedAt: string;
+}
+
 const fullWidthAsciiStart = 0xff01;
 const fullWidthAsciiEnd = 0xff5e;
 const fullWidthOffset = 0xfee0;
@@ -59,11 +68,48 @@ export function createConceptAliasResolver(
       if (!labelByKey.has(aliasKey)) {
         labelByKey.set(aliasKey, aliasLabel);
       }
+    }
+  }
 
-      if (!parentKeyByAliasKey.has(aliasKey)) {
-        parentKeyByAliasKey.set(aliasKey, canonicalKey);
+  // Resolve from the caller's raw edges as well as the compacted public record view:
+  // explicit user decisions beat automatic ones, then the newest decision wins with
+  // stable text ties.
+  const edgeByAliasKey = new Map<string, ConceptAliasResolutionEdge>();
+
+  for (const record of aliases) {
+    const canonical = normalizeConceptLabel(record.canonical);
+    const canonicalKey = normalizeConceptKey(canonical);
+
+    if (!canonicalKey) {
+      continue;
+    }
+
+    for (const alias of record.aliases) {
+      const aliasLabel = normalizeConceptLabel(alias);
+      const aliasKey = normalizeConceptKey(aliasLabel);
+
+      if (!aliasKey || aliasKey === canonicalKey) {
+        continue;
+      }
+
+      const edge: ConceptAliasResolutionEdge = {
+        alias: aliasLabel,
+        aliasKey,
+        canonical,
+        canonicalKey,
+        decidedBy: record.decidedBy,
+        decidedAt: record.decidedAt
+      };
+      const existing = edgeByAliasKey.get(aliasKey);
+
+      if (!existing || compareConceptAliasResolutionEdges(edge, existing) < 0) {
+        edgeByAliasKey.set(aliasKey, edge);
       }
     }
+  }
+
+  for (const edge of edgeByAliasKey.values()) {
+    parentKeyByAliasKey.set(edge.aliasKey, edge.canonicalKey);
   }
 
   const resolve = (name: string): string => {
@@ -155,7 +201,11 @@ export function createAutomaticConceptAliases(
 }
 
 export function normalizeConceptAliases(aliases: readonly ConceptAliasRecord[]): ConceptAliasRecord[] {
-  const byCanonical = new Map<string, ConceptAliasRecord>();
+  const edgeByAliasKey = new Map<string, ConceptAliasResolutionEdge>();
+  const sameKeyAliasesByCanonical = new Map<
+    string,
+    { canonical: string; aliases: Map<string, string>; decidedBy: ConceptAliasRecord["decidedBy"]; decidedAt: string }
+  >();
 
   for (const record of aliases) {
     const canonical = normalizeConceptLabel(record.canonical);
@@ -165,33 +215,71 @@ export function normalizeConceptAliases(aliases: readonly ConceptAliasRecord[]):
       continue;
     }
 
-    const existing = byCanonical.get(canonicalKey);
-    const aliasSet = new Map<string, string>();
-
-    for (const alias of existing?.aliases ?? []) {
-      aliasSet.set(normalizeConceptLabel(alias), normalizeConceptLabel(alias));
-    }
-
     for (const alias of record.aliases) {
       const label = normalizeConceptLabel(alias);
-      const key = normalizeConceptKey(label);
+      const aliasKey = normalizeConceptKey(label);
 
-      if (key && label !== canonical) {
-        aliasSet.set(label, label);
+      if (!aliasKey) {
+        continue;
+      }
+
+      if (aliasKey === canonicalKey) {
+        if (label !== canonical) {
+          const existing = sameKeyAliasesByCanonical.get(canonicalKey);
+          const aliasMap = existing?.aliases ?? new Map<string, string>();
+          aliasMap.set(label, label);
+          sameKeyAliasesByCanonical.set(canonicalKey, {
+            canonical: existing?.canonical ?? canonical,
+            aliases: aliasMap,
+            decidedBy: existing?.decidedBy === "user" || record.decidedBy === "user" ? "user" : "auto",
+            decidedAt: existing && existing.decidedAt > record.decidedAt ? existing.decidedAt : record.decidedAt
+          });
+        }
+
+        continue;
+      }
+
+      const edge: ConceptAliasResolutionEdge = {
+        alias: label,
+        aliasKey,
+        canonical,
+        canonicalKey,
+        decidedBy: record.decidedBy,
+        decidedAt: record.decidedAt
+      };
+      const existing = edgeByAliasKey.get(aliasKey);
+
+      if (!existing || compareConceptAliasResolutionEdges(edge, existing) < 0) {
+        edgeByAliasKey.set(aliasKey, edge);
       }
     }
+  }
 
-    byCanonical.set(canonicalKey, {
-      canonical: existing?.canonical ?? canonical,
-      aliases: Array.from(aliasSet.values()).sort((left, right) => left.localeCompare(right)),
-      decidedBy: record.decidedBy === "user" || existing?.decidedBy === "user" ? "user" : "auto",
-      decidedAt: existing?.decidedAt && existing.decidedAt < record.decidedAt ? existing.decidedAt : record.decidedAt
+  const byCanonical = new Map<
+    string,
+    { canonical: string; aliases: Map<string, string>; decidedBy: ConceptAliasRecord["decidedBy"]; decidedAt: string }
+  >(sameKeyAliasesByCanonical);
+
+  for (const edge of edgeByAliasKey.values()) {
+    const existing = byCanonical.get(edge.canonicalKey);
+    const aliasMap = existing?.aliases ?? new Map<string, string>();
+    aliasMap.set(edge.aliasKey, edge.alias);
+    byCanonical.set(edge.canonicalKey, {
+      canonical: existing?.canonical ?? edge.canonical,
+      aliases: aliasMap,
+      decidedBy: existing?.decidedBy === "user" || edge.decidedBy === "user" ? "user" : "auto",
+      decidedAt: existing && existing.decidedAt > edge.decidedAt ? existing.decidedAt : edge.decidedAt
     });
   }
 
   return Array.from(byCanonical.values())
-    .filter((record) => record.aliases.length > 0)
-    .sort((left, right) => left.canonical.localeCompare(right.canonical));
+    .map((record) => ({
+      canonical: record.canonical,
+      aliases: Array.from(record.aliases.values()).sort((left, right) => left.localeCompare(right)),
+      decidedBy: record.decidedBy,
+      decidedAt: record.decidedAt
+    }))
+    .sort((left, right) => normalizeConceptKey(left.canonical).localeCompare(normalizeConceptKey(right.canonical)));
 }
 
 export function addConceptAliasDecision(
@@ -270,6 +358,29 @@ function chooseCanonicalLabel(labels: string[]): string {
 
     return left.localeCompare(right);
   })[0];
+}
+
+function compareConceptAliasResolutionEdges(
+  left: ConceptAliasResolutionEdge,
+  right: ConceptAliasResolutionEdge
+): number {
+  if (left.decidedBy !== right.decidedBy) {
+    return left.decidedBy === "user" ? -1 : 1;
+  }
+
+  const decidedAtDelta = compareText(right.decidedAt, left.decidedAt);
+
+  if (decidedAtDelta !== 0) {
+    return decidedAtDelta;
+  }
+
+  const canonicalKeyDelta = compareText(left.canonicalKey, right.canonicalKey);
+
+  return canonicalKeyDelta || compareText(left.canonical, right.canonical) || compareText(left.alias, right.alias);
+}
+
+function compareText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function toHalfWidth(value: string): string {

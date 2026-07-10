@@ -27,6 +27,7 @@ import type {
 } from "../types.js";
 import type { UserMemoryEditEvent } from "../memory/userMemoryControls.js";
 import { parseContentLanguage, type ContentLanguage } from "../harness/contentLanguage.js";
+import { normalizeConceptAliases, normalizeConceptKey } from "../graph/conceptAliases.js";
 import type { WeeklyRecapRecord } from "../recap/weeklyRecap.js";
 
 export interface PersistenceStorageAdapter {
@@ -696,7 +697,7 @@ function normalizeConceptAliasesInput(value: unknown): ConceptAliasRecord[] {
     return [];
   }
 
-  const byCanonical = new Map<string, ConceptAliasRecord>();
+  const records: ConceptAliasRecord[] = [];
 
   for (const record of value) {
     if (
@@ -709,47 +710,15 @@ function normalizeConceptAliasesInput(value: unknown): ConceptAliasRecord[] {
       continue;
     }
 
-    const canonical = normalizeConceptText(record.canonical);
-    const canonicalKey = normalizeConceptKey(canonical);
-
-    if (!canonicalKey) {
-      continue;
-    }
-
-    const existing = byCanonical.get(canonicalKey);
-    const aliases = new Map<string, string>();
-
-    for (const alias of existing?.aliases ?? []) {
-      aliases.set(alias, alias);
-    }
-
-    for (const alias of record.aliases) {
-      if (typeof alias !== "string") {
-        continue;
-      }
-
-      const label = normalizeConceptText(alias);
-      const key = normalizeConceptKey(label);
-
-      if (key && label !== canonical) {
-        aliases.set(label, label);
-      }
-    }
-
-    byCanonical.set(canonicalKey, {
-      canonical: existing?.canonical ?? canonical,
-      aliases: Array.from(aliases.values()).sort((left, right) => left.localeCompare(right)),
-      decidedBy: existing?.decidedBy === "user" || record.decidedBy === "user" ? "user" : "auto",
-      decidedAt:
-        existing?.decidedAt && existing.decidedAt.localeCompare(record.decidedAt) < 0
-          ? existing.decidedAt
-          : record.decidedAt
+    records.push({
+      canonical: record.canonical,
+      aliases: record.aliases.filter((alias): alias is string => typeof alias === "string"),
+      decidedBy: record.decidedBy,
+      decidedAt: record.decidedAt
     });
   }
 
-  return Array.from(byCanonical.values())
-    .filter((record) => record.aliases.length > 0)
-    .sort((left, right) => left.canonical.localeCompare(right.canonical));
+  return normalizeConceptAliases(records);
 }
 
 function normalizeConceptMergeSuggestions(value: unknown): ConceptMergeSuggestion[] {
@@ -1554,10 +1523,6 @@ function isKnowledgeEdgeRelation(value: unknown): value is ConceptBrief["adjacen
 
 function normalizeConceptText(value: string): string {
   return value.trim();
-}
-
-function normalizeConceptKey(value: string): string {
-  return normalizeConceptText(value).toLowerCase();
 }
 
 function createValidationRecords(

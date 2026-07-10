@@ -7,6 +7,7 @@ import type {
   KnowledgeGraphEdge,
   KnowledgePost
 } from "../types.js";
+import { getDayKey } from "../time/calendarKeys.js";
 import {
   createAutomaticConceptAliases,
   createConceptAliasResolver,
@@ -27,6 +28,7 @@ export interface ConnectionNoteGenerationInput {
   conceptAliases?: ConceptAliasRecord[];
   now?: string | Date;
   dailyLimit?: number;
+  timeZone?: string;
   contentLanguage?: "zh" | "en";
 }
 
@@ -53,9 +55,10 @@ const defaultDailyLimit = 2;
 
 export function createConnectionNoteForImport(input: ConnectionNoteGenerationInput): KnowledgePost | null {
   const now = normalizeDate(input.now ?? new Date());
+  const todayKey = getDayKey(now, input.timeZone);
   const dailyLimit = input.dailyLimit ?? defaultDailyLimit;
   const existingNotesToday = input.existingPosts.filter(
-    (post) => post.kind === "connection_note" && isSameUtcDay(post.createdAt, now)
+    (post) => post.kind === "connection_note" && getDayKey(post.createdAt, input.timeZone) === todayKey
   ).length;
 
   if (existingNotesToday >= dailyLimit) {
@@ -395,10 +398,6 @@ function daysBetween(value: string, now: Date): number {
   const days = Math.floor((now.getTime() - then.getTime()) / (24 * 60 * 60 * 1000));
 
   return Number.isFinite(days) ? Math.max(0, days) : 0;
-}
-
-function isSameUtcDay(value: string, date: Date): boolean {
-  return normalizeDate(value).toISOString().slice(0, 10) === date.toISOString().slice(0, 10);
 }
 
 function normalizeDate(value: string | Date): Date {

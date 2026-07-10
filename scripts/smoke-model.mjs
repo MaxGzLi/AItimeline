@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 
+process.env.AITIMELINE_TIMEZONE = "UTC";
+
 const { transformArticleUrl } = await import("../packages/core/dist/transform/articleImport.js");
 const { transformYouTubeUrl } = await import("../packages/core/dist/transform/youtubeImport.js");
 const { agentHarnessSystemPrompt } = await import("../packages/core/dist/harness/systemPrompt.js");
