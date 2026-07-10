@@ -1,7 +1,6 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "composite": true,
     "declaration": true,
     "declarationMap": true,
     "emitDeclarationOnly": false,
@@ -11,4 +10,3 @@
   },
   "include": ["src"]
 }
-

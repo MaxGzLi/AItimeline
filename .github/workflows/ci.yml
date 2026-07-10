@@ -18,6 +18,21 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run build
+      - name: Pack-consumer smoke
+        run: |
+          pack_dir="$(mktemp -d)"
+          consumer_dir="$(mktemp -d)"
+          trap 'rm -rf "$pack_dir" "$consumer_dir"' EXIT
+
+          rm -rf packages/core/dist
+          npm pack -w @aitimeline/core --pack-destination "$pack_dir"
+
+          (
+            cd "$consumer_dir"
+            npm init -y >/dev/null
+            npm install "$pack_dir"/*.tgz
+            node --input-type=module -e "const m = await import('@aitimeline/core'); if (typeof m.createSourceRegistry !== 'function') throw new Error('missing export'); console.log('pack-consumer import passed');"
+          )
       - run: npm run smoke:core
       - run: npm run smoke:api
       - run: npm run smoke:model
