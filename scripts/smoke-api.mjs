@@ -2643,7 +2643,7 @@ try {
     );
     assert.equal(
       legacyFallbackTimeline.posts[0]?.recommendedBecause,
-      "No better source was found, so this same-source follow-up was generated.",
+      "[beyond source] No better source was found, so this same-source follow-up was generated.",
       "historical same-source fallback posts should expose only a stable reason"
     );
   } finally {
@@ -2758,7 +2758,7 @@ try {
       (post) =>
         !fallbackLeakOriginalPostIds.has(post.id) &&
         typeof post.recommendedBecause === "string" &&
-        post.recommendedBecause === "没找到可用的新来源,所以生成了同源跟进卡。"
+        post.recommendedBecause === "[超出来源] 没找到可用的新来源,所以生成了同源跟进卡。"
     );
     const fallbackPayload = JSON.stringify({ fallbackLeakBatch, fallbackLeakSnapshot });
 

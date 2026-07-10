@@ -5274,17 +5274,20 @@ function sanitizePostForResponse(post) {
     return post;
   }
 
-  if (post.recommendedBecause.startsWith("No better source was found, so this same-source follow-up was generated after")) {
+  // Legacy records predate the beyond-source marker, so match with it stripped.
+  const unmarkedReason = post.recommendedBecause.replace(/^\s*\[(?:beyond source|超出来源)\]\s*/i, "");
+
+  if (unmarkedReason.startsWith("No better source was found, so this same-source follow-up was generated after")) {
     return {
       ...post,
-      recommendedBecause: "No better source was found, so this same-source follow-up was generated."
+      recommendedBecause: "[beyond source] No better source was found, so this same-source follow-up was generated."
     };
   }
 
-  if (post.recommendedBecause.startsWith("没找到更好的来源,所以先基于《")) {
+  if (unmarkedReason.startsWith("没找到更好的来源,所以先基于《")) {
     return {
       ...post,
-      recommendedBecause: "没找到可用的新来源,所以生成了同源跟进卡。"
+      recommendedBecause: "[超出来源] 没找到可用的新来源,所以生成了同源跟进卡。"
     };
   }
 
