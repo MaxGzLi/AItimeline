@@ -31,7 +31,8 @@
   --x-hover: rgba(231, 233, 234, 0.06);
   --x-line: #2f3336;
   --x-ink: #e7e9ea;
-  --x-muted: #71767b;
+  /* 纯黑底上 71767b 的 12-13px 次级文字贴近可读下限,取 X dim 模式的 muted 提一档 */
+  --x-muted: #8b98a5;
   --x-warn: #ffd400;
   --x-red: #f4212e;
   --x-btn-ink: #0f1419;
@@ -470,7 +471,7 @@ body:has(.x-frame) {
 .x-post-main { flex: 1; min-width: 0; }
 .x-ctx {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 12px;
   padding: 10px 16px 0;
   font-size: 13px;
@@ -483,6 +484,42 @@ body:has(.x-frame) {
   display: flex;
   justify-content: flex-end;
   flex: none;
+}
+.x-ctxmain {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.x-ctxline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.x-beyond {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--x-warn);
+  border: 1px solid currentcolor;
+  border-radius: 999px;
+  padding: 0 7px;
+  line-height: 16px;
+  flex: none;
+}
+.x-ctxwhy {
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--x-blue);
+  cursor: pointer;
+}
+.x-ctxwhy:hover { text-decoration: underline; }
+.x-ctxdetail {
+  font-weight: 400;
+  color: var(--x-muted);
 }
 .x-head {
   display: flex;
@@ -707,6 +744,24 @@ body:has(.x-frame) {
   font-size: 14px;
   border-bottom: 1px solid var(--x-line);
 }
+.x-empty-title {
+  margin: 0 0 4px;
+  color: var(--x-ink);
+  font-size: 17px;
+  font-weight: 800;
+}
+.x-empty-sub { margin: 0 0 16px; }
+.x-empty-cta {
+  border: 1px solid var(--x-line);
+  background: none;
+  border-radius: 999px;
+  padding: 7px 16px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--x-blue);
+  cursor: pointer;
+}
+.x-empty-cta:hover { background: var(--x-hover); }
 /* X 式「显示 N 帖子」按钮:发帖框下、信息流上的整行入口 */
 .x-newpill {
   display: block;

@@ -2657,6 +2657,7 @@ export function App() {
         {activeView === "notifications" ? (
           <NotificationsView
             notifications={notifications}
+            onGoTimeline={() => setActiveView("timeline")}
             onOpenCardId={(cardId) => {
               handleOpenCardId(cardId);
               setActiveView("timeline");

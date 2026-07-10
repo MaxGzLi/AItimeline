@@ -4,11 +4,13 @@ import type { AgentNotification } from "../lib/types";
 
 export function NotificationsView({
   notifications,
+  onGoTimeline,
   onOpenCardId,
   onSelect,
   selectedId
 }: {
   notifications: AgentNotification[];
+  onGoTimeline: () => void;
   onOpenCardId: (cardId: string) => void;
   onSelect: (notification: AgentNotification) => void;
   selectedId: string | null;
@@ -16,7 +18,15 @@ export function NotificationsView({
   const selected = notifications.find((notification) => notification.id === selectedId) ?? notifications[0];
 
   if (!notifications.length) {
-    return <p className="x-empty">{t("notifications.empty")}</p>;
+    return (
+      <div className="x-empty">
+        <p className="x-empty-title">{t("notifications.empty")}</p>
+        <p className="x-empty-sub">{t("notifications.emptyHint")}</p>
+        <button className="x-empty-cta" onClick={onGoTimeline} type="button">
+          {t("notifications.emptyCta")}
+        </button>
+      </div>
+    );
   }
 
   return (
