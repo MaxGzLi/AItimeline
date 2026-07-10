@@ -22,6 +22,38 @@ import { PostReplyThread } from "./PostReplyThread";
 import { ShareCardModal } from "./ShareCardModal";
 import type { WikilinkAutocompleteCandidate } from "./WikilinkAutocomplete";
 
+type RecommendReasonInfo = {
+  label: string;
+  beyondSource: boolean;
+  detail: string | null;
+};
+
+// 持久化的推荐理由是生成侧的长句(含降级说明/行为信号),按已知模板归成收益导向短理由;
+// 原句收进可展开的「为什么推荐」,超出来源标记转为徽章而不是裸前缀。
+function summarizeRecommendReason(reason: string | undefined, concept: string): RecommendReasonInfo | null {
+  if (!reason) {
+    return null;
+  }
+
+  const text = reason.replace(/^\s*\[(?:超出来源|beyond source)\]\s*/i, "");
+  const beyondSource = text !== reason;
+  const rules: Array<{ pattern: RegExp; key: string }> = [
+    { pattern: /没找到可用的新来源|同源跟进/, key: "post.reason.sameSource" },
+    { pattern: /你提了问题/, key: "post.reason.question" },
+    { pattern: /停留了很久|展开了讨论串|表现出了兴趣|跟进卡片|兴趣 [0-9.]+|理解 [0-9.]+/, key: "post.reason.followup" },
+    { pattern: /你导入了这篇文章/, key: "post.reason.imported" },
+    { pattern: /点了深入/, key: "post.reason.deepDive" },
+    { pattern: /background curation|背景筛选|背景策展|通过搜索「/i, key: "post.reason.curated" }
+  ];
+  const matched = rules.find((rule) => rule.pattern.test(text));
+
+  if (!matched) {
+    return { label: text, beyondSource, detail: null };
+  }
+
+  return { label: t(matched.key, { concept }), beyondSource, detail: text };
+}
+
 export function PostView({
   card,
   cards,
@@ -78,7 +110,9 @@ export function PostView({
   const [threadOpen, setThreadOpen] = useState(false);
   const [bodyOverflows, setBodyOverflows] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
+  const [reasonOpen, setReasonOpen] = useState(false);
   const primaryConcept = card.concepts[0] ?? t("common.concept");
+  const reasonInfo = summarizeRecommendReason(card.recommendedBecause, primaryConcept);
   const source = card.sources[0];
   const isUserNote = source?.type === "user_note";
   const topConnection = connections[0];
@@ -307,12 +341,28 @@ export function PostView({
           </span>
           {t("post.review")}
         </div>
-      ) : card.recommendedBecause && !isUserNote ? (
+      ) : reasonInfo && !isUserNote ? (
         <div className="x-ctx">
           <span className="x-ctxicon">
             <Plus size={15} />
           </span>
-          {t("post.recommend", { reason: card.recommendedBecause })}
+          <span className="x-ctxmain">
+            <span className="x-ctxline">
+              {t("post.recommend", { reason: reasonInfo.label })}
+              {reasonInfo.beyondSource ? <span className="x-beyond">{t("post.beyondSource")}</span> : null}
+              {reasonInfo.detail ? (
+                <button
+                  aria-expanded={reasonOpen}
+                  className="x-ctxwhy"
+                  onClick={() => setReasonOpen((open) => !open)}
+                  type="button"
+                >
+                  {t("post.reasonWhy")}
+                </button>
+              ) : null}
+            </span>
+            {reasonOpen && reasonInfo.detail ? <span className="x-ctxdetail">{reasonInfo.detail}</span> : null}
+          </span>
         </div>
       ) : null}
       <article className={`x-post${isFocused ? " focused" : ""}`} ref={postRef}>

@@ -135,6 +135,7 @@ export function ContextRail({
               <span style={{ background: "var(--x-repost)", width: `${(boundary.learning.length / zoneTotal) * 100}%` }} />
               <span style={{ background: "var(--x-warn)", width: `${(boundary.frontier.length / zoneTotal) * 100}%` }} />
             </div>
+            <p className="x-mrnote">{t("rail.boundary.note")}</p>
             <button className="x-mrow" onClick={onOpenGraph} type="button">
               <span className="x-mmain">
                 <p className="x-mname">{t("graph.zone.inside.title")}</p>
