@@ -1464,13 +1464,24 @@ body:has(.x-frame) {
   font-family: inherit;
 }
 .x-grade:hover { background: var(--x-hover); }
+.x-grade:disabled { opacity: 0.5; cursor: default; }
+.x-grade:disabled:hover { background: none; }
 .x-grade.good { color: var(--x-repost); border-color: var(--x-repost); }
 .x-grade.mid { color: var(--x-warn); border-color: var(--x-warn); }
+.x-reviewfeedback { font-size: 13px; color: var(--x-muted); margin: 0 0 14px; }
+.x-reviewfeedback.error {
+  color: var(--x-red);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.x-reviewfeedback .x-retry { font-size: 13px; padding: 4px 14px; }
 .x-reviewdone {
   font-size: 15px;
   font-weight: 700;
   color: var(--x-repost);
 }
+.x-reviewsummary { font-size: 13.5px; color: var(--x-muted); margin: 10px 0 0; }
 
 /* ---------- 智能体（机器房）与设置 ---------- */
 .x-mr { border-bottom: 1px solid var(--x-line); padding-bottom: 12px; }

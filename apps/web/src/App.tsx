@@ -23,7 +23,6 @@ import {
   type KnowledgeChunk,
   type LearningFeedback,
   type RankedKnowledgeCard,
-  type ReviewItem,
   type SourceAsset,
   type SourceImport,
   type TimelineBlockTopic,
@@ -66,7 +65,7 @@ import { DiscoverView } from "./views/DiscoverView";
 import { AgentView } from "./views/AgentView";
 import { GraphView } from "./views/GraphView";
 import { NotificationsView } from "./views/NotificationsView";
-import { ReviewView } from "./views/ReviewView";
+import { ReviewView, type ReviewQueueEntry } from "./views/ReviewView";
 import { SettingsView } from "./views/SettingsView";
 import { apiBaseUrl, apiRequest, isYouTubeUrl, sampleSourceUrl } from "./lib/api";
 import { buildGroundedAnswer, formatAskAnswer, getTopicId, scrollMotion, slugConcept } from "./lib/format";
@@ -103,6 +102,7 @@ import type {
   ApiGoalsResponse,
   ApiImportResponse,
   ApiNotificationsResponse,
+  ApiReviewCompleteResponse,
   ApiReviewDueResponse,
   ApiSettings,
   ApiSnapshot,
@@ -123,6 +123,7 @@ import type {
   MemoryAction,
   NoteApiResponse,
   ReviewDueItem,
+  ReviewGrade,
   SourceCandidateRecord,
   SupplyStatus,
   SubscriptionRecord,
@@ -810,14 +811,15 @@ export function App() {
     [linkedGraph, selectedCardId]
   );
   // The due-review queue comes directly from the server schedule.
-  const reviewQueue = useMemo<ReviewItem[]>(
+  const reviewQueue = useMemo<ReviewQueueEntry[]>(
     () =>
       reviewDueItems.map((item) => ({
         cardId: item.postId,
         concept: resolveConcept(reviewCardsById[item.postId]?.concepts[0] ?? item.postId, conceptAliases),
         dueAt: item.dueAt,
         intervalDays: item.intervalDays,
-        strength: 0
+        strength: 0,
+        prompt: item.reviewPrompt ?? null
       })),
     [conceptAliases, reviewDueItems, reviewCardsById]
   );
@@ -1979,23 +1981,30 @@ export function App() {
   }
 
   // Completing a review advances the server interval and hides the card until due.
-  async function completeReview(card: KnowledgeCard) {
-    try {
-      await apiRequest(`/api/review/${encodeURIComponent(card.id)}/complete`, {
+  // Throws on failure so the review view can offer a retry instead of faking success.
+  async function completeReview(
+    card: KnowledgeCard,
+    grade: ReviewGrade,
+    reviewEventId: string
+  ): Promise<ApiReviewCompleteResponse> {
+    const result = await apiRequest<ApiReviewCompleteResponse>(
+      `/api/review/${encodeURIComponent(card.id)}/complete`,
+      {
         method: "POST",
-        body: { reviewedAt: new Date().toISOString() }
-      });
-    } catch {
-      // Best effort; the next refresh reconciles with the server.
-    }
+        body: { reviewedAt: new Date().toISOString(), grade, reviewEventId }
+      }
+    );
 
-    await refreshFromApi({ silent: true, mode: "buffer" });
+    markLocallyRemoved(card.id);
+    void refreshFromApi({ silent: true, mode: "buffer" });
+    return result;
   }
 
   function handleReviewComplete(card: RankedKnowledgeCard) {
-    // Remove immediately, then advance the server review interval quietly.
-    markLocallyRemoved(card.id);
-    void completeReview(card);
+    // Timeline review chip has no grade UI yet; treat it as remembered.
+    void completeReview(card, "remembered", `${card.id}-${Date.now()}`).catch(() => {
+      // Best effort here; the review view is the graded, retryable path.
+    });
   }
 
   function handleShowPendingCards() {
@@ -2640,7 +2649,7 @@ export function App() {
         {activeView === "review" ? (
           <ReviewView
             cardsById={reviewCardsById}
-            onReviewed={handleReviewComplete}
+            onReviewed={completeReview}
             queue={reviewQueue}
           />
         ) : null}
