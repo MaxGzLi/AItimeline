@@ -10,7 +10,9 @@
   "scripts": {
     "dev": "npm run dev -w @aitimeline/web",
     "dev:api": "npm run dev -w @aitimeline/api",
+    "prebuild": "npm run build -w @aitimeline/core",
     "build": "npm run build --workspaces --if-present",
+    "pretypecheck": "npm run build -w @aitimeline/core",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "smoke:core": "npm run build -w @aitimeline/core && node scripts/smoke-core.mjs",
     "smoke:api": "npm run build -w @aitimeline/core && node scripts/smoke-api.mjs",
