@@ -87,7 +87,7 @@ export function createApiServer(options = {}) {
     () => createPersistentBackgroundCurationJobStore(createFileStorageAdapter(curationDataPath)),
     curationDataPath
   );
-  const sourceImportWorker = createConfiguredSourceImportWorker(process.env);
+  const sourceImportWorker = createSafeSourceImportWorker(createConfiguredSourceImportWorker(process.env));
   const importRunner = sourceImportWorker.runner;
   const askModelClient = createConfiguredAskModelClient(process.env);
   const deepReadModelClients = createConfiguredDeepReadModelClients(process.env);
@@ -102,6 +102,10 @@ export function createApiServer(options = {}) {
     if (request.method === "OPTIONS") {
       response.writeHead(204);
       response.end();
+      return;
+    }
+
+    if (rejectOversizedContentLength(request, response)) {
       return;
     }
 
@@ -138,7 +142,7 @@ export function createApiServer(options = {}) {
       }
 
       if (request.method === "GET" && url.pathname === "/api/snapshot") {
-        sendJson(response, 200, persistenceStore.getSnapshot());
+        sendJson(response, 200, sanitizeSnapshotForResponse(persistenceStore.getSnapshot()));
         return;
       }
 
@@ -164,7 +168,7 @@ export function createApiServer(options = {}) {
         const nextSnapshot = persistenceStore.saveNotifications([nextNotification], readAt);
 
         sendJson(response, 200, {
-          record: nextNotification,
+          record: sanitizeNotificationRecordForResponse(nextNotification),
           snapshotSummary: summarizeSnapshot(nextSnapshot)
         });
         return;
@@ -476,9 +480,16 @@ export function createApiServer(options = {}) {
         const now = url.searchParams.get("now") ?? new Date().toISOString();
         const snapshot = backfillLegacyReviewStates(persistenceStore, now);
         const hardDismissedPostIds = getHardDismissedPostIds(snapshot.dismissedPosts);
+        const postById = new Map(snapshot.posts.map((post) => [post.id, post]));
         const due = getDueReviewStates(snapshot.reviewStates, now)
           .filter((state) => !hardDismissedPostIds.has(state.postId))
-          .map(({ postId, intervalDays, dueAt }) => ({ postId, intervalDays, dueAt }));
+          .filter((state) => postById.has(state.postId))
+          .map(({ postId, intervalDays, dueAt }) => ({
+            postId,
+            intervalDays,
+            dueAt,
+            reviewPrompt: selectReviewPrompt(postById.get(postId), intervalDays)
+          }));
 
         sendJson(response, 200, { due });
         return;
@@ -489,7 +500,9 @@ export function createApiServer(options = {}) {
           url.pathname.replace(/^\/api\/review\//, "").replace(/\/complete$/, "")
         );
         const body = await readJsonBody(request);
-        const userId = typeof body.userId === "string" && body.userId.trim() ? body.userId : "local-user";
+        const userId = parseOptionalUserId(body.userId);
+        const grade = parseReviewGrade(body.grade);
+        const reviewEventId = parseOptionalIdempotencyKey(body.reviewEventId, "reviewEventId");
         const snapshot = persistenceStore.getSnapshot();
         const reviewState = snapshot.reviewStates.find((state) => state.postId === postId);
 
@@ -505,9 +518,31 @@ export function createApiServer(options = {}) {
           return;
         }
 
-        const reviewedAt = body.reviewedAt ?? body.now ?? new Date().toISOString();
-        const nextReviewState = advanceReviewState(reviewState, reviewedAt);
+        const reviewedAt = requireIsoDate(body.reviewedAt ?? body.now ?? new Date().toISOString(), "reviewedAt");
         const reviewedSignal = createReviewedInteractionSignal(post, reviewedAt);
+        const signalRecordId = reviewEventId
+          ? buildReviewEventRecordId(postId, reviewEventId)
+          : buildReviewCompletionRecordId(postId, reviewedAt);
+        const existingEvent = snapshot.interactionSignals.find((record) => record.id === signalRecordId);
+
+        if (existingEvent) {
+          const existingResult = existingEvent.reviewResult;
+          const currentReviewState = persistenceStore
+            .getSnapshot()
+            .reviewStates.find((state) => state.postId === postId) ?? reviewState;
+
+          sendJson(response, 200, {
+            reviewState: existingResult?.reviewState ?? currentReviewState,
+            nextDueAt: existingResult?.reviewState?.dueAt ?? currentReviewState.dueAt,
+            masteryPromotions: existingResult?.masteryPromotions ?? [],
+            learningGoalAchievements: existingResult?.learningGoalAchievements ?? [],
+            idempotentReplay: true,
+            snapshotSummary: summarizeSnapshot(persistenceStore.getSnapshot())
+          });
+          return;
+        }
+
+        const nextReviewState = createReviewStateForGrade(reviewState, reviewedAt, grade);
         const observedTopicState = deriveTopicState(reviewedSignal);
         const currentTopicState = snapshot.topicStates.find((record) => record.topicId === observedTopicState.topicId);
         const feedback = evaluateInteraction(reviewedSignal, observedTopicState);
@@ -519,29 +554,44 @@ export function createApiServer(options = {}) {
           reviewedAt
         );
         const signalRecord = {
-          id: buildInteractionSignalRecordId(reviewedSignal),
+          id: signalRecordId,
           signal: reviewedSignal,
           feedback,
-          createdAt: reviewedSignal.createdAt
+          createdAt: reviewedSignal.createdAt,
+          reviewEventId,
+          reviewGrade: grade
         };
 
         let nextSnapshot = persistenceStore.saveReviewStates([nextReviewState], reviewedAt);
         nextSnapshot = persistenceStore.saveInteractionSignalRecords([signalRecord], reviewedAt);
         nextSnapshot = persistenceStore.saveTopicStateRecords([topicState], reviewedAt);
-        const masteryResult = promoteMasteryAfterReview({
-          persistenceStore,
-          snapshot: nextSnapshot,
-          post,
-          userId,
-          reviewedAt,
-          contentLanguage: resolveContentLanguage(persistenceStore, process.env)
-        });
-
-        sendJson(response, 200, {
+        const masteryResult =
+          grade === "forgot"
+            ? { snapshot: nextSnapshot, promotions: [], learningGoalAchievements: [] }
+            : promoteMasteryAfterReview({
+                persistenceStore,
+                snapshot: nextSnapshot,
+                post,
+                userId,
+                reviewedAt,
+                contentLanguage: resolveContentLanguage(persistenceStore, process.env)
+              });
+        const reviewResult = {
           reviewState: nextReviewState,
           masteryPromotions: masteryResult.promotions,
-          learningGoalAchievements: masteryResult.learningGoalAchievements ?? [],
-          snapshotSummary: summarizeSnapshot(masteryResult.snapshot)
+          learningGoalAchievements: masteryResult.learningGoalAchievements ?? []
+        };
+
+        const finalSnapshot = persistenceStore.saveInteractionSignalRecords(
+          [{ ...signalRecord, reviewResult }],
+          reviewedAt
+        );
+
+        sendJson(response, 200, {
+          ...reviewResult,
+          nextDueAt: nextReviewState.dueAt,
+          idempotentReplay: false,
+          snapshotSummary: summarizeSnapshot(finalSnapshot)
         });
         return;
       }
@@ -580,14 +630,17 @@ export function createApiServer(options = {}) {
         const status = url.searchParams.get("status") ?? undefined;
         const records = persistenceStore
           .getSnapshot()
-          .sourceCandidates.filter((record) => !status || record.status === status);
+          .sourceCandidates.filter((record) => !status || record.status === status)
+          .map(sanitizeSourceCandidateRecordForResponse);
 
         sendJson(response, 200, { records });
         return;
       }
 
       if (request.method === "GET" && url.pathname === "/api/subscriptions") {
-        sendJson(response, 200, { records: persistenceStore.getSnapshot().subscriptions });
+        sendJson(response, 200, {
+          records: persistenceStore.getSnapshot().subscriptions.map(sanitizeSubscriptionRecordForResponse)
+        });
         return;
       }
 
@@ -609,7 +662,10 @@ export function createApiServer(options = {}) {
         const body = await readJsonBody(request);
         const result = await handleCreateSubscription(body, persistenceStore, feedFetch);
 
-        sendJson(response, 200, result);
+        sendJson(response, 200, {
+          ...result,
+          record: sanitizeSubscriptionRecordForResponse(result.record)
+        });
         return;
       }
 
@@ -637,13 +693,18 @@ export function createApiServer(options = {}) {
         const body = await readJsonBody(request);
         const result = handleUpdateSubscription(subscriptionId, body, persistenceStore);
 
-        sendJson(response, 200, result);
+        sendJson(response, 200, {
+          ...result,
+          record: sanitizeSubscriptionRecordForResponse(result.record)
+        });
         return;
       }
 
       if (request.method === "GET" && url.pathname === "/api/curation/jobs") {
         const status = url.searchParams.get("status") ?? undefined;
-        sendJson(response, 200, { jobs: curationStore.list(status) });
+        sendJson(response, 200, {
+          jobs: curationStore.list(status).map((record) => sanitizeCurationRecordForResponse(record, false))
+        });
         return;
       }
 
@@ -680,7 +741,9 @@ export function createApiServer(options = {}) {
         ]);
 
         sendJson(response, 200, {
-          record: snapshot.sourceCandidates.find((item) => item.id === body.id),
+          record: sanitizeSourceCandidateRecordForResponse(
+            snapshot.sourceCandidates.find((item) => item.id === body.id)
+          ),
           snapshotSummary: summarizeSnapshot(snapshot)
         });
         return;
@@ -701,7 +764,7 @@ export function createApiServer(options = {}) {
         });
 
         sendJson(response, 200, {
-          ...importResult,
+          ...sanitizeSourceImportResultForResponse(importResult),
           releasePlan,
           snapshotSummary: summarizeSnapshot(snapshot)
         });
@@ -722,7 +785,7 @@ export function createApiServer(options = {}) {
         });
 
         sendJson(response, 200, {
-          ...importResult,
+          ...sanitizeSourceImportResultForResponse(importResult),
           releasePlan,
           snapshotSummary: summarizeSnapshot(snapshot)
         });
@@ -739,49 +802,80 @@ export function createApiServer(options = {}) {
 
       if (request.method === "POST" && url.pathname === "/api/signals") {
         const body = await readJsonBody(request);
-        requireInteractionSignal(body.signal);
-        const generatedAt = body.generatedAt ?? new Date().toISOString();
         const currentSnapshot = persistenceStore.getSnapshot();
-        const observedTopicState = body.topicState ?? deriveTopicState(body.signal);
+        const signal = requireInteractionSignal(body.signal, currentSnapshot);
+        const generatedAt = requireIsoDate(body.generatedAt ?? new Date().toISOString(), "generatedAt");
+        const signalRecordId = buildInteractionSignalRecordId(signal);
+        const existingRecord = currentSnapshot.interactionSignals.find((record) => record.id === signalRecordId);
+        const observedTopicState = body.topicState
+          ? requireTopicState(body.topicState, signal.topicId)
+          : deriveTopicState(signal);
         const currentTopicState = currentSnapshot.topicStates.find((record) => record.topicId === observedTopicState.topicId);
 
-        if (isPureExposureSignal(body.signal)) {
-          const feedback = createNeutralExposureFeedback(body.signal);
+        if (existingRecord) {
+          const existingResult = existingRecord.signalResult;
+
+          sendJson(response, 200, {
+            feedback: existingRecord.feedback,
+            topicState: existingResult?.topicState ?? currentTopicState ?? null,
+            plan: existingResult?.plan ?? createEmptyCurationPlan(generatedAt),
+            records: existingResult?.records ?? [],
+            idempotentReplay: true,
+            snapshotSummary: summarizeSnapshot(currentSnapshot)
+          });
+          return;
+        }
+
+        if (isPureExposureSignal(signal)) {
+          const feedback = createNeutralExposureFeedback(signal);
+          const plan = createEmptyCurationPlan(generatedAt);
+          const signalResult = {
+            topicState: currentTopicState ?? null,
+            plan,
+            records: []
+          };
           const signalRecord = {
-            id: buildInteractionSignalRecordId(body.signal),
-            signal: body.signal,
+            id: signalRecordId,
+            signal,
             feedback,
-            createdAt: body.signal.createdAt ?? generatedAt
+            createdAt: signal.createdAt,
+            signalResult
           };
           const snapshot = persistenceStore.saveInteractionSignalRecords([signalRecord], generatedAt);
-          const plan = createEmptyCurationPlan(generatedAt);
 
           sendJson(response, 200, {
             feedback,
-            topicState: currentTopicState ?? null,
-            plan,
-            records: [],
+            ...signalResult,
+            idempotentReplay: false,
             snapshotSummary: summarizeSnapshot(snapshot)
           });
           return;
         }
 
-        const persistedCandidates = findMatchingSourceCandidateRecords(currentSnapshot, body.signal);
-        const feedback = evaluateInteraction(body.signal, observedTopicState);
+        const requestCandidates = body.sourceCandidates ?? [];
+
+        if (!Array.isArray(requestCandidates)) {
+          throw new HttpError(400, "sourceCandidates must be an array.");
+        }
+
+        requireSupportedSourceCandidates(requestCandidates);
+
+        const persistedCandidates = findMatchingSourceCandidateRecords(currentSnapshot, signal);
+        const feedback = evaluateInteraction(signal, observedTopicState);
         const contentLanguage = resolveContentLanguage(persistenceStore, process.env);
         const topicState = updateTopicStateFromFeedback(
           currentTopicState,
           observedTopicState,
-          body.signal,
+          signal,
           feedback,
           generatedAt
         );
         const rawPlan = createBackgroundCurationPlan({
-          signals: [body.signal],
+          signals: [signal],
           feedback: [feedback],
           topicStates: [topicState],
           sourceCandidates: dedupeSourceCandidates([
-            ...(body.sourceCandidates ?? []),
+            ...requestCandidates,
             ...persistedCandidates.map((record) => record.candidate)
           ]),
           contentLanguage,
@@ -795,17 +889,19 @@ export function createApiServer(options = {}) {
         });
         const plan = budgetResult.plan;
         const records = curationStore.enqueuePlan(plan);
+        const signalResult = { topicState, plan, records };
         const signalRecord = {
-          id: buildInteractionSignalRecordId(body.signal),
-          signal: body.signal,
+          id: signalRecordId,
+          signal,
           feedback,
-          createdAt: body.signal.createdAt ?? generatedAt
+          createdAt: signal.createdAt,
+          signalResult
         };
         persistenceStore.saveInteractionSignalRecords([signalRecord], generatedAt);
         persistenceStore.saveTopicStateRecords([topicState], generatedAt);
         persistenceStore.saveDailyAutoJobBudgetRecords([budgetResult.budget], generatedAt);
         let snapshot = persistenceStore.saveCurationJobRecords(records, generatedAt);
-        const initialReviewState = maybeCreateInitialReviewState(snapshot, body.signal, generatedAt);
+        const initialReviewState = maybeCreateInitialReviewState(snapshot, signal, generatedAt);
 
         if (initialReviewState) {
           snapshot = persistenceStore.saveReviewStates([initialReviewState], generatedAt);
@@ -829,9 +925,8 @@ export function createApiServer(options = {}) {
 
         sendJson(response, 200, {
           feedback,
-          topicState,
-          plan,
-          records,
+          ...signalResult,
+          idempotentReplay: false,
           snapshotSummary: summarizeSnapshot(snapshot)
         });
         return;
@@ -892,7 +987,7 @@ export function createApiServer(options = {}) {
           {
             contentLanguage,
             sourceImportWorker,
-            ingestSourceCandidate: (candidate) => ingestSourceCandidate(candidate),
+            ingestSourceCandidate: (candidate) => ingestSourceCandidateForBackground(candidate),
             discoverSources: (job) => discoverSourcesForJob(job, searchProvider, persistenceStore, contentLanguage),
             loadSeedPost: (job) => persistenceStore.getSnapshot().posts.find((post) => post.id === job.postId),
             loadSourceQualityVerdicts: () => persistenceStore.getSnapshot().sourceQualityVerdicts,
@@ -946,7 +1041,7 @@ export function createApiServer(options = {}) {
         const records = filterDuplicateFollowupCurationRecords(
           batch.records,
           persistenceStore.getSnapshot().posts
-        );
+        ).map((record) => sanitizeCurationRecordForResponse(record));
 
         records.forEach((record, index) => {
           if (record !== batch.records[index]) {
@@ -998,10 +1093,9 @@ export function createApiServer(options = {}) {
           if (
             record.status === "failed" &&
             record.job.kind === "import_source" &&
-            record.job.sourceCandidate &&
-            isNetworkFailureMessage(record.lastError)
+            record.job.sourceCandidate
           ) {
-            snapshot = markSourceCandidateUnreachable(
+            snapshot = markSourceCandidateFailed(
               persistenceStore,
               persistenceStore.getSnapshot(),
               record.job.sourceCandidate.id,
@@ -1139,19 +1233,41 @@ export function createApiServer(options = {}) {
           resolveContentLanguage(persistenceStore, process.env)
         );
 
-        sendJson(response, 200, result);
+        sendJson(response, 200, { ...result, post: sanitizePostForResponse(result.post) });
         return;
       }
 
       if (request.method === "POST" && url.pathname === "/api/memory") {
         const body = await readJsonBody(request);
-        const userId = body.userId ?? "local-user";
+        const userId = parseOptionalUserId(body.userId);
         const currentSnapshot = persistenceStore.getSnapshot();
         const currentMemory =
           currentSnapshot.userMemories.find((record) => record.userId === userId)?.memory ??
           createEmptyUserMemory();
+        const edits = body.edits === undefined ? [] : body.edits;
+
+        if (!Array.isArray(edits)) {
+          throw new HttpError(400, "edits must be an array.");
+        }
+
+        if (edits.length === 0) {
+          sendJson(response, 200, {
+            memory: currentMemory,
+            events: [],
+            snapshotSummary: summarizeSnapshot(currentSnapshot)
+          });
+          return;
+        }
+
         const now = new Date().toISOString();
-        const editResult = applyUserMemoryEdits(body.memory ?? currentMemory, body.edits ?? [], now);
+        let editResult;
+
+        try {
+          editResult = applyUserMemoryEdits(currentMemory, edits, now);
+        } catch (error) {
+          console.error("[aitimeline] rejected invalid memory edits.", error);
+          throw new HttpError(400, "Memory edits are invalid.");
+        }
         const blacklistEvents = createManualMasteryDemotionEvents(
           currentSnapshot,
           userId,
@@ -1177,15 +1293,79 @@ export function createApiServer(options = {}) {
       sendJson(response, 404, { error: "Not found" });
     } catch (error) {
       if (response.headersSent) {
-        response.end();
+        console.error(`[aitimeline] API request failed after headers were sent (${request.method} ${request.url}).`, error);
+
+        if (!response.writableEnded) {
+          response.end();
+        }
+
         return;
       }
 
-      sendJson(response, error instanceof HttpError ? error.statusCode : 500, {
-        error: error instanceof Error ? error.message : "Unknown API error."
-      });
+      const statusCode = error instanceof HttpError ? error.statusCode : 500;
+      const safeMessage = error instanceof HttpError && statusCode < 500 ? error.message : "Internal server error.";
+
+      if (!(error instanceof HttpError) || statusCode >= 500 || error.cause) {
+        console.error(`[aitimeline] API request failed (${request.method} ${request.url}).`, error);
+      }
+
+      if (statusCode === 413) {
+        response.setHeader("Connection", "close");
+        response.shouldKeepAlive = false;
+      }
+
+      sendJson(response, statusCode, { error: safeMessage });
+
+      if (statusCode === 413) {
+        safelyDrainRequest(request);
+      }
     }
   });
+}
+
+function createSafeSourceImportWorker(worker) {
+  return {
+    ...worker,
+    runner: worker.runner,
+    async run(input) {
+      let result;
+
+      try {
+        result = await worker.run(input);
+      } catch (error) {
+        console.error("[aitimeline] source import worker threw before returning a result.", error);
+        throw new Error("Source import failed.");
+      }
+
+      const rawError = result?.errorMessage ?? result?.importRecord?.errorMessage;
+      const failed =
+        result?.importRecord?.status === "failed" ||
+        result?.qualityGate?.verdict === "reject";
+
+      if (!failed && !rawError) {
+        return result;
+      }
+
+      if (rawError) {
+        console.error("[aitimeline] source import worker returned a failed result.", rawError);
+      }
+
+      return {
+        ...result,
+        errorMessage: "Source import failed.",
+        ...(result?.importRecord
+          ? {
+              importRecord: {
+                ...result.importRecord,
+                ...(result.importRecord.status === "failed" || result.importRecord.errorMessage
+                  ? { errorMessage: "Source import failed." }
+                  : {})
+              }
+            }
+          : {})
+      };
+    }
+  };
 }
 
 function createConfiguredSourceImportWorker(env) {
@@ -1292,7 +1472,7 @@ async function fetchAndParseSubscriptionFeed(feedUrl, fetchImpl) {
     // must not block it until the OS-level TCP timeout.
     response = await fetchImpl(feedUrl, { signal: AbortSignal.timeout(10000) });
   } catch (error) {
-    throw new HttpError(400, error instanceof Error ? error.message : "Feed URL request failed.");
+    throw new HttpError(400, "Feed URL request failed.", { cause: error });
   }
 
   if (!response.ok) {
@@ -1303,7 +1483,8 @@ async function fetchAndParseSubscriptionFeed(feedUrl, fetchImpl) {
   const parsed = parseSubscriptionFeed(xml, feedUrl);
 
   if (parsed.error) {
-    throw new HttpError(400, parsed.error);
+    console.error("[aitimeline] subscription feed parsing failed.", parsed.error);
+    throw new HttpError(400, "Feed is not valid.");
   }
 
   return parsed;
@@ -1394,7 +1575,8 @@ async function pollDueSubscriptions({ persistenceStore, curationStore, fetchImpl
         lastError: undefined
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Subscription poll failed.";
+      console.error(`[aitimeline] subscription poll failed (${subscription.id}).`, error);
+      const message = "Subscription poll failed.";
 
       errors.push(`${subscription.title}: ${message}`);
       subscriptionUpdates.push({
@@ -1920,19 +2102,36 @@ function createConfiguredAskModelClient(env) {
 }
 
 function createConfiguredDeepReadModelClients(env) {
-  const deepReadModelName = env.AITIMELINE_MODEL_DEEPREAD_NAME;
-  const defaultModelName = env.AITIMELINE_MODEL_NAME ?? env.OPENAI_MODEL;
+  const modelEnv = {
+    ...env,
+    AITIMELINE_MODEL_NAME: firstNonBlankEnv(env.AITIMELINE_MODEL_NAME, env.OPENAI_MODEL),
+    AITIMELINE_MODEL_API_KEY: firstNonBlankEnv(env.AITIMELINE_MODEL_API_KEY, env.OPENAI_API_KEY),
+    AITIMELINE_MODEL_BASE_URL: firstNonBlankEnv(env.AITIMELINE_MODEL_BASE_URL, env.OPENAI_BASE_URL),
+    OPENAI_MODEL: firstNonBlankEnv(env.OPENAI_MODEL),
+    OPENAI_API_KEY: firstNonBlankEnv(env.OPENAI_API_KEY),
+    OPENAI_BASE_URL: firstNonBlankEnv(env.OPENAI_BASE_URL)
+  };
+  const deepReadModelName = firstNonBlankEnv(env.AITIMELINE_MODEL_DEEPREAD_NAME);
+  const defaultModelName = modelEnv.AITIMELINE_MODEL_NAME;
   // Per-request output cap and whole-article token budget are different numbers:
   // passing the 50k-150k article budget as request max_tokens would make every
   // call fail on providers with lower output limits.
   const requestMaxTokens = Number.parseInt(env.AITIMELINE_MODEL_DEEPREAD_MAX_TOKENS ?? "", 10);
   const articleTokenBudget = getDeepReadArticleTokenBudget(env);
-  const defaultClient = defaultModelName ? createOpenAICompatibleModelClientFromEnv(env) : undefined;
+  const defaultClient = defaultModelName ? createOpenAICompatibleModelClientFromEnv(modelEnv) : undefined;
   const deepReadClient = deepReadModelName
-    ? createOpenAICompatibleModelClientFromEnv(env, {
+    ? createOpenAICompatibleModelClientFromEnv(modelEnv, {
         model: deepReadModelName,
-        apiKey: env.AITIMELINE_MODEL_DEEPREAD_API_KEY ?? env.AITIMELINE_MODEL_API_KEY ?? env.OPENAI_API_KEY,
-        baseUrl: env.AITIMELINE_MODEL_DEEPREAD_BASE_URL ?? env.AITIMELINE_MODEL_BASE_URL ?? env.OPENAI_BASE_URL,
+        apiKey: firstNonBlankEnv(
+          env.AITIMELINE_MODEL_DEEPREAD_API_KEY,
+          modelEnv.AITIMELINE_MODEL_API_KEY,
+          modelEnv.OPENAI_API_KEY
+        ),
+        baseUrl: firstNonBlankEnv(
+          env.AITIMELINE_MODEL_DEEPREAD_BASE_URL,
+          modelEnv.AITIMELINE_MODEL_BASE_URL,
+          modelEnv.OPENAI_BASE_URL
+        ),
         ...(Number.isFinite(requestMaxTokens) ? { maxTokens: requestMaxTokens } : {})
       })
     : undefined;
@@ -1948,6 +2147,16 @@ function createConfiguredDeepReadModelClients(env) {
     defaultClient,
     maxTokens: articleTokenBudget
   };
+}
+
+function firstNonBlankEnv(...values) {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+
+  return undefined;
 }
 
 function getDeepReadArticleTokenBudget(env) {
@@ -2180,6 +2389,7 @@ async function handleResearchQuestionJob(
     now
   });
   const rankedCandidates = rankResearchCandidates(discovery.candidates, payload.question);
+  const unsupportedCandidateCount = discovery.candidates.length - rankedCandidates.length;
   const importLimit = getResearchImportLimit(payload.choices, contentLanguage);
   const candidatesToImport = rankedCandidates.slice(0, importLimit);
   const remainingCandidates = rankedCandidates.slice(importLimit);
@@ -2189,9 +2399,19 @@ async function handleResearchQuestionJob(
   }
 
   if (!rankedCandidates.length) {
+    if (discovery.errors.length) {
+      console.error("[aitimeline] research source discovery failed.", discovery.errors);
+    }
+
+    if (unsupportedCandidateCount > 0) {
+      console.warn(`[aitimeline] research skipped ${unsupportedCandidateCount} unsupported source candidate(s).`);
+    }
+
     const body = discovery.errors.length
-      ? researchCopy(contentLanguage, "searchFailed", { detail: discovery.errors.join("; ") })
-      : researchCopy(contentLanguage, "empty");
+      ? researchCopy(contentLanguage, "searchFailed", { detail: "Source discovery failed." })
+      : unsupportedCandidateCount > 0
+        ? researchCopy(contentLanguage, "importFailed", { detail: "Source candidate type is not supported." })
+        : researchCopy(contentLanguage, "empty");
     const notification = createResearchNotification({
       kind: "research_progress",
       turnId: payload.turnId,
@@ -2240,7 +2460,10 @@ async function handleResearchQuestionJob(
       const savedSnapshot = persistenceStore.saveSourceImportResult(sourceImport, now);
 
       if (sourceImport.importRecord.status === "failed") {
-        importFailures.push(sourceImport.errorMessage ?? "Source import worker failed.");
+        if (sourceImport.errorMessage) {
+          console.error("[aitimeline] research source import worker failed.", sourceImport.errorMessage);
+        }
+        importFailures.push("Source import failed.");
         continue;
       }
 
@@ -2250,7 +2473,10 @@ async function handleResearchQuestionJob(
         if (mergedPosts.length) {
           importedResults.push({ ...sourceImport, posts: mergedPosts });
         } else {
-          importFailures.push(sourceImport.errorMessage ?? "Source import worker failed.");
+          if (sourceImport.errorMessage) {
+            console.error("[aitimeline] research source import produced no usable posts.", sourceImport.errorMessage);
+          }
+          importFailures.push("Source import failed.");
         }
         continue;
       }
@@ -2258,7 +2484,8 @@ async function handleResearchQuestionJob(
       persistenceStore.saveReleasePlan(createSourcePostReleasePlan({ posts: sourceImport.posts }), now);
       importedResults.push(sourceImport);
     } catch (error) {
-      importFailures.push(error instanceof Error ? error.message : "Unknown research source import error.");
+      console.error("[aitimeline] research source import failed.", error);
+      importFailures.push("Source import failed.");
     }
   }
 
@@ -2583,6 +2810,7 @@ function rankResearchCandidates(candidates, question) {
   const questionTokens = tokenizeText(question);
 
   return candidates
+    .filter((candidate) => isSupportedSourceCandidateType(candidate?.source?.type))
     .map((candidate) => {
       const haystack = tokenizeText(
         [candidate.source.title, candidate.reason, candidate.source.url, candidate.conceptIds.join(" ")].join(" ")
@@ -2680,10 +2908,21 @@ async function researchIdeaSide({
     now
   });
   const rankedCandidates = rankResearchCandidates(discovery.candidates, payload.question);
+  const unsupportedCandidateCount = discovery.candidates.length - rankedCandidates.length;
   const candidatesToImport = rankedCandidates.slice(0, 2);
   const remainingCandidates = rankedCandidates.slice(2);
   const importedResults = [];
-  const errors = [...discovery.errors];
+  const errors = [];
+
+  if (discovery.errors.length) {
+    console.error(`[aitimeline] ${side} idea source discovery failed.`, discovery.errors);
+    errors.push("Source discovery failed.");
+  }
+
+  if (unsupportedCandidateCount > 0) {
+    console.warn(`[aitimeline] ${side} idea research skipped ${unsupportedCandidateCount} unsupported candidate(s).`);
+    errors.push("Source candidate type is not supported.");
+  }
 
   if (remainingCandidates.length) {
     persistDiscoveredCandidates(persistenceStore, remainingCandidates, now);
@@ -2714,7 +2953,10 @@ async function researchIdeaSide({
       const savedSnapshot = persistenceStore.saveSourceImportResult(sourceImport, now);
 
       if (sourceImport.importRecord.status === "failed") {
-        errors.push(sourceImport.errorMessage ?? "Source import worker failed.");
+        if (sourceImport.errorMessage) {
+          console.error(`[aitimeline] ${side} idea source import worker failed.`, sourceImport.errorMessage);
+        }
+        errors.push("Source import failed.");
         continue;
       }
 
@@ -2724,7 +2966,10 @@ async function researchIdeaSide({
         if (mergedPosts.length) {
           importedResults.push({ ...sourceImport, posts: mergedPosts });
         } else {
-          errors.push(sourceImport.errorMessage ?? "Source import worker failed.");
+          if (sourceImport.errorMessage) {
+            console.error(`[aitimeline] ${side} idea source import produced no usable posts.`, sourceImport.errorMessage);
+          }
+          errors.push("Source import failed.");
         }
         continue;
       }
@@ -2732,7 +2977,8 @@ async function researchIdeaSide({
       persistenceStore.saveReleasePlan(createSourcePostReleasePlan({ posts: sourceImport.posts }), now);
       importedResults.push(sourceImport);
     } catch (error) {
-      errors.push(error instanceof Error ? error.message : "Unknown idea research source import error.");
+      console.error(`[aitimeline] ${side} idea source import failed.`, error);
+      errors.push("Source import failed.");
     }
   }
 
@@ -2941,12 +3187,15 @@ async function executeDiscoveryAction(turn, snapshot, memory, searchProvider, pe
     contentLanguage,
     now
   });
+  const candidates = discovery.candidates.filter((candidate) =>
+    isSupportedSourceCandidateType(candidate?.source?.type)
+  );
 
-  if (discovery.candidates.length) {
-    persistDiscoveredCandidates(persistenceStore, discovery.candidates, now);
+  if (candidates.length) {
+    persistDiscoveredCandidates(persistenceStore, candidates, now);
   }
 
-  return discovery.candidates;
+  return candidates;
 }
 
 // On-demand discovery for the reply chip: the user clicks "为这个问题找来源".
@@ -2977,12 +3226,15 @@ async function handleDiscoveryRun(body, userId, persistenceStore, searchProvider
     contentLanguage,
     now
   });
+  const candidates = discovery.candidates.filter((candidate) =>
+    isSupportedSourceCandidateType(candidate?.source?.type)
+  );
 
-  if (discovery.candidates.length) {
-    persistDiscoveredCandidates(persistenceStore, discovery.candidates, now);
+  if (candidates.length) {
+    persistDiscoveredCandidates(persistenceStore, candidates, now);
   }
 
-  return { configured: true, candidates: discovery.candidates };
+  return { configured: true, candidates };
 }
 
 function toTrimmedStrings(value) {
@@ -3334,7 +3586,17 @@ async function discoverSourcesForJob(job, searchProvider, persistenceStore, cont
     contentLanguage
   });
 
-  return discovery.candidates;
+  const supportedCandidates = discovery.candidates.filter((candidate) =>
+    isSupportedSourceCandidateType(candidate?.source?.type)
+  );
+
+  if (supportedCandidates.length !== discovery.candidates.length) {
+    console.warn(
+      `[aitimeline] background discovery skipped ${discovery.candidates.length - supportedCandidates.length} unsupported candidate(s).`
+    );
+  }
+
+  return supportedCandidates;
 }
 
 function getConfirmedDiscoveryConcepts(snapshot, proposedConcepts) {
@@ -3393,6 +3655,16 @@ function persistDiscoveredCandidates(persistenceStore, candidates, now) {
   const snapshot = persistenceStore.getSnapshot();
   const existingIds = new Set(snapshot.sourceCandidates.map((record) => record.id));
   const newRecords = candidates
+    .filter((candidate) => {
+      if (isSupportedSourceCandidateType(candidate?.source?.type)) {
+        return true;
+      }
+
+      console.warn(
+        `[aitimeline] skipped unsupported discovered source candidate (${candidate?.id ?? "unknown"}); supported types are article, blog, news, and youtube.`
+      );
+      return false;
+    })
     .filter((candidate) => !existingIds.has(candidate.id))
     .map((candidate) => ({
       id: candidate.id,
@@ -3444,19 +3716,23 @@ function updateSourceCandidateAfterImport(persistenceStore, snapshot, candidateI
   ]);
 }
 
-function markSourceCandidateUnreachable(persistenceStore, snapshot, candidateId, now, errorMessage) {
+function markSourceCandidateFailed(persistenceStore, snapshot, candidateId, now, errorMessage) {
   const candidateRecord = snapshot.sourceCandidates.find((item) => item.candidate.id === candidateId);
 
   if (!candidateRecord) {
     return snapshot;
   }
 
+  const unreachable = isNetworkFailureMessage(errorMessage);
+  const reason = unreachable ? "Source could not be fetched." : "Source import failed.";
+
   return persistenceStore.saveSourceCandidateRecords([
     {
       ...candidateRecord,
-      status: "unreachable",
+      status: unreachable ? "unreachable" : "rejected_source",
       updatedAt: now,
-      rejectionReasons: [...(candidateRecord.rejectionReasons ?? []), errorMessage ?? "Network request failed."]
+      ...(unreachable ? {} : { rejectedAt: now }),
+      rejectionReasons: [...(candidateRecord.rejectionReasons ?? []), reason]
     }
   ]);
 }
@@ -3466,7 +3742,7 @@ function isNetworkFailureMessage(message) {
     return false;
   }
 
-  return /(?:fetch failed|network|timeout|timed out|abort|aborted|econnrefused|econnreset|enotfound|etimedout|eai_again|und_err_connect_timeout|socket)/i.test(
+  return /(?:fetch failed|could not be fetched|network|timeout|timed out|abort|aborted|econnrefused|econnreset|enotfound|etimedout|eai_again|und_err_connect_timeout|socket|request failed with \d{3}|http status \d{3})/i.test(
     message
   );
 }
@@ -3530,7 +3806,7 @@ function createLegacyReviewBackfillStates(snapshot, limit = 50) {
   const postById = new Map(snapshot.posts.map((post) => [post.id, post]));
   const reviewStates = [];
 
-  for (const record of snapshot.interactionSignals) {
+  for (const record of filterHistoricalInteractionSignalRecords(snapshot.interactionSignals, "review backfill")) {
     const signal = record.signal;
 
     if (reviewStates.length >= limit) {
@@ -3556,6 +3832,78 @@ function createLegacyReviewBackfillStates(snapshot, limit = 50) {
   }
 
   return reviewStates;
+}
+
+function selectReviewPrompt(post, intervalDays) {
+  const prompts = Array.isArray(post?.reviewPrompts)
+    ? post.reviewPrompts.filter(
+        (prompt) =>
+          prompt &&
+          typeof prompt.id === "string" &&
+          typeof prompt.prompt === "string" &&
+          typeof prompt.answerHint === "string"
+      )
+    : [];
+
+  if (!prompts.length) {
+    if (!post) {
+      return null;
+    }
+
+    return {
+      id: `${post.id}-review-fallback`,
+      prompt: post.title,
+      answerHint: post.keyTakeaway ?? post.summary ?? post.shortBody ?? post.title
+    };
+  }
+
+  const exact = prompts.find((prompt) => prompt.dueInDays === intervalDays);
+  const previous = prompts
+    .filter((prompt) => Number.isFinite(prompt.dueInDays) && prompt.dueInDays <= intervalDays)
+    .sort((left, right) => right.dueInDays - left.dueInDays)[0];
+  const earliest = [...prompts]
+    .filter((prompt) => Number.isFinite(prompt.dueInDays))
+    .sort((left, right) => left.dueInDays - right.dueInDays)[0];
+  const selected = exact ?? previous ?? earliest ?? prompts[0];
+
+  return {
+    id: selected.id,
+    prompt: selected.prompt,
+    answerHint: selected.answerHint
+  };
+}
+
+function createReviewStateForGrade(reviewState, reviewedAt, grade) {
+  if (grade === "remembered") {
+    return advanceReviewState(reviewState, reviewedAt);
+  }
+
+  if (grade === "forgot") {
+    return {
+      ...createInitialReviewState(reviewState.postId, reviewedAt),
+      lastReviewedAt: reviewedAt
+    };
+  }
+
+  return {
+    ...reviewState,
+    dueAt: addDaysIso(reviewedAt, reviewState.intervalDays),
+    lastReviewedAt: reviewedAt
+  };
+}
+
+function addDaysIso(value, days) {
+  const date = new Date(value);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString();
+}
+
+function buildReviewEventRecordId(postId, reviewEventId) {
+  return `review-event-${sanitizeSlug(postId)}-${hashText(`${postId}|${reviewEventId}`)}`;
+}
+
+function buildReviewCompletionRecordId(postId, reviewedAt) {
+  return `review-complete-${sanitizeSlug(postId)}-${hashText(`${postId}|${reviewedAt}`)}`;
 }
 
 function promoteMasteryAfterReview({ persistenceStore, snapshot, post, userId, reviewedAt, contentLanguage }) {
@@ -4883,6 +5231,112 @@ export function filterDuplicateFollowupCurationRecords(records, existingPosts, w
   });
 }
 
+function sanitizeFailedCurationRecord(record, logCause = true) {
+  if (record.status !== "failed" || typeof record.lastError !== "string" || !record.lastError.trim()) {
+    return record;
+  }
+
+  if (logCause) {
+    console.error(`[aitimeline] background curation job failed (${record.job.id}).`, record.lastError);
+  }
+
+  const lastError =
+    record.job.kind === "import_source"
+      ? isNetworkFailureMessage(record.lastError)
+        ? "Source could not be fetched."
+        : "Source import failed."
+      : "Background job failed.";
+
+  return { ...record, lastError };
+}
+
+function sanitizeSourceImportRecordForResponse(record) {
+  return record?.errorMessage ? { ...record, errorMessage: "Source import failed." } : record;
+}
+
+function sanitizeSourceImportResultForResponse(result) {
+  if (!result || typeof result !== "object") {
+    return result;
+  }
+
+  return {
+    ...result,
+    ...(Array.isArray(result.posts) ? { posts: result.posts.map(sanitizePostForResponse) } : {}),
+    ...(result.errorMessage ? { errorMessage: "Source import failed." } : {}),
+    ...(result.importRecord
+      ? { importRecord: sanitizeSourceImportRecordForResponse(result.importRecord) }
+      : {})
+  };
+}
+
+function sanitizePostForResponse(post) {
+  if (!post || typeof post.recommendedBecause !== "string") {
+    return post;
+  }
+
+  // Legacy records predate the beyond-source marker, so match with it stripped.
+  const unmarkedReason = post.recommendedBecause.replace(/^\s*\[(?:beyond source|超出来源)\]\s*/i, "");
+
+  if (unmarkedReason.startsWith("No better source was found, so this same-source follow-up was generated after")) {
+    return {
+      ...post,
+      recommendedBecause: "[beyond source] No better source was found, so this same-source follow-up was generated."
+    };
+  }
+
+  if (unmarkedReason.startsWith("没找到更好的来源,所以先基于《")) {
+    return {
+      ...post,
+      recommendedBecause: "[超出来源] 没找到可用的新来源,所以生成了同源跟进卡。"
+    };
+  }
+
+  return post;
+}
+
+function sanitizeCurationRecordForResponse(record, logCause = true) {
+  const sanitizedRecord = sanitizeFailedCurationRecord(record, logCause);
+
+  if (!sanitizedRecord.result?.sourceImport) {
+    return sanitizedRecord;
+  }
+
+  return {
+    ...sanitizedRecord,
+    result: {
+      ...sanitizedRecord.result,
+      sourceImport: sanitizeSourceImportResultForResponse(sanitizedRecord.result.sourceImport)
+    }
+  };
+}
+
+function sanitizeSubscriptionRecordForResponse(record) {
+  return record?.lastError ? { ...record, lastError: "Subscription poll failed." } : record;
+}
+
+function sanitizeSourceCandidateRecordForResponse(record) {
+  if (!record?.rejectionReasons?.length || record.qualityGate) {
+    return record;
+  }
+
+  const stableReasons = new Set([
+    "Source import failed.",
+    "Source could not be fetched.",
+    "Source candidate could not be processed."
+  ]);
+
+  if (record.rejectionReasons.every((reason) => stableReasons.has(reason))) {
+    return record;
+  }
+
+  return {
+    ...record,
+    rejectionReasons: [
+      record.status === "unreachable" ? "Source could not be fetched." : "Source candidate could not be processed."
+    ]
+  };
+}
+
 function filterDuplicateFollowupSourceImport(sourceImport, knownTitles, warn) {
   const skippedPostIds = new Set();
   const posts = [];
@@ -4934,10 +5388,14 @@ function createSourceCandidateRecord(body) {
   const now = body.createdAt ?? body.discoveredAt ?? new Date().toISOString();
   const candidate = normalizeSourceCandidate(body.candidate ?? body, now);
 
+  if (body.status !== undefined && body.status !== "pending") {
+    throw new HttpError(400, "New source candidates must start with pending status.");
+  }
+
   return {
     id: body.id ?? candidate.id,
     candidate,
-    status: isSourceCandidateStatus(body.status) ? body.status : "pending",
+    status: "pending",
     intakeKind: isSourceCandidateIntakeKind(body.intakeKind) ? body.intakeKind : "user_paste",
     createdAt: now,
     updatedAt: now,
@@ -4947,15 +5405,26 @@ function createSourceCandidateRecord(body) {
 }
 
 function normalizeSourceCandidate(input, now) {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    throw new HttpError(400, "candidate must be an object.");
+  }
+
   const sourceInput = input.source ?? {};
   const url = sourceInput.url ?? input.url;
 
   requireString(url, "url");
 
   const parsedUrl = parseHttpUrl(url);
-  const type = isSourceType(sourceInput.type ?? input.type)
-    ? sourceInput.type ?? input.type
-    : inferSourceType(parsedUrl);
+  const providedType = sourceInput.type ?? input.type;
+  const type = providedType === undefined ? inferSourceType(parsedUrl) : providedType;
+
+  if (!isSupportedSourceCandidateType(type)) {
+    throw new HttpError(
+      400,
+      "Source candidate type is not supported. Supported types: article, blog, news, youtube."
+    );
+  }
+
   const title = sourceInput.title ?? input.title ?? parsedUrl.hostname;
   const source = {
     id: sourceInput.id ?? buildSourceId(type, parsedUrl),
@@ -5064,7 +5533,23 @@ async function ingestSourceCandidate(candidate) {
   throw new Error(`Background source ingestion does not support ${candidate.source.type} yet.`);
 }
 
+async function ingestSourceCandidateForBackground(candidate) {
+  try {
+    return await ingestSourceCandidate(candidate);
+  } catch (error) {
+    console.error("[aitimeline] background source ingestion failed.", error);
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      isNetworkFailureMessage(message) ? "Source could not be fetched." : "Source candidate could not be processed."
+    );
+  }
+}
+
 function getTimelineResponse(snapshot, nowValue, userId = "local-user", contentLanguage = "zh", curationStore) {
+  snapshot = {
+    ...snapshot,
+    interactionSignals: filterHistoricalInteractionSignalRecords(snapshot.interactionSignals, "timeline")
+  };
   const now = nowValue ? new Date(nowValue) : new Date();
   const releasePlans = snapshot.releasePlans;
   const releaseItems = releasePlans.flatMap((plan) => plan.items);
@@ -5128,7 +5613,7 @@ function getTimelineResponse(snapshot, nowValue, userId = "local-user", contentL
   const arrangedPosts = flattenTimelineArrangement(timelineArrangement);
 
   return {
-    posts: enrichPostsMedia(snapshot, arrangedPosts),
+    posts: enrichPostsMedia(snapshot, arrangedPosts).map(sanitizePostForResponse),
     timelineBlocks: timelineArrangement.blocks.map((block) => ({
       id: block.id,
       topic: block.topic,
@@ -5138,7 +5623,7 @@ function getTimelineResponse(snapshot, nowValue, userId = "local-user", contentL
       highestScore: block.highestScore,
       dwellBoost: block.dwellBoost
     })),
-    sourceImports: snapshot.sourceImports,
+    sourceImports: snapshot.sourceImports.map(sanitizeSourceImportRecordForResponse),
     releasePlans,
     topicStates: snapshot.topicStates,
     supplyStatus: curationStore ? getSupplyStatus(snapshot, curationStore, now) : undefined,
@@ -5272,7 +5757,7 @@ function getNotificationsResponse(snapshot) {
     records: [...snapshot.notifications]
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
       .map((notification) => ({
-        ...notification,
+        ...sanitizeNotificationRecordForResponse(notification),
         supportPosts: notification.postIds.map((postId) => {
           const post = snapshot.posts.find((candidate) => candidate.id === postId);
 
@@ -5285,6 +5770,34 @@ function getNotificationsResponse(snapshot) {
         })
       }))
   };
+}
+
+function sanitizeNotificationRecordForResponse(notification) {
+  if (notification?.kind !== "research_progress" || typeof notification.body !== "string") {
+    return notification;
+  }
+
+  const failureTemplates = [
+    {
+      prefix: "Source search failed before any importable candidate was found:",
+      body: researchCopy("en", "searchFailed", { detail: "Source discovery failed." })
+    },
+    {
+      prefix: "Research finished, but every imported source failed or was blocked by validation:",
+      body: researchCopy("en", "importFailed", { detail: "Source import failed." })
+    },
+    {
+      prefix: "来源搜索失败,还没有找到可导入候选:",
+      body: researchCopy("zh", "searchFailed", { detail: "Source discovery failed." })
+    },
+    {
+      prefix: "研究已完成,但导入的来源都没有通过门禁或导入失败:",
+      body: researchCopy("zh", "importFailed", { detail: "Source import failed." })
+    }
+  ];
+  const safeFailure = failureTemplates.find(({ prefix }) => notification.body.startsWith(prefix));
+
+  return safeFailure ? { ...notification, body: safeFailure.body } : notification;
 }
 
 function parseDismissedPostMode(value) {
@@ -5372,6 +5885,18 @@ function findSourceRegistryForPost(snapshot, post) {
   }
 
   return registries.length === 1 ? registries[0] : mergeSourceRegistries(...registries);
+}
+
+function sanitizeSnapshotForResponse(snapshot) {
+  return {
+    ...snapshot,
+    posts: snapshot.posts.map(sanitizePostForResponse),
+    sourceImports: snapshot.sourceImports.map(sanitizeSourceImportRecordForResponse),
+    curationJobs: snapshot.curationJobs.map((record) => sanitizeCurationRecordForResponse(record, false)),
+    subscriptions: snapshot.subscriptions.map(sanitizeSubscriptionRecordForResponse),
+    sourceCandidates: snapshot.sourceCandidates.map(sanitizeSourceCandidateRecordForResponse),
+    notifications: snapshot.notifications.map(sanitizeNotificationRecordForResponse)
+  };
 }
 
 function summarizeSnapshot(snapshot) {
@@ -5571,23 +6096,56 @@ function createFileStorageAdapter(filePath) {
 }
 
 class HttpError extends Error {
-  constructor(statusCode, message) {
-    super(message);
+  constructor(statusCode, message, options = {}) {
+    super(message, options.cause ? { cause: options.cause } : undefined);
     this.statusCode = statusCode;
   }
 }
 
 const maxJsonBodyBytes = 1024 * 1024;
 
+function rejectOversizedContentLength(request, response) {
+  const header = request.headers?.["content-length"];
+  const value = Array.isArray(header) ? header[0] : header;
+
+  if (typeof value !== "string" || !/^\d+$/.test(value.trim())) {
+    return false;
+  }
+
+  const contentLength = Number(value);
+
+  if (Number.isSafeInteger(contentLength) && contentLength <= maxJsonBodyBytes) {
+    return false;
+  }
+
+  response.setHeader("Connection", "close");
+  response.shouldKeepAlive = false;
+  sendJson(response, 413, { error: "Request body is too large." });
+  safelyDrainRequest(request);
+  return true;
+}
+
+function safelyDrainRequest(request) {
+  if (typeof request.resume === "function" && !request.destroyed && !request.complete) {
+    request.resume();
+  }
+}
+
 async function readJsonBody(request) {
   const chunks = [];
   let totalBytes = 0;
+  const iterator =
+    typeof request.iterator === "function"
+      ? request.iterator({ destroyOnReturn: false })
+      : request[Symbol.asyncIterator]();
+  const iterable = { [Symbol.asyncIterator]: () => iterator };
 
-  for await (const chunk of request) {
-    totalBytes += chunk.length;
+  for await (const input of iterable) {
+    const chunk = Buffer.isBuffer(input) ? input : Buffer.from(input);
+    totalBytes += chunk.byteLength;
 
     if (totalBytes > maxJsonBodyBytes) {
-      request.destroy();
+      chunks.length = 0;
       throw new HttpError(413, "Request body is too large.");
     }
 
@@ -5595,12 +6153,23 @@ async function readJsonBody(request) {
   }
 
   const rawBody = Buffer.concat(chunks).toString("utf8");
+  let parsedBody;
 
   try {
-    return rawBody ? JSON.parse(rawBody) : {};
+    parsedBody = rawBody ? JSON.parse(rawBody) : {};
   } catch {
     throw new HttpError(400, "Request body is not valid JSON.");
   }
+
+  return requireObjectBody(parsedBody);
+}
+
+function requireObjectBody(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new HttpError(400, "Request body must be an object.");
+  }
+
+  return value;
 }
 
 function requireString(value, fieldName) {
@@ -5609,13 +6178,218 @@ function requireString(value, fieldName) {
   }
 }
 
-function requireInteractionSignal(signal) {
-  if (typeof signal !== "object" || signal === null) {
+function requireIsoDate(value, fieldName) {
+  if (typeof value !== "string" || !isValidIsoDateString(value.trim())) {
+    throw new HttpError(400, `${fieldName} must be a valid ISO date.`);
+  }
+
+  try {
+    return normalizeIsoDate(value.trim());
+  } catch {
+    throw new HttpError(400, `${fieldName} must be a valid ISO date.`);
+  }
+}
+
+function isValidIsoDateString(value) {
+  const match = value.match(
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(?:Z|([+-])(\d{2}):(\d{2}))$/
+  );
+
+  if (!match) {
+    return false;
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const offsetHour = match[8] === undefined ? 0 : Number(match[8]);
+  const offsetMinute = match[9] === undefined ? 0 : Number(match[9]);
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+  return (
+    month >= 1 &&
+    month <= 12 &&
+    day >= 1 &&
+    day <= daysInMonth[month - 1] &&
+    hour <= 23 &&
+    minute <= 59 &&
+    second <= 59 &&
+    offsetHour <= 23 &&
+    offsetMinute <= 59 &&
+    Number.isFinite(new Date(value).getTime())
+  );
+}
+
+function requireInteractionSignal(signal, snapshot) {
+  if (typeof signal !== "object" || signal === null || Array.isArray(signal)) {
     throw new HttpError(400, "signal is required.");
   }
 
   requireString(signal.postId, "signal.postId");
   requireString(signal.topicId, "signal.topicId");
+
+  if (
+    !Array.isArray(signal.conceptIds) ||
+    signal.conceptIds.some((conceptId) => typeof conceptId !== "string" || !conceptId.trim())
+  ) {
+    throw new HttpError(400, "signal.conceptIds must be an array of non-empty strings.");
+  }
+
+  const booleanFields = [
+    "impression",
+    "openedThread",
+    "liked",
+    "saved",
+    "askedQuestion",
+    "reviewed",
+    "skippedQuickly"
+  ];
+
+  for (const field of booleanFields) {
+    if (typeof signal[field] !== "boolean") {
+      throw new HttpError(400, `signal.${field} must be a boolean.`);
+    }
+  }
+
+  const dwellTimeMs =
+    signal.dwellTimeMs === undefined && signal.dwellSeconds !== undefined
+      ? signal.dwellSeconds * 1000
+      : signal.dwellTimeMs;
+
+  if (typeof dwellTimeMs !== "number" || !Number.isFinite(dwellTimeMs) || dwellTimeMs < 0) {
+    throw new HttpError(400, "signal.dwellTimeMs must be a finite non-negative number.");
+  }
+
+  if (
+    signal.dwellSeconds !== undefined &&
+    (typeof signal.dwellSeconds !== "number" || !Number.isFinite(signal.dwellSeconds) || signal.dwellSeconds < 0)
+  ) {
+    throw new HttpError(400, "signal.dwellSeconds must be a finite non-negative number.");
+  }
+
+  const postId = signal.postId.trim();
+
+  if (!snapshot.posts.some((post) => post.id === postId)) {
+    throw new HttpError(400, "signal.postId does not reference a known post.");
+  }
+
+  return {
+    ...signal,
+    postId,
+    topicId: signal.topicId.trim(),
+    conceptIds: signal.conceptIds.map((conceptId) => conceptId.trim()),
+    dwellTimeMs,
+    createdAt: requireIsoDate(signal.createdAt, "signal.createdAt")
+  };
+}
+
+function requireTopicState(topicState, signalTopicId) {
+  if (typeof topicState !== "object" || topicState === null || Array.isArray(topicState)) {
+    throw new HttpError(400, "topicState must be an object.");
+  }
+
+  requireString(topicState.topicId, "topicState.topicId");
+
+  if (topicState.topicId.trim() !== signalTopicId) {
+    throw new HttpError(400, "topicState.topicId must match signal.topicId.");
+  }
+
+  for (const field of ["interestScore", "fatigueScore", "comprehensionScore"]) {
+    if (typeof topicState[field] !== "number" || !Number.isFinite(topicState[field])) {
+      throw new HttpError(400, `topicState.${field} must be a finite number.`);
+    }
+  }
+
+  return {
+    ...topicState,
+    topicId: topicState.topicId.trim(),
+    ...(topicState.cooldownUntil
+      ? { cooldownUntil: requireIsoDate(topicState.cooldownUntil, "topicState.cooldownUntil") }
+      : {})
+  };
+}
+
+function requireSupportedSourceCandidates(candidates) {
+  for (const candidate of candidates) {
+    if (
+      typeof candidate !== "object" ||
+      candidate === null ||
+      Array.isArray(candidate) ||
+      typeof candidate.source !== "object" ||
+      candidate.source === null ||
+      Array.isArray(candidate.source) ||
+      !isSupportedSourceCandidateType(candidate.source.type)
+    ) {
+      throw new HttpError(
+        400,
+        "Source candidate type is not supported. Supported types: article, blog, news, youtube."
+      );
+    }
+
+    requireString(candidate.id, "sourceCandidates[].id");
+    requireString(candidate.source.id, "sourceCandidates[].source.id");
+    requireString(candidate.source.title, "sourceCandidates[].source.title");
+    requireString(candidate.source.url, "sourceCandidates[].source.url");
+    parseHttpUrl(candidate.source.url);
+
+    if (
+      !Array.isArray(candidate.conceptIds) ||
+      candidate.conceptIds.some((conceptId) => typeof conceptId !== "string" || !conceptId.trim())
+    ) {
+      throw new HttpError(400, "sourceCandidates[].conceptIds must be an array of non-empty strings.");
+    }
+
+    for (const field of ["relevanceScore", "noveltyScore", "qualityScore"]) {
+      if (
+        typeof candidate[field] !== "number" ||
+        !Number.isFinite(candidate[field]) ||
+        candidate[field] < 0 ||
+        candidate[field] > 1
+      ) {
+        throw new HttpError(400, `sourceCandidates[].${field} must be a number between 0 and 1.`);
+      }
+    }
+  }
+}
+
+function parseReviewGrade(value) {
+  if (value === undefined) {
+    return "remembered";
+  }
+
+  if (value !== "remembered" && value !== "fuzzy" && value !== "forgot") {
+    throw new HttpError(400, "grade must be remembered, fuzzy, or forgot.");
+  }
+
+  return value;
+}
+
+function parseOptionalIdempotencyKey(value, fieldName) {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (typeof value !== "string" || !value.trim()) {
+    throw new HttpError(400, `${fieldName} must be a non-empty string.`);
+  }
+
+  return value.trim();
+}
+
+function parseOptionalUserId(value) {
+  if (value === undefined) {
+    return "local-user";
+  }
+
+  if (typeof value !== "string" || !value.trim()) {
+    throw new HttpError(400, "userId must be a non-empty string.");
+  }
+
+  return value.trim();
 }
 
 function parseHttpUrl(url) {
@@ -5644,6 +6418,30 @@ function normalizeStringArray(value) {
 
 function normalizeConceptKey(value) {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function filterHistoricalInteractionSignalRecords(records, context) {
+  return records.filter((record) => {
+    const signal = record?.signal;
+    const createdAt = signal?.createdAt ?? record?.createdAt;
+
+    try {
+      if (typeof signal !== "object" || signal === null || !createdAt) {
+        throw new RangeError("Historical interaction signal is incomplete.");
+      }
+
+      normalizeIsoDate(createdAt);
+      return true;
+    } catch (error) {
+      const recordId = typeof record?.id === "string" ? record.id : "unknown";
+      const postId = typeof signal?.postId === "string" ? signal.postId : "unknown";
+      console.warn(
+        `[aitimeline] skipped invalid historical interaction signal during ${context} (record=${recordId}, post=${postId}).`,
+        error
+      );
+      return false;
+    }
+  });
 }
 
 function normalizeIsoDate(value) {
@@ -5684,30 +6482,8 @@ function sanitizeSlug(value) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "source";
 }
 
-function isSourceType(value) {
-  return (
-    value === "youtube" ||
-    value === "article" ||
-    value === "paper" ||
-    value === "blog" ||
-    value === "news" ||
-    value === "repo" ||
-    value === "pdf" ||
-    value === "audio" ||
-    value === "manual" ||
-    value === "user_note"
-  );
-}
-
-function isSourceCandidateStatus(value) {
-  return (
-    value === "pending" ||
-    value === "queued" ||
-    value === "imported" ||
-    value === "dismissed" ||
-    value === "rejected_source" ||
-    value === "unreachable"
-  );
+function isSupportedSourceCandidateType(value) {
+  return value === "article" || value === "blog" || value === "news" || value === "youtube";
 }
 
 function isSourceCandidateIntakeKind(value) {

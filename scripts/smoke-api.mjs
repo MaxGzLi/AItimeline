@@ -18,6 +18,8 @@ await writeFile(join(mediaRootDir, "smoke-source", "1.png"), new Uint8Array([137
 let discoveryBaseUrl = "";
 const baseUrl = "http://aitimeline-smoke.local";
 const observedSearchQueries = [];
+const deepReadFallbackModelEndpoint = "https://deepread-fallback.local/v1/chat/completions";
+const observedDeepReadFallbackRequests = [];
 const fakeSearchProvider = {
   id: "smoke",
   async search(query) {
@@ -66,6 +68,18 @@ globalThis.fetch = async (input, init = {}) => {
 
   if (url.startsWith("https://network-fail.local/")) {
     throw new TypeError("fetch failed");
+  }
+
+  if (url.startsWith("https://fallback-leak.local/")) {
+    throw new Error("network provider body from https://internal-provider.local/private/deep-dive");
+  }
+
+  if (url === deepReadFallbackModelEndpoint) {
+    observedDeepReadFallbackRequests.push({ url, headers: new Headers(init.headers) });
+    return new Response(JSON.stringify({ choices: [{ message: { content: "{}" } }] }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
   }
 
   if (url.startsWith(baseUrl)) {
@@ -223,6 +237,128 @@ try {
     await closeServer(backfillServer);
   }
 
+  const invalidHistoricalSignalDataPath = join(tempDir, "invalid-historical-signal.json");
+  const invalidHistoricalSignalCurationPath = join(tempDir, "invalid-historical-signal-curation.json");
+  const historicalSignalPost = makeApiSmokePost({
+    id: "historical-signal-post",
+    title: "Historical signal post",
+    concepts: ["Historical Signal"]
+  });
+
+  await writeFile(
+    invalidHistoricalSignalDataPath,
+    JSON.stringify({
+      version: 1,
+      updatedAt: "2026-06-10T00:00:00.000Z",
+      posts: [historicalSignalPost],
+      interactionSignals: [
+        makeInteractionSignalRecord(historicalSignalPost, { createdAt: "not-a-date" })
+      ]
+    })
+  );
+
+  const invalidHistoricalSignalServer = createApiServer({
+    dataPath: invalidHistoricalSignalDataPath,
+    curationDataPath: invalidHistoricalSignalCurationPath,
+    mediaRootDir,
+    enableFixtures: true,
+    searchProvider: fakeSearchProvider
+  });
+
+  try {
+    const originalConsoleWarn = console.warn;
+    const historicalSignalWarnings = [];
+    let historicalTimelineResponse;
+
+    console.warn = (...args) => historicalSignalWarnings.push(args);
+
+    try {
+      historicalTimelineResponse = await dispatchToServer(
+        invalidHistoricalSignalServer,
+        `${baseUrl}/api/timeline?now=2026-06-10T00:00:00.000Z`
+      );
+    } finally {
+      console.warn = originalConsoleWarn;
+    }
+
+    const historicalTimeline = await historicalTimelineResponse.json();
+
+    assert.equal(historicalTimelineResponse.status, 200, "one bad historical signal must not crash timeline");
+    assert.ok(
+      historicalTimeline.posts.some((post) => post.id === historicalSignalPost.id),
+      "timeline should keep serving posts after isolating a bad historical signal"
+    );
+    assert.ok(
+      historicalSignalWarnings.some((args) => String(args[0]).includes("skipped invalid historical interaction signal")),
+      "isolated historical signals should be recorded in the server log"
+    );
+  } finally {
+    await closeServer(invalidHistoricalSignalServer);
+  }
+
+  const structuredErrorDataPath = join(tempDir, "structured-error-redaction.json");
+  const structuredErrorCurationPath = join(tempDir, "structured-error-redaction-curation.json");
+  const sensitiveStructuredError =
+    "provider failed at https://internal.example/private using /Users/example/private-config.json";
+
+  await writeFile(
+    structuredErrorDataPath,
+    JSON.stringify({
+      version: 1,
+      updatedAt: "2026-06-10T00:00:00.000Z",
+      sourceImports: [
+        {
+          id: "failed-structured-import",
+          source: {
+            id: "failed-structured-source",
+            title: "Failed structured source",
+            url: "https://example.com/failed-structured-source",
+            type: "article"
+          },
+          status: "failed",
+          createdAt: "2026-06-10T00:00:00.000Z",
+          errorMessage: sensitiveStructuredError
+        }
+      ],
+      subscriptions: [
+        {
+          id: "failed-structured-subscription",
+          kind: "rss",
+          feedUrl: "https://example.com/feed.xml",
+          title: "Failed structured subscription",
+          filterMode: "relevant",
+          createdAt: "2026-06-01T00:00:00.000Z",
+          lastError: sensitiveStructuredError
+        }
+      ]
+    })
+  );
+
+  const structuredErrorServer = createApiServer({
+    dataPath: structuredErrorDataPath,
+    curationDataPath: structuredErrorCurationPath,
+    mediaRootDir,
+    enableFixtures: true,
+    searchProvider: fakeSearchProvider
+  });
+
+  try {
+    const structuredTimeline = await requestJsonFromServer(
+      structuredErrorServer,
+      "/api/timeline?now=2026-06-10T00:00:00.000Z"
+    );
+    const structuredSubscriptions = await requestJsonFromServer(structuredErrorServer, "/api/subscriptions");
+    const structuredSnapshot = await requestJsonFromServer(structuredErrorServer, "/api/snapshot");
+
+    for (const payload of [structuredTimeline, structuredSubscriptions, structuredSnapshot]) {
+      const serialized = JSON.stringify(payload);
+      assert.equal(serialized.includes("internal.example"), false, "structured responses must redact internal URLs");
+      assert.equal(serialized.includes("/Users/example"), false, "structured responses must redact file paths");
+    }
+  } finally {
+    await closeServer(structuredErrorServer);
+  }
+
   const backfillLimitDataPath = join(tempDir, "review-backfill-limit.json");
   const backfillLimitCurationPath = join(tempDir, "review-backfill-limit-curation.json");
   const backfillLimitPosts = Array.from({ length: 55 }, (_, index) =>
@@ -264,6 +400,245 @@ try {
     assert.equal(limitSnapshot.reviewStates.length, 50, "legacy review backfill should create at most 50 states per request");
   } finally {
     await closeServer(backfillLimitServer);
+  }
+
+  const reviewGradeDataPath = join(tempDir, "review-grades.json");
+  const reviewGradeCurationPath = join(tempDir, "review-grades-curation.json");
+  const reviewGradePosts = [
+    makeReviewGradePost("review-remembered", "Review remembered", "Remembered Concept"),
+    makeReviewGradePost("review-fuzzy", "Review fuzzy", "Fuzzy Concept"),
+    makeReviewGradePost("review-forgot", "Review forgot", "Forgot Concept"),
+    makeReviewGradePost("review-forgot-peer-a", "Review forgot peer A", "Forgot Concept"),
+    makeReviewGradePost("review-forgot-peer-b", "Review forgot peer B", "Forgot Concept")
+  ];
+
+  await writeFile(
+    reviewGradeDataPath,
+    JSON.stringify({
+      version: 1,
+      updatedAt: "2026-06-10T00:00:00.000Z",
+      posts: reviewGradePosts,
+      reviewStates: [
+        {
+          postId: "review-remembered",
+          intervalDays: 3,
+          dueAt: "2026-06-10T00:00:00.000Z",
+          lastReviewedAt: "2026-06-07T00:00:00.000Z"
+        },
+        {
+          postId: "review-fuzzy",
+          intervalDays: 3,
+          dueAt: "2026-06-10T00:00:00.000Z",
+          lastReviewedAt: "2026-06-07T00:00:00.000Z"
+        },
+        {
+          postId: "review-forgot",
+          intervalDays: 7,
+          dueAt: "2026-06-10T00:00:00.000Z",
+          lastReviewedAt: "2026-06-03T00:00:00.000Z"
+        },
+        {
+          postId: "review-forgot-peer-a",
+          intervalDays: 7,
+          dueAt: "2026-06-20T00:00:00.000Z",
+          lastReviewedAt: "2026-06-03T00:00:00.000Z"
+        },
+        {
+          postId: "review-forgot-peer-b",
+          intervalDays: 14,
+          dueAt: "2026-06-24T00:00:00.000Z",
+          lastReviewedAt: "2026-06-10T00:00:00.000Z"
+        }
+      ],
+      topicStates: [
+        {
+          topicId: "Forgot Concept",
+          interestScore: 0.8,
+          fatigueScore: 0.1,
+          comprehensionScore: 0.9,
+          updatedAt: "2026-06-10T00:00:00.000Z"
+        }
+      ]
+    })
+  );
+
+  const reviewGradeServer = createApiServer({
+    dataPath: reviewGradeDataPath,
+    curationDataPath: reviewGradeCurationPath,
+    mediaRootDir,
+    enableFixtures: true,
+    searchProvider: fakeSearchProvider
+  });
+
+  try {
+    const reviewDue = await requestJsonFromServer(
+      reviewGradeServer,
+      "/api/review/due?now=2026-06-10T00:00:00.000Z"
+    );
+    const rememberedDue = reviewDue.due.find((item) => item.postId === "review-remembered");
+    const forgotDue = reviewDue.due.find((item) => item.postId === "review-forgot");
+
+    assert.deepEqual(
+      rememberedDue?.reviewPrompt,
+      {
+        id: "review-remembered-prompt-3",
+        prompt: "Review remembered prompt for day 3",
+        answerHint: "Review remembered answer for day 3"
+      },
+      "due review should select the prompt whose dueInDays matches the current interval"
+    );
+    assert.equal(
+      forgotDue?.reviewPrompt?.answerHint,
+      "Review forgot answer for day 7",
+      "due review should carry the matched prompt answerHint"
+    );
+    assert.ok(
+      reviewDue.due.every((item) => item.reviewPrompt?.id && item.reviewPrompt.prompt && item.reviewPrompt.answerHint),
+      "every due review item should carry an id, prompt, and answerHint"
+    );
+
+    const rememberedBody = {
+      reviewedAt: "2026-06-10T01:00:00.000Z",
+      grade: "remembered",
+      reviewEventId: "review-event-remembered-1"
+    };
+    const remembered = await requestJsonFromServer(
+      reviewGradeServer,
+      "/api/review/review-remembered/complete",
+      { method: "POST", body: rememberedBody }
+    );
+    const rememberedSnapshot = await requestJsonFromServer(reviewGradeServer, "/api/snapshot");
+    const rememberedReplay = await requestJsonFromServer(
+      reviewGradeServer,
+      "/api/review/review-remembered/complete",
+      {
+        method: "POST",
+        body: {
+          ...rememberedBody,
+          reviewedAt: "2026-06-12T01:00:00.000Z",
+          grade: "forgot"
+        }
+      }
+    );
+    const rememberedReplaySnapshot = await requestJsonFromServer(reviewGradeServer, "/api/snapshot");
+
+    assert.equal(remembered.reviewState.intervalDays, 7, "remembered should advance to the next review interval");
+    assert.equal(remembered.nextDueAt, "2026-06-17T01:00:00.000Z", "remembered should return its next due time");
+    assert.equal(rememberedReplay.reviewState.intervalDays, 7, "same reviewEventId replay must not advance twice");
+    assert.equal(
+      rememberedReplay.nextDueAt,
+      remembered.nextDueAt,
+      "same reviewEventId must return the first result even when replay payload fields change"
+    );
+    assert.equal(rememberedReplay.idempotentReplay, true, "same reviewEventId should be reported as a replay");
+    assert.equal(
+      rememberedReplaySnapshot.interactionSignals.length,
+      rememberedSnapshot.interactionSignals.length,
+      "same reviewEventId replay must not duplicate review side effects"
+    );
+    assert.deepEqual(
+      rememberedReplaySnapshot.topicStates,
+      rememberedSnapshot.topicStates,
+      "same reviewEventId replay must not update topic state twice"
+    );
+
+    const fuzzy = await requestJsonFromServer(reviewGradeServer, "/api/review/review-fuzzy/complete", {
+      method: "POST",
+      body: {
+        reviewedAt: "2026-06-10T02:00:00.000Z",
+        grade: "fuzzy",
+        reviewEventId: "review-event-fuzzy-1"
+      }
+    });
+
+    assert.equal(fuzzy.reviewState.intervalDays, 3, "fuzzy should keep the current review interval");
+    assert.equal(fuzzy.nextDueAt, "2026-06-13T02:00:00.000Z", "fuzzy should schedule from the held interval");
+
+    const forgot = await requestJsonFromServer(reviewGradeServer, "/api/review/review-forgot/complete", {
+      method: "POST",
+      body: {
+        reviewedAt: "2026-06-10T03:00:00.000Z",
+        grade: "forgot",
+        reviewEventId: "review-event-forgot-1"
+      }
+    });
+    const forgotSnapshot = await requestJsonFromServer(reviewGradeServer, "/api/snapshot");
+    const forgotMemory = forgotSnapshot.userMemories.find((record) => record.userId === "local-user")?.memory;
+
+    assert.equal(forgot.reviewState.intervalDays, 1, "forgot should reset to the shortest review interval");
+    assert.equal(forgot.nextDueAt, "2026-06-11T03:00:00.000Z", "forgot should return the reset due time");
+    assert.deepEqual(forgot.masteryPromotions, [], "forgot must not promote mastery");
+    assert.equal(
+      forgotMemory?.knowledge.knownConcepts.includes("Forgot Concept") ?? false,
+      false,
+      "forgot must not add the reviewed concept to mastery memory"
+    );
+  } finally {
+    await closeServer(reviewGradeServer);
+  }
+
+  const failedCandidateDataPath = join(tempDir, "failed-candidate.json");
+  const failedCandidateCurationPath = join(tempDir, "failed-candidate-curation.json");
+  const failedCandidateRecord = makeSourceCandidateRecord({
+    id: "legacy-unsupported-candidate",
+    url: "https://github.com/example/legacy-unsupported-candidate",
+    score: 0.9,
+    status: "queued",
+    concept: "Legacy Candidate",
+    createdAt: "2026-06-10T00:00:00.000Z"
+  });
+  failedCandidateRecord.candidate.source.type = "repo";
+  const failedCandidateJob = makeQueuedImportJobRecord(
+    failedCandidateRecord,
+    "2026-06-10T00:00:00.000Z"
+  );
+
+  await writeFile(
+    failedCandidateDataPath,
+    JSON.stringify({
+      version: 1,
+      updatedAt: "2026-06-10T00:00:00.000Z",
+      sourceCandidates: [failedCandidateRecord]
+    })
+  );
+  await writeFile(
+    failedCandidateCurationPath,
+    JSON.stringify({ version: 1, records: [failedCandidateJob] })
+  );
+
+  const failedCandidateServer = createApiServer({
+    dataPath: failedCandidateDataPath,
+    curationDataPath: failedCandidateCurationPath,
+    mediaRootDir,
+    enableFixtures: true,
+    searchProvider: fakeSearchProvider
+  });
+
+  try {
+    const failedCandidateBatch = await requestJsonFromServer(failedCandidateServer, "/api/curation/run", {
+      method: "POST",
+      body: { now: "2026-06-10T00:00:00.000Z", kinds: ["import_source"] }
+    });
+    const failedCandidateSnapshot = await requestJsonFromServer(failedCandidateServer, "/api/snapshot");
+    const terminalCandidate = failedCandidateSnapshot.sourceCandidates.find(
+      (record) => record.id === failedCandidateRecord.id
+    );
+    const terminalJob = failedCandidateBatch.records.find((record) => record.job.id === failedCandidateJob.job.id);
+
+    assert.equal(terminalJob?.status, "failed", "unsupported legacy import jobs should reach a failed terminal state");
+    assert.equal(terminalJob?.lastError, "Source import failed.", "failed job responses should redact internal causes");
+    assert.equal(
+      terminalCandidate?.status,
+      "rejected_source",
+      "non-network terminal import failures should move candidates out of queued"
+    );
+    assert.deepEqual(
+      terminalCandidate?.rejectionReasons,
+      ["Source import failed."],
+      "terminal candidate failures should persist a stable failure reason"
+    );
+  } finally {
+    await closeServer(failedCandidateServer);
   }
 
   const masteryDataPath = join(tempDir, "mastery-promotion.json");
@@ -2054,7 +2429,431 @@ try {
 
   assert.ok(dismissedPost, "article smoke should have a second post for dismiss lifecycle coverage");
 
+  const boundarySnapshotBefore = await requestJson("/api/snapshot");
+  const validBoundarySignal = {
+    postId: firstPost.id,
+    topicId: firstPost.concepts[0] ?? firstPost.id,
+    conceptIds: firstPost.concepts,
+    impression: true,
+    dwellTimeMs: 1000,
+    openedThread: false,
+    liked: false,
+    saved: false,
+    askedQuestion: false,
+    reviewed: false,
+    skippedQuickly: false,
+    createdAt: "2026-06-10T00:00:00.000Z"
+  };
+  const nullBodyResponse = await dispatchToServer(server, `${baseUrl}/api/signals`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "null"
+  });
+  const nullBodyPayload = await nullBodyResponse.json();
+
+  assert.equal(nullBodyResponse.status, 400, "JSON null request bodies should be rejected as client errors");
+  assert.equal(nullBodyPayload.error, "Request body must be an object.", "null body errors should be stable");
+
+  for (const invalidObjectBody of ["[]", "42", '"scalar"']) {
+    const invalidObjectBodyResponse = await dispatchToServer(server, `${baseUrl}/api/signals`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: invalidObjectBody
+    });
+
+    assert.equal(invalidObjectBodyResponse.status, 400, "array and scalar JSON bodies should return 400");
+  }
+
+  const invalidSignals = [
+    { ...validBoundarySignal, createdAt: "not-a-date" },
+    { ...validBoundarySignal, createdAt: "2026/06/10 00:00:00" },
+    { ...validBoundarySignal, createdAt: "2026-02-30T00:00:00.000Z" },
+    { ...validBoundarySignal, dwellTimeMs: -1 },
+    { ...validBoundarySignal, dwellSeconds: -1 },
+    { ...validBoundarySignal, liked: "yes" },
+    { ...validBoundarySignal, conceptIds: "not-an-array" },
+    { ...validBoundarySignal, postId: "missing-post" }
+  ];
+
+  for (const invalidSignal of invalidSignals) {
+    const invalidSignalResponse = await dispatchToServer(server, `${baseUrl}/api/signals`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ signal: invalidSignal })
+    });
+
+    assert.equal(invalidSignalResponse.status, 400, "invalid signals should return 400");
+  }
+
+  const nonFiniteDwellResponse = await dispatchToServer(server, `${baseUrl}/api/signals`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ signal: validBoundarySignal }).replace('"dwellTimeMs":1000', '"dwellTimeMs":1e999')
+  });
+
+  assert.equal(nonFiniteDwellResponse.status, 400, "non-finite signal dwell should return 400");
+
+  const declaredOversizeResponse = await dispatchToServer(server, `${baseUrl}/api/signals`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "content-length": String(1024 * 1024 + 1) },
+    body: "{}"
+  });
+  const declaredOversizePayload = await declaredOversizeResponse.json();
+
+  assert.equal(declaredOversizeResponse.status, 413, "oversized Content-Length should be rejected before reading");
+  assert.equal(declaredOversizePayload.error, "Request body is too large.", "413 should return a JSON error");
+
+  let streamedRequestDestroyed = false;
+  let streamedRequestResumed = false;
+  const streamedOversizeResponse = await dispatchToServer(server, `${baseUrl}/api/signals`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: Buffer.alloc(1024 * 1024 + 1, 97),
+    onDestroy: () => {
+      streamedRequestDestroyed = true;
+    },
+    onResume: () => {
+      streamedRequestResumed = true;
+    }
+  });
+  const streamedOversizePayload = await streamedOversizeResponse.json();
+
+  assert.equal(streamedOversizeResponse.status, 413, "chunked oversized bodies should return 413");
+  assert.equal(streamedOversizePayload.error, "Request body is too large.", "streamed 413 should stay JSON");
+  assert.equal(streamedRequestDestroyed, false, "streamed body rejection must not destroy the request before 413");
+  assert.equal(streamedRequestResumed, true, "streamed body rejection should safely drain the remaining request");
+
+  const boundarySnapshotAfter = await requestJson("/api/snapshot");
+  const timelineAfterInvalidSignals = await dispatchToServer(
+    server,
+    `${baseUrl}/api/timeline?now=2026-06-10T00:00:00.000Z`
+  );
+
+  assert.equal(
+    boundarySnapshotAfter.interactionSignals.length,
+    boundarySnapshotBefore.interactionSignals.length,
+    "invalid signals must not be persisted"
+  );
+  assert.equal(timelineAfterInvalidSignals.status, 200, "timeline should remain healthy after invalid signal attempts");
+
+  const originalConsoleError = console.error;
+  const loggedInternalErrors = [];
+  let redactedErrorResponse;
+
+  console.error = (...args) => loggedInternalErrors.push(args);
+
+  try {
+    redactedErrorResponse = await dispatchToServer(server, `${baseUrl}/api/import/article`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url: "https://network-fail.local/private-provider-path" })
+    });
+  } finally {
+    console.error = originalConsoleError;
+  }
+
+  const redactedErrorPayload = await redactedErrorResponse.json();
+
+  assert.equal(redactedErrorResponse.status, 500, "unexpected provider failures should return 500");
+  assert.equal(redactedErrorPayload.error, "Internal server error.", "500 responses should use a stable message");
+  assert.equal(
+    JSON.stringify(redactedErrorPayload).includes("network-fail.local"),
+    false,
+    "500 responses must not expose internal upstream URLs"
+  );
+  assert.ok(loggedInternalErrors.length > 0, "unexpected error causes should be written to the server log");
+  assert.ok(
+    loggedInternalErrors.flat().some((value) => String(value).includes("fetch failed")),
+    "server logs should retain the detailed unexpected error cause"
+  );
+
+  const legacyNotificationDataPath = join(tempDir, "legacy-error-notification.json");
+  const legacyNotificationCurationPath = join(tempDir, "legacy-error-notification-curation.json");
+  const legacyProviderDetail = "provider body from https://internal-provider.local/private/research";
+  const legacyNotification = {
+    id: "legacy-research-error-notification",
+    kind: "research_progress",
+    turnId: "legacy-research-turn",
+    question: "What failed?",
+    postIds: [],
+    body: `Research finished, but every imported source failed or was blocked by validation: ${legacyProviderDetail}`,
+    createdAt: "2026-06-10T04:00:00.000Z"
+  };
+  const legacyFallbackPost = {
+    ...makeApiSmokePost({
+      id: "legacy-fallback-provider-error",
+      title: "Legacy fallback provider error",
+      concepts: ["Fallback Redaction"],
+      createdAt: legacyNotification.createdAt
+    }),
+    recommendedBecause:
+      `No better source was found, so this same-source follow-up was generated after "Seed card". ${legacyProviderDetail}`
+  };
+
+  await writeFile(
+    legacyNotificationDataPath,
+    JSON.stringify({
+      version: 1,
+      updatedAt: legacyNotification.createdAt,
+      posts: [legacyFallbackPost],
+      notifications: [legacyNotification]
+    })
+  );
+
+  const legacyNotificationServer = createApiServer({
+    dataPath: legacyNotificationDataPath,
+    curationDataPath: legacyNotificationCurationPath,
+    mediaRootDir
+  });
+
+  try {
+    const listedLegacyNotifications = await requestJsonFromServer(legacyNotificationServer, "/api/notifications");
+    const legacyNotificationSnapshot = await requestJsonFromServer(legacyNotificationServer, "/api/snapshot");
+    const legacyFallbackTimeline = await requestJsonFromServer(
+      legacyNotificationServer,
+      "/api/timeline?now=2026-06-10T04:00:00.000Z"
+    );
+    const readLegacyNotification = await requestJsonFromServer(
+      legacyNotificationServer,
+      `/api/notifications/${encodeURIComponent(legacyNotification.id)}/read`,
+      { method: "POST", body: {} }
+    );
+    const responseBodies = [
+      listedLegacyNotifications.records[0]?.body,
+      legacyNotificationSnapshot.notifications[0]?.body,
+      readLegacyNotification.record?.body
+    ];
+
+    assert.deepEqual(
+      responseBodies,
+      Array(3).fill(
+        "Research finished, but every imported source failed or was blocked by validation: Source import failed."
+      ),
+      "legacy research failure notifications should expose only a stable failure detail"
+    );
+    assert.equal(
+      JSON.stringify({
+        listedLegacyNotifications,
+        legacyNotificationSnapshot,
+        legacyFallbackTimeline,
+        readLegacyNotification
+      }).includes(legacyProviderDetail),
+      false,
+      "notification, snapshot, and timeline APIs must not expose historical provider error text"
+    );
+    assert.equal(
+      legacyFallbackTimeline.posts[0]?.recommendedBecause,
+      "[beyond source] No better source was found, so this same-source follow-up was generated.",
+      "historical same-source fallback posts should expose only a stable reason"
+    );
+  } finally {
+    await closeServer(legacyNotificationServer);
+  }
+
+  const fallbackLeakDataPath = join(tempDir, "deep-dive-fallback-redaction.json");
+  const fallbackLeakCurationPath = join(tempDir, "deep-dive-fallback-redaction-curation.json");
+  const fallbackLeakNow = "2026-06-10T05:00:00.000Z";
+  const fallbackLeakProviderDetail = "https://internal-provider.local/private/deep-dive";
+  const fallbackLeakOriginalPostIds = new Set(boundarySnapshotAfter.posts.map((post) => post.id));
+
+  await writeFile(
+    fallbackLeakDataPath,
+    JSON.stringify({
+      ...boundarySnapshotAfter,
+      updatedAt: fallbackLeakNow,
+      interactionSignals: [],
+      topicStates: [],
+      sourceCandidates: [],
+      autoJobBudget: []
+    })
+  );
+  await writeFile(fallbackLeakCurationPath, JSON.stringify({ version: 1, records: [] }));
+
+  const previousModelName = process.env.AITIMELINE_MODEL_NAME;
+  const previousOpenAiModel = process.env.OPENAI_MODEL;
+  delete process.env.AITIMELINE_MODEL_NAME;
+  delete process.env.OPENAI_MODEL;
+
+  const fallbackLeakServer = createApiServer({
+    dataPath: fallbackLeakDataPath,
+    curationDataPath: fallbackLeakCurationPath,
+    mediaRootDir,
+    searchProvider: {
+      id: "fallback-leak-smoke",
+      async search() {
+        return [
+          {
+            url: "https://fallback-leak.local/new-source",
+            title: "Deep-dive source that fails upstream",
+            snippet: "A source candidate whose provider failure must never reach a successful fallback card."
+          }
+        ];
+      }
+    }
+  });
+
+  if (previousModelName === undefined) {
+    delete process.env.AITIMELINE_MODEL_NAME;
+  } else {
+    process.env.AITIMELINE_MODEL_NAME = previousModelName;
+  }
+
+  if (previousOpenAiModel === undefined) {
+    delete process.env.OPENAI_MODEL;
+  } else {
+    process.env.OPENAI_MODEL = previousOpenAiModel;
+  }
+
+  try {
+    const fallbackLeakSignal = await requestJsonFromServer(fallbackLeakServer, "/api/signals", {
+      method: "POST",
+      body: {
+        generatedAt: fallbackLeakNow,
+        signal: {
+          postId: firstPost.id,
+          topicId: firstPost.concepts[0] ?? firstPost.id,
+          conceptIds: firstPost.concepts,
+          impression: true,
+          dwellTimeMs: 12000,
+          openedThread: true,
+          liked: true,
+          saved: false,
+          askedQuestion: false,
+          reviewed: false,
+          skippedQuickly: false,
+          createdAt: fallbackLeakNow
+        },
+        topicState: {
+          topicId: firstPost.concepts[0] ?? firstPost.id,
+          interestScore: 0.9,
+          fatigueScore: 0.1,
+          comprehensionScore: 0.5
+        },
+        sourceCandidates: []
+      }
+    });
+    const queuedDeepDiveJob = fallbackLeakSignal.plan.jobs.find(
+      (job) => job.kind === "discover_sources" && job.nextAction === "continue_deeper"
+    );
+
+    assert.ok(queuedDeepDiveJob, "an interested signal should queue a deep-dive follow-up job");
+
+    const previousFallbackConsoleError = console.error;
+    const fallbackErrorLogs = [];
+    let fallbackLeakBatch;
+
+    console.error = (...args) => fallbackErrorLogs.push(args);
+
+    try {
+      fallbackLeakBatch = await requestJsonFromServer(fallbackLeakServer, "/api/curation/run", {
+        method: "POST",
+        body: { now: "2026-06-10T06:00:00.000Z", kinds: ["discover_sources"] }
+      });
+    } finally {
+      console.error = previousFallbackConsoleError;
+    }
+
+    const fallbackLeakSnapshot = await requestJsonFromServer(fallbackLeakServer, "/api/snapshot");
+    const safeFallbackPost = fallbackLeakSnapshot.posts.find(
+      (post) =>
+        !fallbackLeakOriginalPostIds.has(post.id) &&
+        typeof post.recommendedBecause === "string" &&
+        post.recommendedBecause === "[超出来源] 没找到可用的新来源,所以生成了同源跟进卡。"
+    );
+    const fallbackPayload = JSON.stringify({ fallbackLeakBatch, fallbackLeakSnapshot });
+
+    assert.ok(safeFallbackPost, "a failed deep-dive source should produce a same-source fallback with a stable reason");
+    assert.equal(
+      fallbackPayload.includes(fallbackLeakProviderDetail),
+      false,
+      "successful fallback cards and job responses must not expose the original provider failure"
+    );
+    assert.ok(
+      fallbackErrorLogs.flat().some((value) => String(value).includes(fallbackLeakProviderDetail)),
+      "deep-dive fallback failures should retain the provider detail in server logs"
+    );
+  } finally {
+    await closeServer(fallbackLeakServer);
+  }
+
   const firstConcept = firstPost.concepts[0];
+  const deepReadEnvDataPath = join(tempDir, "deepread-env-fallback.json");
+  const deepReadEnvCurationPath = join(tempDir, "deepread-env-fallback-curation.json");
+  const deepReadEnvKeys = [
+    "AITIMELINE_MODEL_NAME",
+    "AITIMELINE_MODEL_API_KEY",
+    "AITIMELINE_MODEL_BASE_URL",
+    "AITIMELINE_MODEL_DEEPREAD_NAME",
+    "AITIMELINE_MODEL_DEEPREAD_API_KEY",
+    "AITIMELINE_MODEL_DEEPREAD_BASE_URL"
+  ];
+  const previousDeepReadEnv = Object.fromEntries(deepReadEnvKeys.map((key) => [key, process.env[key]]));
+  let deepReadEnvServer;
+
+  observedDeepReadFallbackRequests.length = 0;
+
+  try {
+    process.env.AITIMELINE_MODEL_NAME = "fallback-deepread-model";
+    process.env.AITIMELINE_MODEL_API_KEY = "fallback-deepread-key";
+    process.env.AITIMELINE_MODEL_BASE_URL = "https://deepread-fallback.local/v1";
+    process.env.AITIMELINE_MODEL_DEEPREAD_NAME = "deepread-override-model";
+    process.env.AITIMELINE_MODEL_DEEPREAD_API_KEY = "";
+    process.env.AITIMELINE_MODEL_DEEPREAD_BASE_URL = "   ";
+
+    await writeFile(
+      deepReadEnvDataPath,
+      JSON.stringify({
+        ...boundarySnapshotAfter,
+        updatedAt: "2026-06-15T00:00:00.000Z",
+        deepReadArticles: [],
+        autoJobBudget: []
+      })
+    );
+
+    deepReadEnvServer = createApiServer({
+      dataPath: deepReadEnvDataPath,
+      curationDataPath: deepReadEnvCurationPath,
+      mediaRootDir,
+      enableFixtures: true,
+      searchProvider: fakeSearchProvider
+    });
+  } finally {
+    for (const key of deepReadEnvKeys) {
+      if (previousDeepReadEnv[key] === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = previousDeepReadEnv[key];
+      }
+    }
+  }
+
+  try {
+    await requestJsonFromServer(deepReadEnvServer, "/api/deepread", {
+      method: "POST",
+      body: { topic: firstConcept, now: "2026-06-15T00:00:00.000Z" }
+    });
+    await requestJsonFromServer(deepReadEnvServer, "/api/curation/run", {
+      method: "POST",
+      body: {
+        now: "2026-06-15T00:01:00.000Z",
+        limit: 1,
+        kinds: ["deep_read_article"]
+      }
+    });
+
+    assert.ok(
+      observedDeepReadFallbackRequests.length > 0,
+      "blank deep-read base URL should fall back to the configured default model endpoint"
+    );
+    assert.equal(
+      observedDeepReadFallbackRequests[0].headers.get("authorization"),
+      "Bearer fallback-deepread-key",
+      "blank deep-read API key should fall back to the configured default model key"
+    );
+  } finally {
+    await closeServer(deepReadEnvServer);
+  }
+
   const briefOpen = await requestJson(`/api/concepts/${encodeURIComponent(firstConcept)}/brief`, {
     method: "POST",
     body: {
@@ -2158,6 +2957,15 @@ try {
   );
   const deepReadParagraphCitations = generatedDeepRead.chapters.flatMap((chapter) =>
     chapter.paragraphs.flatMap((paragraph) => paragraph.citations)
+  );
+  const deepReadFactParagraphs = generatedDeepRead.chapters.flatMap((chapter) =>
+    chapter.paragraphs.filter((paragraph) => paragraph.kind === "fact")
+  );
+
+  assert.ok(deepReadFactParagraphs.length > 0, "deep-read smoke should generate at least one factual paragraph");
+  assert.ok(
+    deepReadFactParagraphs.every((paragraph) => paragraph.citations.length > 0),
+    "every factual deep-read paragraph must carry at least one citation"
   );
 
   assert.ok(
@@ -2422,8 +3230,122 @@ try {
   );
 
   const previousBudget = process.env.AITIMELINE_DAILY_AUTO_JOB_BUDGET;
+  const signalIdempotencyDataPath = join(tempDir, "signal-idempotency.json");
+  const signalIdempotencyCurationPath = join(tempDir, "signal-idempotency-curation.json");
+  const signalIdempotencyPost = makeApiSmokePost({
+    id: "signal-idempotency-post",
+    title: "Signal idempotency post",
+    concepts: ["Idempotency Budget"],
+    createdAt: "2026-06-09T00:00:00.000Z"
+  });
+
+  await writeFile(
+    signalIdempotencyDataPath,
+    JSON.stringify({
+      version: 1,
+      updatedAt: "2026-06-09T00:00:00.000Z",
+      posts: [signalIdempotencyPost]
+    })
+  );
+
+  process.env.AITIMELINE_DAILY_AUTO_JOB_BUDGET = "20";
+  const signalIdempotencyServer = createApiServer({
+    dataPath: signalIdempotencyDataPath,
+    curationDataPath: signalIdempotencyCurationPath,
+    mediaRootDir,
+    enableFixtures: true,
+    searchProvider: fakeSearchProvider
+  });
+
+  try {
+    const idempotencyBudgetBody = {
+      generatedAt: "2026-06-09T03:00:00.000Z",
+      topicState: {
+        topicId: "Idempotency Budget",
+        interestScore: 0.8,
+        fatigueScore: 0.1,
+        comprehensionScore: 0.5
+      },
+      signal: {
+        postId: signalIdempotencyPost.id,
+        topicId: "Idempotency Budget",
+        conceptIds: ["Idempotency Budget"],
+        impression: true,
+        dwellTimeMs: 18000,
+        openedThread: true,
+        liked: true,
+        saved: false,
+        askedQuestion: false,
+        reviewed: false,
+        skippedQuickly: false,
+        createdAt: "2026-06-09T03:00:00.000Z"
+      }
+    };
+    await requestJsonFromServer(signalIdempotencyServer, "/api/signals", {
+      method: "POST",
+      body: idempotencyBudgetBody
+    });
+    const firstIdempotencySnapshot = await requestJsonFromServer(signalIdempotencyServer, "/api/snapshot");
+    const repeatedBudgetSignal = await requestJsonFromServer(signalIdempotencyServer, "/api/signals", {
+      method: "POST",
+      body: idempotencyBudgetBody
+    });
+    const repeatedIdempotencySnapshot = await requestJsonFromServer(signalIdempotencyServer, "/api/snapshot");
+    const firstIdempotencyBudgetRecord = firstIdempotencySnapshot.autoJobBudget.find(
+      (record) => record.date === "2026-06-09"
+    );
+    const repeatedIdempotencyBudgetRecord = repeatedIdempotencySnapshot.autoJobBudget.find(
+      (record) => record.date === "2026-06-09"
+    );
+
+    assert.equal(repeatedBudgetSignal.idempotentReplay, true, "identical signal retries should short-circuit");
+    assert.equal(firstIdempotencyBudgetRecord?.used, 1, "first signal should consume one automatic-job budget slot");
+    assert.equal(repeatedIdempotencyBudgetRecord?.used, 1, "identical signal retry should not consume budget twice");
+    assert.equal(
+      repeatedIdempotencyBudgetRecord?.discarded,
+      firstIdempotencyBudgetRecord?.discarded,
+      "identical signal retry should not count as a discarded budget attempt"
+    );
+    assert.deepEqual(
+      repeatedIdempotencySnapshot.topicStates,
+      firstIdempotencySnapshot.topicStates,
+      "identical signal retry should not update topic state twice"
+    );
+    assert.equal(
+      repeatedIdempotencySnapshot.interactionSignals.length,
+      firstIdempotencySnapshot.interactionSignals.length,
+      "identical signal retry should keep one signal record"
+    );
+  } finally {
+    await closeServer(signalIdempotencyServer);
+  }
+
   const budgetDataPath = join(tempDir, "budget-aitimeline.json");
   const budgetCurationPath = join(tempDir, "budget-curation-jobs.json");
+  const budgetPosts = [
+    makeApiSmokePost({
+      id: "budget-post",
+      title: "Budget post",
+      concepts: ["Budget Concept"],
+      createdAt: "2026-06-10T00:00:00.000Z"
+    }),
+    makeApiSmokePost({
+      id: "budget-post-2",
+      title: "Budget post 2",
+      concepts: ["Budget Concept"],
+      createdAt: "2026-06-10T00:00:00.000Z"
+    })
+  ];
+
+  await writeFile(
+    budgetDataPath,
+    JSON.stringify({
+      version: 1,
+      updatedAt: "2026-06-10T00:00:00.000Z",
+      posts: budgetPosts
+    })
+  );
+
   process.env.AITIMELINE_DAILY_AUTO_JOB_BUDGET = "1";
   const budgetServer = createApiServer({
     dataPath: budgetDataPath,
@@ -2448,18 +3370,19 @@ try {
       skippedQuickly: false,
       createdAt: "2026-06-10T03:00:00.000Z"
     };
+    const firstBudgetBody = {
+      generatedAt: "2026-06-10T03:00:00.000Z",
+      topicState: {
+        topicId: "Budget Concept",
+        interestScore: 0.8,
+        fatigueScore: 0.1,
+        comprehensionScore: 0.8
+      },
+      signal: budgetSignal
+    };
     const firstBudgetSignal = await requestJsonFromServer(budgetServer, "/api/signals", {
       method: "POST",
-      body: {
-        generatedAt: "2026-06-10T03:00:00.000Z",
-        topicState: {
-          topicId: "Budget Concept",
-          interestScore: 0.8,
-          fatigueScore: 0.1,
-          comprehensionScore: 0.8
-        },
-        signal: budgetSignal
-      }
+      body: firstBudgetBody
     });
     const secondBudgetSignal = await requestJsonFromServer(budgetServer, "/api/signals", {
       method: "POST",
@@ -2544,6 +3467,101 @@ try {
 
   assert.deepEqual(memoryResult.memory.profile.interests, ["AI Agents"], "memory API should add interests");
   assert.equal(memoryResult.memory.profile.explanationStyle, "example-first", "memory API should set style");
+
+  const memorySnapshotBeforeNoop = await requestJson("/api/snapshot");
+  const ignoredMemoryReplacement = await requestJson("/api/memory", {
+    method: "POST",
+    body: {
+      userId: "smoke-user",
+      memory: {
+        profile: { interests: ["Injected replacement"], goals: [] },
+        knowledge: { knownConcepts: ["Injected mastery"], weakConcepts: [], savedConcepts: [] },
+        interaction: { recentCardIds: [], recentQuestions: [] },
+        agent: { topicAgents: [], preferredSourceTypes: [] }
+      },
+      edits: []
+    }
+  });
+  const memorySnapshotAfterNoop = await requestJson("/api/snapshot");
+
+  assert.deepEqual(
+    ignoredMemoryReplacement.memory,
+    memoryResult.memory,
+    "memory API should ignore a request-body full-memory replacement"
+  );
+  assert.deepEqual(ignoredMemoryReplacement.events, [], "empty memory edits should be a no-op");
+  assert.equal(
+    memorySnapshotAfterNoop.updatedAt,
+    memorySnapshotBeforeNoop.updatedAt,
+    "empty memory edits should not write a new snapshot"
+  );
+  assert.equal(
+    memorySnapshotAfterNoop.memoryEvents.length,
+    memorySnapshotBeforeNoop.memoryEvents.length,
+    "empty memory edits should not create audit events"
+  );
+
+  const editedFromPersistedMemory = await requestJson("/api/memory", {
+    method: "POST",
+    body: {
+      userId: "smoke-user",
+      memory: {
+        profile: { interests: ["Injected replacement"], goals: [] },
+        knowledge: { knownConcepts: [], weakConcepts: [], savedConcepts: [] },
+        interaction: { recentCardIds: [], recentQuestions: [] },
+        agent: { topicAgents: [], preferredSourceTypes: [] }
+      },
+      edits: [{ kind: "add", field: "profile.interests", value: "Persisted baseline" }]
+    }
+  });
+
+  assert.deepEqual(
+    editedFromPersistedMemory.memory.profile.interests,
+    ["AI Agents", "Persisted baseline"],
+    "memory edits should apply to persisted currentMemory rather than body.memory"
+  );
+
+  const candidateSnapshotBeforeUnsupported = await requestJson("/api/snapshot");
+  const unsupportedCandidateResponse = await dispatchToServer(server, `${baseUrl}/api/source-candidates`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      url: "https://github.com/example/unsupported-candidate",
+      title: "Unsupported repository candidate"
+    })
+  });
+  const unsupportedCandidatePayload = await unsupportedCandidateResponse.json();
+  const candidateSnapshotAfterUnsupported = await requestJson("/api/snapshot");
+
+  assert.equal(unsupportedCandidateResponse.status, 400, "inferred unsupported candidate types should return 400");
+  assert.match(
+    unsupportedCandidatePayload.error,
+    /Supported types: article, blog, news, youtube/,
+    "unsupported candidate errors should explain the worker-supported types"
+  );
+  assert.equal(
+    candidateSnapshotAfterUnsupported.sourceCandidates.length,
+    candidateSnapshotBeforeUnsupported.sourceCandidates.length,
+    "unsupported candidates must not be persisted"
+  );
+
+  const selfQueuedCandidateResponse = await dispatchToServer(server, `${baseUrl}/api/source-candidates`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      url: `${baseUrl}/fixtures/article-background?query=self-queued`,
+      title: "Self queued candidate",
+      status: "queued"
+    })
+  });
+  const candidateSnapshotAfterSelfQueued = await requestJson("/api/snapshot");
+
+  assert.equal(selfQueuedCandidateResponse.status, 400, "candidate intake must not accept a client-supplied queued state");
+  assert.equal(
+    candidateSnapshotAfterSelfQueued.sourceCandidates.length,
+    candidateSnapshotBeforeUnsupported.sourceCandidates.length,
+    "a candidate without a matching job must not become permanently queued"
+  );
 
   const candidateResult = await requestJson("/api/source-candidates", {
     method: "POST",
@@ -3382,7 +4400,15 @@ async function dispatchToServer(targetServer, url, options = {}) {
     method: options.method ?? "GET",
     url: `${parsedUrl.pathname}${parsedUrl.search}`,
     headers,
-    destroy() {},
+    destroyed: false,
+    complete: false,
+    destroy() {
+      this.destroyed = true;
+      options.onDestroy?.();
+    },
+    resume() {
+      options.onResume?.();
+    },
     async *[Symbol.asyncIterator]() {
       if (body.byteLength > 0) {
         yield body;
@@ -3521,6 +4547,19 @@ function makeApiSmokePost({ id, title, concepts, createdAt = "2026-06-01T00:00:0
     reviewPrompts: [],
     nextActions: [],
     harnessVersion: "smoke"
+  };
+}
+
+function makeReviewGradePost(id, title, concept) {
+  return {
+    ...makeApiSmokePost({ id, title, concepts: [concept] }),
+    reviewPrompts: [1, 3, 7].map((dueInDays) => ({
+      id: `${id}-prompt-${dueInDays}`,
+      kind: dueInDays === 1 ? "recall" : dueInDays === 3 ? "compare" : "apply",
+      prompt: `${title} prompt for day ${dueInDays}`,
+      answerHint: `${title} answer for day ${dueInDays}`,
+      dueInDays
+    }))
   };
 }
 
