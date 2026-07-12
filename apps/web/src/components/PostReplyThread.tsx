@@ -87,6 +87,9 @@ export function PostReplyThread({
                   <p className="x-qtext">“{blockCitation.quote}”</p>
                 </div>
               ) : null}
+              {isAgent && block.runnerKind === "deterministic" ? (
+                <p className="x-meta x-runner-note">{t("agent.deterministicNote")}</p>
+              ) : null}
             </div>
           </div>
         );

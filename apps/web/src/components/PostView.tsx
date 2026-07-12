@@ -296,6 +296,7 @@ export function PostView({
           <div className="x-post-main">
             <div className="x-head">
               <span className="x-name">{t("connection.title")}</span>
+              <span className="x-derived">{t("post.derived")}</span>
               <span className="x-meta">·</span>
               <span className="x-meta">{formatRelativeTime(card.createdAt)}</span>
             </div>

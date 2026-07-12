@@ -640,7 +640,7 @@ body:has(.x-frame) {
   font-size: 13.5px;
   margin-bottom: 3px;
 }
-.x-quote .x-qhead .x-name { font-weight: 700; }
+.x-quote .x-qhead .x-name { font-weight: 700; flex-shrink: 0; }
 .x-quote .x-qhead .x-meta { color: var(--x-muted); }
 .x-quote .x-qtext {
   margin: 0;
