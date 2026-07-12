@@ -60,6 +60,8 @@ export function PostReplyThread({
 
       {commentBlocks.map((block) => {
         const isAgent = block.kind === "agent_reply";
+        const blockCitation = block.citations?.[0];
+        const isBlockCertified = isAgent && block.grounded === true && Boolean(blockCitation);
 
         return (
           <div className="x-reply" key={block.id}>
@@ -69,11 +71,22 @@ export function PostReplyThread({
             <div className="x-reply-main">
               <div className="x-head">
                 <span className="x-name">{block.title}</span>
-                {isAgent ? <BadgeCheck aria-label={t("post.hasSource")} className="x-verified" size={15} /> : null}
+                {isBlockCertified ? (
+                  <BadgeCheck aria-label={t("post.hasSource")} className="x-verified" size={15} />
+                ) : null}
               </div>
               <div className="x-body">
                 {renderWithWikilinks(block.body, cards, { onOpenConcept, onOpenCardId })}
               </div>
+              {blockCitation ? (
+                <div className="x-quote" role="note">
+                  <span className="x-qhead">
+                    <span className="x-name">{t("agent.citationLabel")}</span>
+                    <span className="x-meta">· {blockCitation.sourceTitle}</span>
+                  </span>
+                  <p className="x-qtext">“{blockCitation.quote}”</p>
+                </div>
+              ) : null}
             </div>
           </div>
         );

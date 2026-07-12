@@ -530,6 +530,17 @@ body:has(.x-frame) {
 }
 .x-head .x-name { font-weight: 700; color: var(--x-ink); }
 .x-head .x-meta { color: var(--x-muted); font-weight: 400; }
+.x-runner-note { margin-top: 4px; font-size: 12px; }
+
+.x-derived {
+  font-size: 11px;
+  color: var(--x-muted);
+  border: 1px solid var(--x-border);
+  border-radius: 999px;
+  padding: 0 6px;
+  line-height: 16px;
+}
+
 .x-verified { color: var(--x-blue); flex: none; }
 .x-title {
   font-size: 15px;

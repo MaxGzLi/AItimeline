@@ -104,6 +104,9 @@ export function AgentReplyThread({
           )}
 
           <p className="x-body">{body}</p>
+          {turn.answer?.runnerKind === "deterministic" ? (
+            <p className="x-meta x-runner-note">{t("agent.deterministicNote")}</p>
+          ) : null}
 
           {turn.nearestPosts?.length ? (
             <div className="x-nearest" role="list">
