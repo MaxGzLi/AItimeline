@@ -353,8 +353,39 @@ try {
       versionedRegistry.chunks.find((chunk) => chunk.id === citedChunkId)?.content.includes("second edition paragraph"),
       "the live chunk view must show the latest content"
     );
-  } finally {
+
     await closeServer(versionedServer);
+    const reopenedVersionedServer = createApiServer({
+      dataPath: join(tempDir, "versioned-source.json"),
+      curationDataPath: join(tempDir, "versioned-source-jobs.json"),
+      mediaRootDir
+    });
+    try {
+      const reopenedSnapshot = await requestJsonFromServer(reopenedVersionedServer, "/api/snapshot");
+      // Re-importing the same URL replaces the post (same id), so the persisted
+      // card is the second edition; the first edition's citation object stands
+      // in for any older entity (follow-up, reply) still bound to that version.
+      const reopenedCurrent = reopenedSnapshot.posts.find((post) => post.id === cardB.id);
+      assert.equal(
+        reopenedCurrent?.citations[0]?.chunkVersionId,
+        cardB.citations[0].chunkVersionId,
+        "chunk version bindings must survive the strict decoder across a restart"
+      );
+      const reopenedRegistry = mergeSourceRegistries(
+        ...reopenedSnapshot.sourceRegistries.map((record) => record.registry)
+      );
+      assert.ok(
+        resolveCitedChunk(reopenedRegistry, cardA.citations[0])?.content.includes("first edition paragraph"),
+        "archived version text must survive a restart so old citations never drift"
+      );
+      assert.ok(
+        resolveCitedChunk(reopenedRegistry, reopenedCurrent.citations[0])?.content.includes("second edition paragraph"),
+        "the current card must keep resolving to its own edition after a restart"
+      );
+    } finally {
+      await closeServer(reopenedVersionedServer);
+    }
+  } finally {
     await closeServer(versionedFixture);
   }
 
