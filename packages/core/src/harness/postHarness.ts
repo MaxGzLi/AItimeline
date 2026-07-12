@@ -11,6 +11,7 @@ import type {
   Source
 } from "../types.js";
 import type { ContentLanguage } from "./contentLanguage.js";
+import { hashContent } from "../source/sourceRegistry.js";
 import {
   isConceptPolarityCompatibleWithText,
   normalizedConceptAppearsInText
@@ -40,6 +41,7 @@ export function createKnowledgePost(input: KnowledgePostHarnessInput): Knowledge
   const citation: Citation = {
     sourceId: input.source.id,
     chunkId: input.chunk.id,
+    chunkVersionId: `${input.chunk.id}-version-${hashContent(input.chunk.content)}`,
     url: input.source.url,
     startTimeSeconds: input.chunk.startTimeSeconds,
     endTimeSeconds: input.chunk.endTimeSeconds

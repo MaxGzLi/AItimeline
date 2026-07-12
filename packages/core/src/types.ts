@@ -174,6 +174,9 @@ export interface SourceChunkVersion {
   contentHash: string;
   contentLength: number;
   createdAt: string;
+  // Superseded versions archive their exact text here so old citations never
+  // drift to newer content; the live version resolves through the chunk itself.
+  content?: string;
   startTimeSeconds?: number;
   endTimeSeconds?: number;
   conceptHints?: string[];
@@ -190,6 +193,7 @@ export interface SourceRegistry {
 export interface Citation {
   sourceId: string;
   chunkId?: string;
+  chunkVersionId?: string;
   url?: string;
   startTimeSeconds?: number;
   endTimeSeconds?: number;
@@ -257,6 +261,9 @@ export interface KnowledgeCard {
 }
 
 export interface KnowledgePost extends KnowledgeCard {
+  // Set on generated follow-up cards: the provenance DAG walks this back
+  // (and through citations' root source ids) to the external origin.
+  derivedFromPostId?: string;
   hook: string;
   thesis: string;
   shortBody: string;
