@@ -664,6 +664,21 @@ async function runSameSourceFollowupJob(
     throw new Error(sourceImport.errorMessage ?? "Follow-up source import worker failed.");
   }
 
+  sourceImport.posts = sourceImport.posts.map((post) => ({
+    ...post,
+    derivedFromPostId: plan.derivedFromPostId,
+    citations: [
+      ...(post.citations ?? []),
+      ...plan.rootCitations.filter((root) =>
+        !(post.citations ?? []).some((citation) =>
+          citation.sourceId === root.sourceId &&
+          citation.chunkId === root.chunkId &&
+          citation.chunkVersionId === root.chunkVersionId
+        )
+      )
+    ]
+  }));
+
   return {
     kind: job.kind,
     sourceImport,

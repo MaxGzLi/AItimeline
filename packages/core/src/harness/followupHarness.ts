@@ -2,6 +2,7 @@ import type { BackgroundCurationJob } from "../agents/backgroundCuration.js";
 import type { SourceImportWorkerInput } from "../source/sourceImportWorker.js";
 import { getKnowledgePostLanguagePolicy, type ContentLanguage } from "./contentLanguage.js";
 import type {
+  Citation,
   HarnessValidationIssue,
   HarnessValidationResult,
   KnowledgeChunk,
@@ -50,6 +51,8 @@ export interface FollowupGenerationProtocol {
 export interface FollowupSourceImportPlan {
   protocol: FollowupGenerationProtocol;
   input: SourceImportWorkerInput;
+  derivedFromPostId: string;
+  rootCitations: Citation[];
 }
 
 export interface CreateFollowupGenerationProtocolInput {
@@ -222,6 +225,8 @@ export function createFollowupSourceImportPlan(input: CreateFollowupSourceImport
 
   return {
     protocol,
+    derivedFromPostId: input.seedPost.id,
+    rootCitations: deriveFollowupRootCitations(input.seedPost),
     input: {
       id: `${protocol.storagePlan.sourceId}-import-${dateSlug(protocol.createdAt)}`,
       source,
@@ -245,6 +250,27 @@ export function createFollowupSourceImportPlan(input: CreateFollowupSourceImport
       }
     }
   };
+}
+
+// The provenance roots of a follow-up are the seed's citations to external
+// sources; synthetic follow-up sources are skipped so chains of follow-ups
+// keep pointing at the original article/video instead of each other.
+export function deriveFollowupRootCitations(seedPost: KnowledgePost): Citation[] {
+  const syntheticSourceIds = new Set(
+    seedPost.sources
+      .filter((source) => source.id.startsWith("followup-") || source.url.includes(followupSourceUrlSegment))
+      .map((source) => source.id)
+  );
+  const roots: Citation[] = [];
+  const seen = new Set<string>();
+  for (const citation of seedPost.citations ?? []) {
+    if (syntheticSourceIds.has(citation.sourceId)) continue;
+    const key = `${citation.sourceId}|${citation.chunkId ?? ""}|${citation.chunkVersionId ?? ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    roots.push({ ...citation });
+  }
+  return roots;
 }
 
 function createFollowupSource(protocol: FollowupGenerationProtocol, seedPost: KnowledgePost | undefined): Source {
