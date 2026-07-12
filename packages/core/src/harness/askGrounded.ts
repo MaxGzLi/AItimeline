@@ -1,18 +1,10 @@
 import { getChunksForSource, getRegistryChunk, getRegistrySource } from "../source/sourceRegistry.js";
-import type { KnowledgeChunk, KnowledgePost, SourceOrigin, SourceRegistry } from "../types.js";
+import type { KnowledgeChunk, KnowledgePost, KnowledgeThreadCitation, SourceRegistry } from "../types.js";
 import { getGroundedAnswerLanguagePolicy, type ContentLanguage } from "./contentLanguage.js";
 import { validateClaimSupport } from "./groundingGate.js";
 import type { ModelClient } from "./modelRunner.js";
 
-export interface GroundedAnswerCitation {
-  sourceId: string;
-  sourceTitle: string;
-  chunkId: string;
-  quote: string;
-  startTimeSeconds?: number;
-  endTimeSeconds?: number;
-  origin?: SourceOrigin;
-}
+export type GroundedAnswerCitation = KnowledgeThreadCitation;
 
 export interface GroundedAnswer {
   answer: string;

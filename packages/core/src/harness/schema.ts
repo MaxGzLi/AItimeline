@@ -144,7 +144,34 @@ export const knowledgePostJsonSchema = {
           id: { type: "string" },
           kind: { enum: threadKinds },
           title: { type: "string" },
-          body: { type: "string" }
+          body: { type: "string" },
+          prompt: { type: "string" },
+          citations: {
+            type: "array",
+            items: {
+              type: "object",
+              required: ["sourceId", "sourceTitle", "chunkId", "quote"],
+              properties: {
+                sourceId: { type: "string" },
+                sourceTitle: { type: "string" },
+                chunkId: { type: "string" },
+                quote: { type: "string" },
+                startTimeSeconds: { type: "number", minimum: 0 },
+                endTimeSeconds: { type: "number", minimum: 0 },
+                origin: {
+                  type: "object",
+                  required: ["turnId", "question", "createdAt"],
+                  properties: {
+                    turnId: { type: "string" },
+                    question: { type: "string" },
+                    createdAt: { type: "string" }
+                  }
+                }
+              }
+            }
+          },
+          grounded: { type: "boolean" },
+          runnerKind: { enum: ["model", "deterministic"] }
         }
       }
     },
@@ -306,8 +333,62 @@ function validateThread(value: unknown, issues: HarnessValidationIssue[]): void 
     requireEnum(block, "kind", threadKinds, issues, `$.thread[${index}]`);
     requireString(block, "title", issues, `$.thread[${index}]`);
     requireString(block, "body", issues, `$.thread[${index}]`);
+    validateOptionalThreadAnswerMetadata(block, index, issues);
     warnIfThinKnowledgeBlock(block, index, issues);
   });
+}
+
+function validateOptionalThreadAnswerMetadata(
+  block: Record<string, unknown>,
+  index: number,
+  issues: HarnessValidationIssue[]
+): void {
+  const path = `$.thread[${index}]`;
+
+  if (block.grounded !== undefined && typeof block.grounded !== "boolean") {
+    issues.push({ path: `${path}.grounded`, message: "grounded must be a boolean when present.", severity: "error" });
+  }
+
+  if (block.runnerKind !== undefined && block.runnerKind !== "model" && block.runnerKind !== "deterministic") {
+    issues.push({ path: `${path}.runnerKind`, message: "runnerKind must be model or deterministic.", severity: "error" });
+  }
+
+  if (block.citations !== undefined && !Array.isArray(block.citations)) {
+    issues.push({ path: `${path}.citations`, message: "citations must be an array when present.", severity: "error" });
+    return;
+  }
+
+  const citations = Array.isArray(block.citations) ? block.citations : [];
+  citations.forEach((citation, citationIndex) => {
+    const citationPath = `${path}.citations[${citationIndex}]`;
+    if (!isRecord(citation)) {
+      issues.push({ path: citationPath, message: "citation must be an object.", severity: "error" });
+      return;
+    }
+    requireString(citation, "sourceId", issues, citationPath);
+    requireString(citation, "sourceTitle", issues, citationPath);
+    requireString(citation, "chunkId", issues, citationPath);
+    requireString(citation, "quote", issues, citationPath);
+    for (const key of ["startTimeSeconds", "endTimeSeconds"] as const) {
+      const value = citation[key];
+      if (value !== undefined && (typeof value !== "number" || !Number.isFinite(value) || value < 0)) {
+        issues.push({ path: `${citationPath}.${key}`, message: `${key} must be a finite non-negative number.`, severity: "error" });
+      }
+    }
+    if (citation.origin !== undefined) {
+      if (!isRecord(citation.origin)) {
+        issues.push({ path: `${citationPath}.origin`, message: "origin must be an object.", severity: "error" });
+      } else {
+        requireString(citation.origin, "turnId", issues, `${citationPath}.origin`);
+        requireString(citation.origin, "question", issues, `${citationPath}.origin`);
+        requireString(citation.origin, "createdAt", issues, `${citationPath}.origin`);
+      }
+    }
+  });
+
+  if (block.grounded === true && citations.length === 0) {
+    issues.push({ path: `${path}.citations`, message: "grounded thread blocks require at least one citation.", severity: "error" });
+  }
 }
 
 function warnIfThinKnowledgeBlock(

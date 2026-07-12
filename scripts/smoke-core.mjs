@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -28,6 +28,7 @@ const { buildKnowledgeBoundary, classifyConceptZone } = await import(
 const {
   createInMemoryBackgroundCurationJobStore,
   createPersistentBackgroundCurationJobStore,
+  decodeBackgroundCurationJobStoreSnapshot,
   runDueBackgroundCurationJobs
 } = await import(
   "../packages/core/dist/agents/backgroundCurationQueue.js"
@@ -100,7 +101,8 @@ const { createOpenAICompatibleSourceImportWorker, createSourceImportWorker } = a
   "../packages/core/dist/source/sourceImportWorker.js"
 );
 const { evaluateSourceQualityDeterministic } = await import("../packages/core/dist/source/sourceQualityGate.js");
-const { createAITimelinePersistenceStore } = await import("../packages/core/dist/storage/persistenceStore.js");
+const { createAITimelinePersistenceStore, decodeAITimelinePersistenceSnapshot } = await import("../packages/core/dist/storage/persistenceStore.js");
+const { readSerializedRevision } = await import("../packages/core/dist/storage/revisionedStorage.js");
 const { normalizeSubscriptionFeedUrl, parseSubscriptionFeed } = await import(
   "../packages/core/dist/subscriptions/feedParser.js"
 );
@@ -123,6 +125,248 @@ const { parseArxivHtmlDecomposition } = await import("../packages/core/dist/tran
 const { transformMockYouTubeUrl } = await import("../packages/core/dist/transform/mockYoutubeImport.js");
 const { transformYouTubeUrl } = await import("../packages/core/dist/transform/youtubeImport.js");
 const { seoWaterSourceFixture, technicalSourceFixture } = await import("../packages/core/dist/fixtures.js");
+
+function createSmokeStorage(read, write) {
+  return {
+    read,
+    write,
+    compareAndSwap(expectedRevision, serialized) {
+      if (readSerializedRevision(read()) !== expectedRevision) return false;
+      write(serialized);
+      return true;
+    }
+  };
+}
+
+const w4eMainFixtureRaw = await readFile(new URL("./fixtures/w4e/aitimeline-v1.json", import.meta.url), "utf8");
+const w4eQueueFixtureRaw = await readFile(new URL("./fixtures/w4e/curation-jobs-v1.json", import.meta.url), "utf8");
+const decodedW4eMainFixture = decodeAITimelinePersistenceSnapshot(w4eMainFixtureRaw);
+const decodedW4eQueueFixture = decodeBackgroundCurationJobStoreSnapshot(w4eQueueFixtureRaw, { timeZone: "UTC" });
+
+let roundTripMainRaw = w4eMainFixtureRaw;
+const roundTripMainStorage = createSmokeStorage(
+  () => roundTripMainRaw,
+  (serialized) => { roundTripMainRaw = serialized; }
+);
+const roundTripMainStore = createAITimelinePersistenceStore(roundTripMainStorage);
+assert.equal(roundTripMainStore.flushMigration("2026-07-10T00:00:00.000Z"), true, "v1 main fixture should flush one canonical migration");
+const roundTripMainSnapshot = roundTripMainStore.getSnapshot();
+assert.equal(roundTripMainSnapshot.revision, 1, "main fixture migration should advance revision exactly once");
+const reopenedRoundTripMainStore = createAITimelinePersistenceStore(roundTripMainStorage);
+assert.deepEqual(reopenedRoundTripMainStore.getSnapshot(), roundTripMainSnapshot, "main fixture should deep-round-trip after reopen");
+assert.equal(reopenedRoundTripMainStore.flushMigration("2026-07-10T00:00:01.000Z"), false, "second main migration flush should be a no-op");
+
+let roundTripQueueRaw = w4eQueueFixtureRaw;
+const roundTripQueueStorage = createSmokeStorage(
+  () => roundTripQueueRaw,
+  (serialized) => { roundTripQueueRaw = serialized; }
+);
+const roundTripQueueStore = createPersistentBackgroundCurationJobStore(roundTripQueueStorage, [], { timeZone: "UTC" });
+assert.equal(roundTripQueueStore.flushMigration(), true, "v1 queue fixture should flush one canonical migration");
+const roundTripQueueSnapshot = decodeBackgroundCurationJobStoreSnapshot(roundTripQueueRaw, { timeZone: "UTC" }).snapshot;
+assert.equal(roundTripQueueSnapshot.revision, 1, "queue fixture migration should advance revision exactly once");
+const reopenedRoundTripQueueStore = createPersistentBackgroundCurationJobStore(roundTripQueueStorage, [], { timeZone: "UTC" });
+assert.deepEqual(reopenedRoundTripQueueStore.list(), roundTripQueueStore.list(), "queue fixture should deep-round-trip after reopen");
+assert.equal(reopenedRoundTripQueueStore.flushMigration(), false, "second queue migration flush should be a no-op");
+
+assert.equal(decodedW4eMainFixture.snapshot.version, 2, "v1 main fixture should migrate to canonical v2");
+assert.equal(decodedW4eMainFixture.snapshot.revision, 0, "v1 main fixture should begin at revision zero");
+assert.deepEqual(decodedW4eMainFixture.snapshot.posts[0].thread[0].citations, [], "legacy thread citations should whitelist-migrate to empty");
+assert.equal(decodedW4eMainFixture.snapshot.posts[0].thread[0].grounded, false, "legacy thread grounded should fail closed");
+assert.equal(decodedW4eMainFixture.snapshot.interactionSignals[0].signal.impression, false, "legacy signal impression should migrate to false");
+assert.equal(decodedW4eMainFixture.snapshot.interactionSignals[0].signal.createdAt, decodedW4eMainFixture.snapshot.interactionSignals[0].createdAt, "legacy signal createdAt should inherit owner time");
+assert.equal(decodedW4eMainFixture.snapshot.interactionSignals[0].reviewEventId, "w4e-review-event-1", "W1 idempotency ledger must survive decode");
+assert.equal(decodedW4eQueueFixture.snapshot.records.length, 5, "v1 queue fixture should preserve all supported statuses");
+assert.equal(decodedW4eQueueFixture.snapshot.records.find((record) => record.id === "w4e-root|retry-2")?.originalJobId, "w4e-root", "explicit retry suffix should map to root lineage");
+assert.equal(decodedW4eQueueFixture.snapshot.records.find((record) => record.id === "w4e-root|retry-2")?.attempt, 2, "explicit retry suffix should map attempt");
+assert.ok(decodedW4eQueueFixture.issues.some((issue) => issue.recordId === "deep-read-opaque-fixture-hash" && issue.severity === "warning"), "unproven opaque retry lineage should emit a conservative warning");
+const legacyDeepReadHash = (value) => {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  return hash.toString(16);
+};
+const knownOpaqueRootId = `deep-read-${legacyDeepReadHash("fixture-user|persistence|2026-07-03")}`;
+const knownOpaqueRetryId = `deep-read-${legacyDeepReadHash("fixture-user|persistence|2026-07-03|retry-3")}`;
+const knownOpaqueRecord = structuredClone(JSON.parse(w4eQueueFixtureRaw).records.find((record) => record.id === "w4e-root|retry-2"));
+knownOpaqueRecord.id = knownOpaqueRetryId;
+knownOpaqueRecord.job.id = knownOpaqueRetryId;
+const decodedKnownOpaque = decodeBackgroundCurationJobStoreSnapshot({ version: 1, records: [knownOpaqueRecord] }, { timeZone: "UTC" });
+assert.equal(decodedKnownOpaque.snapshot.records[0].originalJobId, knownOpaqueRootId, "known opaque deep-read retry hashes should recover their root id");
+assert.equal(decodedKnownOpaque.snapshot.records[0].attempt, 3, "known opaque deep-read retry hashes should recover their attempt");
+
+let appendCasSerialized = w4eMainFixtureRaw;
+let injectAppendCompetitor = true;
+const appendCasStore = createAITimelinePersistenceStore({
+  read: () => appendCasSerialized,
+  compareAndSwap(expectedRevision, serialized) {
+    if (injectAppendCompetitor) {
+      injectAppendCompetitor = false;
+      const competing = decodeAITimelinePersistenceSnapshot(appendCasSerialized).snapshot;
+      competing.version = 2;
+      competing.revision = expectedRevision + 1;
+      competing.updatedAt = "2026-07-10T00:00:00.000Z";
+      competing.posts[0].thread.push({
+        id: "w4e-competing-thread-block",
+        kind: "user_comment",
+        title: "Competing writer",
+        body: "This block won the first CAS."
+      });
+      appendCasSerialized = JSON.stringify(competing);
+      return false;
+    }
+    if (readSerializedRevision(appendCasSerialized) !== expectedRevision) return false;
+    appendCasSerialized = serialized;
+    return true;
+  }
+});
+const appendedBlock = {
+  id: "w4e-request-thread-block",
+  kind: "user_comment",
+  title: "Request writer",
+  body: "This block rebases after the conflict."
+};
+const appendedAfterConflict = appendCasStore.appendThreadBlocks("w4e-post-1", [appendedBlock], {
+  expectedRevision: 0,
+  savedAt: "2026-07-10T00:00:01.000Z"
+});
+assert.equal(appendedAfterConflict.revision, 2, "append should re-read and commit after an injected CAS conflict");
+assert.ok(appendedAfterConflict.posts[0].thread.some((block) => block.id === "w4e-competing-thread-block"), "append CAS retry must preserve the competing block");
+assert.ok(appendedAfterConflict.posts[0].thread.some((block) => block.id === appendedBlock.id), "append CAS retry must add the request block");
+const appendRevisionBeforeReplay = appendedAfterConflict.revision;
+assert.equal(
+  appendCasStore.appendThreadBlocks("w4e-post-1", [appendedBlock], { savedAt: "2026-07-10T00:00:02.000Z" }).revision,
+  appendRevisionBeforeReplay,
+  "replaying an identical block should be an idempotent no-op"
+);
+assert.throws(
+  () => appendCasStore.appendThreadBlocks("w4e-post-1", [{ ...appendedBlock, body: "Collision" }]),
+  /Thread block collision/,
+  "reusing a block id with different content must fail"
+);
+
+let leaseQueueSerialized = JSON.stringify({
+  version: 2,
+  revision: 0,
+  records: [structuredClone(decodedW4eQueueFixture.snapshot.records.find((record) => record.id === "w4e-queued"))]
+});
+const leaseQueueStorage = createSmokeStorage(
+  () => leaseQueueSerialized,
+  (serialized) => { leaseQueueSerialized = serialized; }
+);
+const leaseStoreA = createPersistentBackgroundCurationJobStore(leaseQueueStorage);
+const claimA = leaseStoreA.claimNextDueJob("2026-07-10T00:00:00.000Z", {
+  workerId: "lease-worker-a",
+  leaseDurationMs: 1000
+});
+assert.equal(claimA?.status, "running", "claim should persist running before execution");
+assert.equal(claimA?.attempts, 1, "claim should increment the fencing generation");
+const leaseStoreBeforeExpiry = createPersistentBackgroundCurationJobStore(leaseQueueStorage);
+assert.equal(
+  leaseStoreBeforeExpiry.claimNextDueJob("2026-07-10T00:00:00.500Z", {
+    workerId: "lease-worker-b",
+    leaseDurationMs: 1000
+  }),
+  undefined,
+  "a reconstructed store must not claim an unexpired running job"
+);
+const leaseStoreB = createPersistentBackgroundCurationJobStore(leaseQueueStorage);
+const claimB = leaseStoreB.claimNextDueJob("2026-07-10T00:00:01.000Z", {
+  workerId: "lease-worker-b",
+  leaseDurationMs: 1000
+});
+assert.equal(claimB?.attempts, 2, "claim should recover an expired lease and issue a new fencing generation");
+assert.equal(claimB?.startedAt, claimA?.startedAt, "lease recovery must retain the stable first effect time");
+assert.throws(
+  () => leaseStoreA.renewLease(claimA.id, { workerId: "lease-worker-a", claimGeneration: claimA.attempts }, "2026-07-10T00:00:01.100Z", 1000),
+  /owner or generation mismatch/,
+  "the expired owner must not renew after another worker reclaims the job"
+);
+assert.throws(
+  () => leaseStoreA.completeClaim(claimA.id, { workerId: "lease-worker-a", claimGeneration: claimA.attempts }, {
+    status: "succeeded",
+    completedAt: "2026-07-10T00:00:01.100Z",
+    result: { kind: claimA.job.kind, message: "stale" }
+  }),
+  /owner or generation mismatch/,
+  "the expired owner must not complete after another worker reclaims the job"
+);
+const renewedB = leaseStoreB.renewLease(
+  claimB.id,
+  { workerId: "lease-worker-b", claimGeneration: claimB.attempts },
+  "2026-07-10T00:00:01.500Z",
+  1000
+);
+assert.equal(renewedB.leaseUntil, "2026-07-10T00:00:02.500Z", "owner heartbeat should extend leaseUntil");
+const completedB = leaseStoreB.completeClaim(
+  claimB.id,
+  { workerId: "lease-worker-b", claimGeneration: claimB.attempts },
+  {
+    status: "succeeded",
+    completedAt: "2026-07-10T00:00:02.000Z",
+    result: { kind: claimB.job.kind, message: "completed by worker B" }
+  }
+);
+assert.equal(completedB.status, "succeeded", "the current fenced owner should complete successfully");
+
+const retryRoot = structuredClone(decodedW4eQueueFixture.snapshot.records.find((record) => record.id === "w4e-root|retry-2"));
+const retryStore = createInMemoryBackgroundCurationJobStore([retryRoot]);
+const retryThree = retryStore.enqueueRetry(retryRoot.id, "2026-07-10T01:00:00.000Z");
+assert.equal(retryThree.originalJobId, "w4e-root", "retry lineage must retain the original job id");
+assert.equal(retryThree.attempt, 3, "retry lineage attempt should increase monotonically");
+assert.equal(retryStore.get(retryRoot.id)?.status, "failed", "enqueueRetry must not revive the old terminal record");
+assert.equal(
+  retryStore.enqueueRetry(retryRoot.id, "2026-07-10T01:00:01.000Z").id,
+  retryThree.id,
+  "a lineage with an active retry should reuse it instead of creating another active record"
+);
+assert.equal(
+  retryStore.list().filter((record) => record.originalJobId === "w4e-root" && ["queued", "running"].includes(record.status)).length,
+  1,
+  "one retry lineage may have at most one active record"
+);
+assert.throws(
+  () => retryStore.enqueueRetry(retryThree.id, "2026-07-10T01:00:02.000Z"),
+  /requires a failed terminal record/,
+  "enqueueRetry should reject non-failed records"
+);
+
+assert.throws(
+  () => decodeBackgroundCurationJobStoreSnapshot({ version: 1, records: {} }),
+  /\$\.records: expected an array/,
+  "an invalid queue records container must fail startup"
+);
+const badNestedQueueFixture = JSON.parse(w4eQueueFixtureRaw);
+badNestedQueueFixture.records.push({
+  ...structuredClone(badNestedQueueFixture.records[0]),
+  id: "bad-nested-queue-record",
+  job: { ...structuredClone(badNestedQueueFixture.records[0].job), id: "bad-nested-queue-record", priority: "bad" }
+});
+const decodedBadNestedQueue = decodeBackgroundCurationJobStoreSnapshot(badNestedQueueFixture);
+assert.equal(decodedBadNestedQueue.snapshot.records.length, 5, "one bad nested queue record should be quarantined");
+assert.ok(
+  decodedBadNestedQueue.issues.some((issue) => issue.recordId === "bad-nested-queue-record" && issue.jsonPath.endsWith("job.priority")),
+  "quarantined queue records should report their id and nested JSON path"
+);
+const survivingQueueStore = createInMemoryBackgroundCurationJobStore(decodedBadNestedQueue.snapshot.records);
+assert.equal(
+  survivingQueueStore.claimNextDueJob("2026-07-10T00:00:00.000Z", {
+    workerId: "surviving-record-worker",
+    leaseDurationMs: 1000
+  })?.id,
+  "w4e-running-crash",
+  "valid records should remain claimable after a bad nested owner record is isolated"
+);
+
+assert.throws(
+  () => decodeAITimelinePersistenceSnapshot(JSON.stringify({ ...JSON.parse(w4eMainFixtureRaw), posts: {} })),
+  /\$\.posts: expected an array/,
+  "invalid collection containers must fail the whole snapshot"
+);
+const badSignalFixture = JSON.parse(w4eMainFixtureRaw);
+badSignalFixture.interactionSignals.push({ ...badSignalFixture.interactionSignals[0], id: "bad-signal", signal: { ...badSignalFixture.interactionSignals[0].signal, createdAt: "bad-date" } });
+const decodedWithBadSignal = decodeAITimelinePersistenceSnapshot(badSignalFixture);
+assert.equal(decodedWithBadSignal.snapshot.interactionSignals.length, 1, "one invalid signal owner should be quarantined");
+assert.ok(decodedWithBadSignal.issues.some((issue) => issue.recordId === "bad-signal" && issue.jsonPath.endsWith("signal.createdAt")), "quarantined records should report path and id at load time");
 
 const timeZoneBoundary = "2026-07-05T16:30:00.000Z";
 
@@ -585,12 +829,10 @@ let legacySubscriptionJson = JSON.stringify({
   version: 1,
   updatedAt: "2026-07-07T00:00:00.000Z"
 });
-const legacySubscriptionStore = createAITimelinePersistenceStore({
-  read: () => legacySubscriptionJson,
-  write: (serialized) => {
-    legacySubscriptionJson = serialized;
-  }
-});
+const legacySubscriptionStore = createAITimelinePersistenceStore(createSmokeStorage(
+  () => legacySubscriptionJson,
+  (serialized) => { legacySubscriptionJson = serialized; }
+));
 
 assert.deepEqual(
   legacySubscriptionStore.getSnapshot().subscriptions,
@@ -845,12 +1087,10 @@ function makeDuplicateImport({ importId, sourceId, postId, url, title }) {
 }
 
 let duplicateSnapshotJson = "";
-const duplicatePersistence = createAITimelinePersistenceStore({
-  read: () => duplicateSnapshotJson,
-  write: (serialized) => {
-    duplicateSnapshotJson = serialized;
-  }
-});
+const duplicatePersistence = createAITimelinePersistenceStore(createSmokeStorage(
+  () => duplicateSnapshotJson,
+  (serialized) => { duplicateSnapshotJson = serialized; }
+));
 duplicatePersistence.saveSourceImportResult(
   makeDuplicateImport({
     importId: "duplicate-import-1",
@@ -1157,12 +1397,10 @@ assert.deepEqual(
 );
 
 let conceptKeyPersistenceSnapshot = "";
-const conceptKeyPersistence = createAITimelinePersistenceStore({
-  read: () => conceptKeyPersistenceSnapshot,
-  write: (serialized) => {
-    conceptKeyPersistenceSnapshot = serialized;
-  }
-});
+const conceptKeyPersistence = createAITimelinePersistenceStore(createSmokeStorage(
+  () => conceptKeyPersistenceSnapshot,
+  (serialized) => { conceptKeyPersistenceSnapshot = serialized; }
+));
 const conceptKeyPersistenceResult = conceptKeyPersistence.saveConceptBriefs(
   [
     { ...fullWidthRagBrief, id: "full-width-rag-brief", concept: "ＲＡＧ" },
@@ -1499,12 +1737,10 @@ for (const orderedAliases of [aliasProvenanceRecords, [...aliasProvenanceRecords
 }
 
 let aliasProvenancePersistenceJson = "";
-const aliasProvenancePersistence = createAITimelinePersistenceStore({
-  read: () => aliasProvenancePersistenceJson,
-  write: (serialized) => {
-    aliasProvenancePersistenceJson = serialized;
-  }
-});
+const aliasProvenancePersistence = createAITimelinePersistenceStore(createSmokeStorage(
+  () => aliasProvenancePersistenceJson,
+  (serialized) => { aliasProvenancePersistenceJson = serialized; }
+));
 const persistedAliasProvenance = aliasProvenancePersistence.saveConceptAliases(
   aliasProvenanceRecords,
   "2026-07-06T07:00:00.000Z"
@@ -3426,12 +3662,10 @@ assert.equal(
 );
 
 let defensivePersistenceState = "";
-const defensivePersistence = createAITimelinePersistenceStore({
-  read: () => defensivePersistenceState,
-  write: (serialized) => {
-    defensivePersistenceState = serialized;
-  }
-});
+const defensivePersistence = createAITimelinePersistenceStore(createSmokeStorage(
+  () => defensivePersistenceState,
+  (serialized) => { defensivePersistenceState = serialized; }
+));
 const leakedReadyImport = {
   ...failedWorkerImport,
   importRecord: { ...failedWorkerImport.importRecord, status: "ready" },
@@ -3462,12 +3696,10 @@ assert.equal(
 assert.ok(defensiveSnapshot.validation.length > 0, "persistence should retain rejected validation for audit");
 
 let duplicatePersistenceState = "";
-const duplicateIdPersistence = createAITimelinePersistenceStore({
-  read: () => duplicatePersistenceState,
-  write: (serialized) => {
-    duplicatePersistenceState = serialized;
-  }
-});
+const duplicateIdPersistence = createAITimelinePersistenceStore(createSmokeStorage(
+  () => duplicatePersistenceState,
+  (serialized) => { duplicatePersistenceState = serialized; }
+));
 const duplicateIdPersistenceSnapshot = duplicateIdPersistence.saveSourceImportResult(
   {
     ...failedWorkerImport,
@@ -4052,7 +4284,8 @@ const deepDiveFallbackBatch = await runDueBackgroundCurationJobs(
   },
   {
     now: "2026-06-10T00:22:00.000Z",
-    kinds: ["discover_sources"]
+    kinds: ["discover_sources"],
+    workerId: "deep-dive-fallback-worker"
   }
 );
 const deepDiveFallbackRecord = deepDiveFallbackBatch.records[0];
@@ -4113,7 +4346,8 @@ const deepDiveImportBatch = await runDueBackgroundCurationJobs(
   },
   {
     now: "2026-06-10T00:22:00.000Z",
-    kinds: ["discover_sources"]
+    kinds: ["discover_sources"],
+    workerId: "deep-dive-import-worker"
   }
 );
 const deepDiveImportRecord = deepDiveImportBatch.records[0];
@@ -4337,12 +4571,10 @@ assert.equal(
 );
 
 let persistedConcurrencyJobs = "";
-const concurrencyStore = createPersistentBackgroundCurationJobStore({
-  read: () => persistedConcurrencyJobs,
-  write: (serialized) => {
-    persistedConcurrencyJobs = serialized;
-  }
-});
+const concurrencyStore = createPersistentBackgroundCurationJobStore(createSmokeStorage(
+  () => persistedConcurrencyJobs,
+  (serialized) => { persistedConcurrencyJobs = serialized; }
+));
 
 concurrencyStore.enqueuePlan(concurrencyPlan);
 
@@ -4359,11 +4591,13 @@ const concurrencyHandlers = {
 const concurrentBatches = await Promise.all([
   runDueBackgroundCurationJobs(concurrencyStore, concurrencyHandlers, {
     now: "2026-06-12T00:00:00.000Z",
-    kinds: ["cooldown_topic"]
+    kinds: ["cooldown_topic"],
+    workerId: "concurrency-worker-a"
   }),
   runDueBackgroundCurationJobs(concurrencyStore, concurrencyHandlers, {
     now: "2026-06-12T00:00:00.000Z",
-    kinds: ["cooldown_topic"]
+    kinds: ["cooldown_topic"],
+    workerId: "concurrency-worker-b"
   })
 ]);
 
@@ -4626,12 +4860,10 @@ assert.equal(scopedTurn.answerCardId, result.cards[0].id, "card-scoped turns sho
 assert.ok(scopedTurn.answer?.citations.length, "card-scoped answers should cite source chunks");
 
 let persistedCurationJobs = "";
-const curationJobStorage = {
-  read: () => persistedCurationJobs,
-  write: (serialized) => {
-    persistedCurationJobs = serialized;
-  }
-};
+const curationJobStorage = createSmokeStorage(
+  () => persistedCurationJobs,
+  (serialized) => { persistedCurationJobs = serialized; }
+);
 const curationStore = createPersistentBackgroundCurationJobStore(curationJobStorage);
 const enqueuedRecords = curationStore.enqueuePlan(backgroundPlan);
 
@@ -4695,7 +4927,8 @@ const importBatch = await runDueBackgroundCurationJobs(
   },
   {
     now: "2026-06-10T00:00:00.000Z",
-    kinds: ["import_source"]
+    kinds: ["import_source"],
+    workerId: "import-worker"
   }
 );
 const importedJobRecord = importBatch.records[0];
@@ -4727,7 +4960,8 @@ const followupBatch = await runDueBackgroundCurationJobs(
   },
   {
     now: "2026-06-10T00:00:00.000Z",
-    kinds: ["generate_followup"]
+    kinds: ["generate_followup"],
+    workerId: "followup-worker"
   }
 );
 const followupJobRecord = followupBatch.records[0];
@@ -4825,7 +5059,8 @@ const missingSeedBatch = await runDueBackgroundCurationJobs(
   },
   {
     now: "2026-06-10T00:00:00.000Z",
-    kinds: ["generate_followup"]
+    kinds: ["generate_followup"],
+    workerId: "missing-seed-worker"
   }
 );
 const missingSeedRecord = missingSeedBatch.records[0];
@@ -4860,7 +5095,8 @@ const missingSeedSkipBatch = await runDueBackgroundCurationJobs(
   {},
   {
     now: "2026-06-10T00:00:00.000Z",
-    kinds: ["generate_followup"]
+    kinds: ["generate_followup"],
+    workerId: "missing-seed-skip-worker"
   }
 );
 const missingSeedSkipRecord = missingSeedSkipBatch.records[0];
@@ -4884,12 +5120,10 @@ const discoveryPlan = createBackgroundCurationPlan({
   generatedAt: "2026-06-10T00:00:00.000Z"
 });
 let persistedDiscoveryJobs = "";
-const discoveryStore = createPersistentBackgroundCurationJobStore({
-  read: () => persistedDiscoveryJobs,
-  write: (serialized) => {
-    persistedDiscoveryJobs = serialized;
-  }
-});
+const discoveryStore = createPersistentBackgroundCurationJobStore(createSmokeStorage(
+  () => persistedDiscoveryJobs,
+  (serialized) => { persistedDiscoveryJobs = serialized; }
+));
 
 discoveryStore.enqueuePlan(discoveryPlan);
 
@@ -4917,7 +5151,8 @@ const discoveryBatch = await runDueBackgroundCurationJobs(
   },
   {
     now: "2026-06-10T00:20:00.000Z",
-    kinds: ["discover_sources"]
+    kinds: ["discover_sources"],
+    workerId: "discovery-worker"
   }
 );
 const discoveryJobRecord = discoveryBatch.records[0];
@@ -4930,12 +5165,11 @@ assert.equal(
 );
 
 let persistedAppSnapshot = "";
-const appPersistence = createAITimelinePersistenceStore({
-  read: () => persistedAppSnapshot,
-  write: (serialized) => {
-    persistedAppSnapshot = serialized;
-  }
-});
+const appPersistenceWriteIssues = [];
+const appPersistence = createAITimelinePersistenceStore(createSmokeStorage(
+  () => persistedAppSnapshot,
+  (serialized) => { persistedAppSnapshot = serialized; }
+), undefined, { onLoadIssue: (issue) => appPersistenceWriteIssues.push(issue) });
 
 appPersistence.saveSourceImportResult(deterministicImport, "2026-06-10T00:00:00.000Z");
 appPersistence.saveCurationJobRecords(
@@ -5027,12 +5261,11 @@ appPersistence.saveNotifications(
   "2026-06-10T00:21:00.000Z"
 );
 
-const rehydratedPersistence = createAITimelinePersistenceStore({
-  read: () => persistedAppSnapshot,
-  write: (serialized) => {
-    persistedAppSnapshot = serialized;
-  }
-});
+const appPersistenceLoadIssues = [];
+const rehydratedPersistence = createAITimelinePersistenceStore(createSmokeStorage(
+  () => persistedAppSnapshot,
+  (serialized) => { persistedAppSnapshot = serialized; }
+), undefined, { onLoadIssue: (issue) => appPersistenceLoadIssues.push(issue) });
 const appSnapshot = rehydratedPersistence.getSnapshot();
 
 assert.equal(appSnapshot.sourceImports.length, 1, "persistence should store source imports");
@@ -5044,7 +5277,7 @@ assert.equal(
   "legacy-style persisted posts without media should rehydrate without migration"
 );
 assert.equal(appSnapshot.harnessRuns.length, 1, "persistence should store harness runs");
-assert.equal(appSnapshot.curationJobs.length, 3, "persistence should store curation job records");
+assert.equal(appSnapshot.curationJobs.length, 3, `persistence should store curation job records: ${JSON.stringify([...appPersistenceWriteIssues, ...appPersistenceLoadIssues])}`);
 assert.equal(appSnapshot.releasePlans.length, 1, "persistence should store release plans");
 assert.equal(appSnapshot.userMemories[0]?.userId, "user-smoke", "persistence should store user memory");
 assert.equal(appSnapshot.memoryEvents.length, 5, "persistence should store memory edit events");
@@ -5071,16 +5304,14 @@ let legacyAgentTurnSnapshot = JSON.stringify({
     }
   ]
 });
-const legacyAgentTurnPersistence = createAITimelinePersistenceStore({
-  read: () => legacyAgentTurnSnapshot,
-  write: (serialized) => {
-    legacyAgentTurnSnapshot = serialized;
-  }
-});
-const legacyAgentTurn = legacyAgentTurnPersistence.getSnapshot().agentTurns[0];
+const legacyAgentTurnIssues = [];
+const legacyAgentTurnPersistence = createAITimelinePersistenceStore(createSmokeStorage(
+  () => legacyAgentTurnSnapshot,
+  (serialized) => { legacyAgentTurnSnapshot = serialized; }
+), undefined, { onLoadIssue: (issue) => legacyAgentTurnIssues.push(issue) });
 
-assert.equal(legacyAgentTurn.status, "answered", "legacy agent turns should default to answered");
-assert.equal(legacyAgentTurn.threadId, "legacy-agent-turn", "legacy agent turns should default threadId to their id");
+assert.equal(legacyAgentTurnPersistence.getSnapshot().agentTurns.length, 0, "legacy agent turns missing required state should be quarantined");
+assert.ok(legacyAgentTurnIssues.some((issue) => issue.recordId === "legacy-agent-turn" && issue.jsonPath.endsWith("threadId")), "legacy agent turn quarantine should report the missing required path");
 assert.deepEqual(
   legacyAgentTurnPersistence.getSnapshot().notifications,
   [],

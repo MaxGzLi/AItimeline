@@ -1,9 +1,15 @@
-import type { BackgroundSourceCandidate } from "../agents/backgroundCuration.js";
-import type { BackgroundCurationJobRecord } from "../agents/backgroundCurationQueue.js";
+import type { BackgroundCurationPlan, BackgroundSourceCandidate } from "../agents/backgroundCuration.js";
+import {
+  decodeBackgroundCurationJobRecord,
+  type BackgroundCurationJobRecord
+} from "../agents/backgroundCurationQueue.js";
 import type { SourcePostReleasePlan } from "../ranking/postReleasePlan.js";
 import type { SourceImportWorkerResult } from "../source/sourceImportWorker.js";
 import type {
   AgentHarnessRun,
+  AgentNotificationCitation,
+  AgentNotificationKind,
+  AgentTurnStatus,
   ConceptBrief,
   ConceptAliasRecord,
   ConceptMergeSuggestion,
@@ -29,11 +35,25 @@ import type { UserMemoryEditEvent } from "../memory/userMemoryControls.js";
 import { parseContentLanguage, type ContentLanguage } from "../harness/contentLanguage.js";
 import { normalizeConceptAliases, normalizeConceptKey } from "../graph/conceptAliases.js";
 import type { WeeklyRecapRecord } from "../recap/weeklyRecap.js";
+import {
+  decodeJson,
+  decodeRecordCollection,
+  deepClone,
+  expectArray,
+  expectBoolean,
+  expectEnum,
+  expectFiniteNumber,
+  expectIsoDate,
+  expectNonEmptyString,
+  expectNonNegativeInteger,
+  expectObject,
+  expectString,
+  PersistenceDecodeError,
+  type PersistenceLoadIssue
+} from "./runtimeDecoder.js";
+import { commitWithRetry, type RevisionedStorageAdapter } from "./revisionedStorage.js";
 
-export interface PersistenceStorageAdapter {
-  read(): string | null | undefined;
-  write(serialized: string): void;
-}
+export type PersistenceStorageAdapter = RevisionedStorageAdapter;
 
 export interface SourceRegistryRecord {
   id: string;
@@ -66,6 +86,18 @@ export interface InteractionSignalRecord {
   signal: InteractionSignal;
   feedback: LearningFeedback;
   createdAt: string;
+  signalResult?: {
+    topicState: TopicStateRecord | null;
+    plan: BackgroundCurationPlan;
+    records: BackgroundCurationJobRecord[];
+  };
+  reviewEventId?: string;
+  reviewGrade?: "remembered" | "fuzzy" | "forgot";
+  reviewResult?: {
+    reviewState: ReviewState;
+    masteryPromotions: unknown[];
+    learningGoalAchievements: unknown[];
+  };
 }
 
 export interface TopicStateRecord extends TopicState {
@@ -95,21 +127,7 @@ export interface AgentTurnRecord {
   createdAt: string;
 }
 
-export type AgentTurnStatus = "answered" | "pending_confirmation" | "researching" | "closed";
-
-export type AgentNotificationKind =
-  | "agent_answer"
-  | "research_progress"
-  | "mastery_promotion"
-  | "learning_goal_achieved"
-  | "supply_drought";
-
-export interface AgentNotificationCitation {
-  sourceId: string;
-  sourceTitle: string;
-  chunkId: string;
-  quote: string;
-}
+export type { AgentTurnStatus, AgentNotificationKind, AgentNotificationCitation } from "../types.js";
 
 export interface AgentNotificationRecord {
   id: string;
@@ -153,7 +171,8 @@ export interface SourceCandidateRecord {
 }
 
 export interface AITimelinePersistenceSnapshot {
-  version: 1;
+  version: 2;
+  revision: number;
   updatedAt: string;
   sourceImports: SourceImport[];
   sourceRegistries: SourceRegistryRecord[];
@@ -186,9 +205,15 @@ export interface AITimelinePersistenceSnapshot {
 
 export interface AITimelinePersistenceStore {
   getSnapshot(): AITimelinePersistenceSnapshot;
+  appendThreadBlocks(
+    postId: string,
+    blocks: KnowledgePost["thread"],
+    options?: { expectedRevision?: number; savedAt?: string | Date }
+  ): AITimelinePersistenceSnapshot;
   savePosts(posts: KnowledgePost[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
   saveSourceImportResult(result: SourceImportWorkerResult, savedAt?: string | Date): AITimelinePersistenceSnapshot;
   saveCurationJobRecords(records: BackgroundCurationJobRecord[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
+  replaceCurationJobRecords(records: BackgroundCurationJobRecord[], savedAt?: string | Date): AITimelinePersistenceSnapshot;
   saveReleasePlan(plan: SourcePostReleasePlan, savedAt?: string | Date): AITimelinePersistenceSnapshot;
   saveSourceCandidateRecords(
     records: SourceCandidateRecord[],
@@ -228,332 +253,301 @@ export interface AITimelinePersistenceStore {
     events?: UserMemoryEditEvent[],
     savedAt?: string | Date
   ): AITimelinePersistenceSnapshot;
+  flushMigration(savedAt?: string | Date): boolean;
+  close(): void;
 }
 
 export function createAITimelinePersistenceStore(
   storage: PersistenceStorageAdapter,
-  initialSnapshot?: AITimelinePersistenceSnapshotInput
+  initialSnapshot?: AITimelinePersistenceSnapshotInput,
+  options: { onLoadIssue?: (issue: PersistenceLoadIssue) => void } = {}
 ): AITimelinePersistenceStore {
-  let snapshot = createSnapshot({
-    ...readSnapshot(storage),
-    ...initialSnapshot
-  });
+  const initialRaw = storage.read();
+  const initialDecoded = initialRaw
+    ? decodeAITimelinePersistenceSnapshot(initialRaw)
+    : decodeAITimelinePersistenceSnapshot({ version: 1, updatedAt: new Date().toISOString(), ...initialSnapshot });
+  const reportedLoadIssues = new Set<string>();
+  const reportLoadIssues = (issues: PersistenceLoadIssue[]) => {
+    for (const issue of issues) {
+      const key = `${issue.collection}|${issue.index}|${issue.jsonPath}|${issue.message}`;
+      if (reportedLoadIssues.has(key)) continue;
+      reportedLoadIssues.add(key);
+      options.onLoadIssue?.(issue);
+    }
+  };
+  reportLoadIssues(initialDecoded.issues);
+  let snapshot = initialDecoded.snapshot;
+  let needsFlushMigration = initialDecoded.needsFlushMigration;
+
+  const readLatest = (): AITimelinePersistenceSnapshot => {
+    const serialized = storage.read();
+    if (!serialized) {
+      return cloneSnapshot(snapshot);
+    }
+    const decoded = decodeAITimelinePersistenceSnapshot(serialized);
+    reportLoadIssues(decoded.issues);
+    return decoded.snapshot;
+  };
+  const commit = (
+    mutate: (base: AITimelinePersistenceSnapshot) => AITimelinePersistenceSnapshot | undefined,
+    savedAt: string | Date
+  ): AITimelinePersistenceSnapshot => {
+    const updatedAt = normalizeDate(savedAt).toISOString();
+    const result = commitWithRetry({
+      readAndDecode: readLatest,
+      mutate(base) {
+        const next = mutate(base);
+        return next ? { ...next, version: 2, updatedAt } : undefined;
+      },
+      serialize: JSON.stringify,
+      compareAndSwap: storage.compareAndSwap.bind(storage)
+    });
+    snapshot = result.value;
+    if (result.committed) {
+      needsFlushMigration = false;
+    }
+    return cloneSnapshot(snapshot);
+  };
 
   return {
     getSnapshot() {
+      snapshot = readLatest();
       return cloneSnapshot(snapshot);
     },
+    appendThreadBlocks(postId, blocks, appendOptions = {}) {
+      const stableBlocks = blocks.map((block, index) =>
+        decodeThreadBlock(deepClone(block), `$.appendThreadBlocks.blocks[${index}]`, false)
+      );
+      const inputIds = new Set<string>();
+      for (const block of stableBlocks) {
+        if (inputIds.has(block.id)) {
+          throw new Error(`Duplicate thread block id in append input: ${block.id}`);
+        }
+        inputIds.add(block.id);
+      }
+      return commit((base) => {
+        const postIndex = base.posts.findIndex((post) => post.id === postId);
+        if (postIndex < 0) {
+          throw new Error(`Post not found for appendThreadBlocks: ${postId}`);
+        }
+        const post = base.posts[postIndex];
+        const byId = new Map(post.thread.map((block) => [block.id, block]));
+        const additions = stableBlocks.filter((block) => {
+          const current = byId.get(block.id);
+          if (!current) {
+            return true;
+          }
+          if (JSON.stringify(current) !== JSON.stringify(block)) {
+            throw new Error(`Thread block collision for id: ${block.id}`);
+          }
+          return false;
+        });
+        if (!additions.length) {
+          return undefined;
+        }
+        const posts = [...base.posts];
+        posts[postIndex] = { ...post, thread: [...post.thread, ...deepClone(additions)] };
+        return { ...base, posts };
+      }, appendOptions.savedAt ?? new Date());
+    },
     savePosts(posts, savedAt = new Date()) {
-      snapshot = {
-        ...snapshot,
-        updatedAt: normalizeDate(savedAt).toISOString(),
-        posts: upsertManyById(snapshot.posts, posts)
-      };
-      persist(storage, snapshot);
-
-      return cloneSnapshot(snapshot);
+      return commit((base) => ({ ...base, posts: upsertManyById(base.posts, posts) }), savedAt);
     },
     saveSourceImportResult(result, savedAt = new Date()) {
       const updatedAt = normalizeDate(savedAt).toISOString();
-      const prepared = prepareSourceImportResultForPersistence(snapshot.posts, result, updatedAt);
-
-      snapshot = {
-        ...snapshot,
-        updatedAt,
-        sourceImports: upsertById(snapshot.sourceImports, result.importRecord),
-        sourceRegistries: upsertById(snapshot.sourceRegistries, {
-          id: buildSourceRegistryRecordId(result.importRecord.source.id, updatedAt),
-          sourceId: result.importRecord.source.id,
-          registry: result.sourceRegistry,
-          createdAt: updatedAt
-        }),
-        posts: upsertManyById(snapshot.posts, prepared.postsToSave),
-        harnessRuns: result.harnessRun ? upsertById(snapshot.harnessRuns, result.harnessRun) : snapshot.harnessRuns,
-        validation: result.harnessRun
-          ? upsertManyById(snapshot.validation, createValidationRecords(result.harnessRun, result.validation, updatedAt))
-          : snapshot.validation,
-        sourceQualityVerdicts: result.qualityGate
-          ? upsertSourceQualityVerdicts(snapshot.sourceQualityVerdicts, [result.qualityGate])
-          : snapshot.sourceQualityVerdicts,
-        mergedSources: upsertManyById(snapshot.mergedSources, prepared.mergedSources)
-      };
-      persist(storage, snapshot);
-
-      return cloneSnapshot(snapshot);
+      const stableResult = deepClone(result);
+      return commit((base) => applySourceImportResultToSnapshot(base, stableResult, updatedAt).nextSnapshot, savedAt);
     },
     saveCurationJobRecords(records, savedAt = new Date()) {
-      snapshot = {
-        ...snapshot,
-        updatedAt: normalizeDate(savedAt).toISOString(),
-        curationJobs: upsertManyById(snapshot.curationJobs, records)
-      };
-      persist(storage, snapshot);
-
-      return cloneSnapshot(snapshot);
+      const canonicalRecords = records.map(withQueueLineageDefaults);
+      return commit((base) => ({ ...base, curationJobs: upsertManyById(base.curationJobs, canonicalRecords) }), savedAt);
+    },
+    replaceCurationJobRecords(records, savedAt = new Date()) {
+      const canonicalRecords = deepClone(records.map(withQueueLineageDefaults));
+      return commit((base) =>
+        JSON.stringify(base.curationJobs) === JSON.stringify(canonicalRecords)
+          ? undefined
+          : { ...base, curationJobs: canonicalRecords }, savedAt);
     },
     saveReleasePlan(plan, savedAt = new Date()) {
-      snapshot = {
-        ...snapshot,
-        updatedAt: normalizeDate(savedAt).toISOString(),
-        releasePlans: upsertById(snapshot.releasePlans.map(withReleasePlanId), withReleasePlanId(plan)).map(
+      return commit((base) => ({
+        ...base,
+        releasePlans: upsertById(base.releasePlans.map(withReleasePlanId), withReleasePlanId(plan)).map(
           withoutReleasePlanId
         )
-      };
-      persist(storage, snapshot);
-
-      return cloneSnapshot(snapshot);
+      }), savedAt);
     },
     saveSourceCandidateRecords(records, savedAt = new Date()) {
-      snapshot = {
-        ...snapshot,
-        updatedAt: normalizeDate(savedAt).toISOString(),
-        sourceCandidates: upsertManyById(snapshot.sourceCandidates, records)
-      };
-      persist(storage, snapshot);
-
-      return cloneSnapshot(snapshot);
+      return commit((base) => ({ ...base, sourceCandidates: upsertManyById(base.sourceCandidates, records) }), savedAt);
     },
     saveSourceQualityVerdicts(records, savedAt = new Date()) {
-      snapshot = {
-        ...snapshot,
-        updatedAt: normalizeDate(savedAt).toISOString(),
-        sourceQualityVerdicts: upsertSourceQualityVerdicts(snapshot.sourceQualityVerdicts, records)
-      };
-      persist(storage, snapshot);
-
-      return cloneSnapshot(snapshot);
+      return commit((base) => ({ ...base, sourceQualityVerdicts: upsertSourceQualityVerdicts(base.sourceQualityVerdicts, records) }), savedAt);
     },
     saveMergedSourceRecords(records, savedAt = new Date()) {
-      snapshot = {
-        ...snapshot,
-        updatedAt: normalizeDate(savedAt).toISOString(),
-        mergedSources: upsertManyById(snapshot.mergedSources, records)
-      };
-      persist(storage, snapshot);
-
-      return cloneSnapshot(snapshot);
+      return commit((base) => ({ ...base, mergedSources: upsertManyById(base.mergedSources, records) }), savedAt);
     },
     saveDailyAutoJobBudgetRecords(records, savedAt = new Date()) {
-      snapshot = {
-        ...snapshot,
-        updatedAt: normalizeDate(savedAt).toISOString(),
-        autoJobBudget: upsertDailyAutoJobBudgetRecords(snapshot.autoJobBudget, records)
-      };
-      persist(storage, snapshot);
-
-      return cloneSnapshot(snapshot);
+      return commit((base) => ({ ...base, autoJobBudget: upsertDailyAutoJobBudgetRecords(base.autoJobBudget, records) }), savedAt);
     },
     saveConceptBriefs(records, savedAt = new Date()) {
-      snapshot = {
-        ...snapshot,
-        updatedAt: normalizeDate(savedAt).toISOString(),
-        conceptBriefs: upsertConceptBriefs(snapshot.conceptBriefs, records)
-      };
-      persist(storage, snapshot);
-
-      return cloneSnapshot(snapshot);
+      return commit((base) => ({ ...base, conceptBriefs: upsertConceptBriefs(base.conceptBriefs, records) }), savedAt);
     },
     saveDeepReadArticles(records, savedAt = new Date()) {
-      snapshot = {
-        ...snapshot,
-        updatedAt: normalizeDate(savedAt).toISOString(),
-        deepReadArticles: upsertDeepReadArticles(snapshot.deepReadArticles, records)
-      };
-      persist(storage, snapshot);
-
-      return cloneSnapshot(snapshot);
+      return commit((base) => ({ ...base, deepReadArticles: upsertDeepReadArticles(base.deepReadArticles, records) }), savedAt);
     },
     saveWeeklyRecaps(records, savedAt = new Date()) {
-      snapshot = {
-        ...snapshot,
-        updatedAt: normalizeDate(savedAt).toISOString(),
-        weeklyRecaps: upsertWeeklyRecaps(snapshot.weeklyRecaps, records)
-      };
-      persist(storage, snapshot);
-
-      return cloneSnapshot(snapshot);
+      return commit((base) => ({ ...base, weeklyRecaps: upsertWeeklyRecaps(base.weeklyRecaps, records) }), savedAt);
     },
     saveSubscriptions(records, savedAt = new Date()) {
-      snapshot = {
-        ...snapshot,
-        updatedAt: normalizeDate(savedAt).toISOString(),
-        subscriptions: upsertSubscriptions(snapshot.subscriptions, records)
-      };
-      persist(storage, snapshot);
-
-      return cloneSnapshot(snapshot);
+      return commit((base) => ({ ...base, subscriptions: upsertSubscriptions(base.subscriptions, records) }), savedAt);
     },
     deleteSubscription(id, savedAt = new Date()) {
-      snapshot = {
-        ...snapshot,
-        updatedAt: normalizeDate(savedAt).toISOString(),
-        subscriptions: snapshot.subscriptions.filter((record) => record.id !== id)
-      };
-      persist(storage, snapshot);
-
-      return cloneSnapshot(snapshot);
+      return commit((base) => ({ ...base, subscriptions: base.subscriptions.filter((record) => record.id !== id) }), savedAt);
     },
     saveLearningGoals(records, savedAt = new Date()) {
-      snapshot = {
-        ...snapshot,
-        updatedAt: normalizeDate(savedAt).toISOString(),
-        learningGoals: upsertLearningGoals(snapshot.learningGoals, records)
-      };
-      persist(storage, snapshot);
-
-      return cloneSnapshot(snapshot);
+      return commit((base) => ({ ...base, learningGoals: upsertLearningGoals(base.learningGoals, records) }), savedAt);
     },
     deleteLearningGoal(id, savedAt = new Date()) {
-      snapshot = {
-        ...snapshot,
-        updatedAt: normalizeDate(savedAt).toISOString(),
-        learningGoals: snapshot.learningGoals.filter((record) => record.id !== id)
-      };
-      persist(storage, snapshot);
-
-      return cloneSnapshot(snapshot);
+      return commit((base) => ({ ...base, learningGoals: base.learningGoals.filter((record) => record.id !== id) }), savedAt);
     },
     saveInteractionSignalRecords(records, savedAt = new Date()) {
-      snapshot = {
-        ...snapshot,
-        updatedAt: normalizeDate(savedAt).toISOString(),
-        interactionSignals: upsertManyById(snapshot.interactionSignals, records)
-      };
-      persist(storage, snapshot);
-
-      return cloneSnapshot(snapshot);
+      return commit((base) => ({ ...base, interactionSignals: upsertManyById(base.interactionSignals, records) }), savedAt);
     },
     saveTopicStateRecords(records, savedAt = new Date()) {
-      snapshot = {
-        ...snapshot,
-        updatedAt: normalizeDate(savedAt).toISOString(),
-        topicStates: upsertTopicStateRecords(snapshot.topicStates, records)
-      };
-      persist(storage, snapshot);
-
-      return cloneSnapshot(snapshot);
+      return commit((base) => ({ ...base, topicStates: upsertTopicStateRecords(base.topicStates, records) }), savedAt);
     },
     saveDismissedPosts(records, savedAt = new Date()) {
-      snapshot = {
-        ...snapshot,
-        updatedAt: normalizeDate(savedAt).toISOString(),
-        dismissedPosts: upsertDismissedPosts([], records)
-      };
-      persist(storage, snapshot);
-
-      return cloneSnapshot(snapshot);
+      return commit((base) => ({ ...base, dismissedPosts: upsertDismissedPosts([], records) }), savedAt);
     },
     saveReviewStates(records, savedAt = new Date()) {
-      snapshot = {
-        ...snapshot,
-        updatedAt: normalizeDate(savedAt).toISOString(),
-        reviewStates: upsertReviewStates(snapshot.reviewStates, records)
-      };
-      persist(storage, snapshot);
-
-      return cloneSnapshot(snapshot);
+      return commit((base) => ({ ...base, reviewStates: upsertReviewStates(base.reviewStates, records) }), savedAt);
     },
     saveAgentTurnRecords(records, savedAt = new Date()) {
-      snapshot = {
-        ...snapshot,
-        updatedAt: normalizeDate(savedAt).toISOString(),
-        agentTurns: upsertManyById(snapshot.agentTurns, records.map((record) => normalizeAgentTurnRecord(record)))
-      };
-      persist(storage, snapshot);
-
-      return cloneSnapshot(snapshot);
+      return commit((base) => ({ ...base, agentTurns: upsertManyById(base.agentTurns, records.map((record) => normalizeAgentTurnRecord(record))) }), savedAt);
     },
     saveNotifications(records, savedAt = new Date()) {
-      snapshot = {
-        ...snapshot,
-        updatedAt: normalizeDate(savedAt).toISOString(),
-        notifications: upsertManyById(snapshot.notifications, records.map(normalizeNotificationRecord))
-      };
-      persist(storage, snapshot);
-
-      return cloneSnapshot(snapshot);
+      return commit((base) => ({ ...base, notifications: upsertManyById(base.notifications, records.map(normalizeNotificationRecord)) }), savedAt);
     },
     saveUserSettings(settings, savedAt = new Date()) {
-      snapshot = {
-        ...snapshot,
-        updatedAt: normalizeDate(savedAt).toISOString(),
-        userSettings: normalizeUserSettings(settings)
-      };
-      persist(storage, snapshot);
-
-      return cloneSnapshot(snapshot);
+      return commit((base) => ({ ...base, userSettings: normalizeUserSettings(settings) }), savedAt);
     },
     saveConceptAliases(records, savedAt = new Date()) {
-      snapshot = {
-        ...snapshot,
-        updatedAt: normalizeDate(savedAt).toISOString(),
-        conceptAliases: normalizeConceptAliasesInput(records)
-      };
-      persist(storage, snapshot);
-
-      return cloneSnapshot(snapshot);
+      return commit((base) => ({ ...base, conceptAliases: normalizeConceptAliasesInput(records) }), savedAt);
     },
     saveConceptMergeSuggestions(records, savedAt = new Date()) {
-      snapshot = {
-        ...snapshot,
-        updatedAt: normalizeDate(savedAt).toISOString(),
-        conceptMergeSuggestions: normalizeConceptMergeSuggestions(records)
-      };
-      persist(storage, snapshot);
-
-      return cloneSnapshot(snapshot);
+      return commit((base) => ({ ...base, conceptMergeSuggestions: normalizeConceptMergeSuggestions(records) }), savedAt);
     },
     saveUserMemory(userId, memory, events = [], savedAt = new Date()) {
       const updatedAt = normalizeDate(savedAt).toISOString();
-
-      snapshot = {
-        ...snapshot,
-        updatedAt,
-        userMemories: upsertUserMemory(snapshot.userMemories, {
+      return commit((base) => ({
+        ...base,
+        userMemories: upsertUserMemory(base.userMemories, {
           userId,
           memory,
           updatedAt
         }),
         memoryEvents: [
-          ...snapshot.memoryEvents,
+          ...base.memoryEvents,
           ...events.map((event) => ({
             userId,
             event
           }))
         ]
-      };
-      persist(storage, snapshot);
-
-      return cloneSnapshot(snapshot);
+      }), savedAt);
+    },
+    flushMigration(savedAt = new Date()) {
+      if (!needsFlushMigration) {
+        return false;
+      }
+      commit((base) => ({ ...base }), savedAt);
+      return true;
+    },
+    close() {
+      storage.close?.();
     }
   };
 }
 
-export type AITimelinePersistenceSnapshotInput = Partial<AITimelinePersistenceSnapshot> & {
+export type AITimelinePersistenceSnapshotInput = Omit<Partial<AITimelinePersistenceSnapshot>, "version"> & {
+  version?: 1 | 2;
   dismissedPostIds?: string[];
 };
 
-function readSnapshot(storage: PersistenceStorageAdapter): AITimelinePersistenceSnapshotInput {
-  const serialized = storage.read();
+export interface DecodedAITimelinePersistenceSnapshot {
+  snapshot: AITimelinePersistenceSnapshot;
+  issues: PersistenceLoadIssue[];
+  needsFlushMigration: boolean;
+}
 
-  if (!serialized) {
-    return {};
+const snapshotCollections = [
+  "sourceImports", "sourceRegistries", "posts", "harnessRuns", "validation", "curationJobs", "releasePlans",
+  "userMemories", "memoryEvents", "interactionSignals", "topicStates", "dismissedPosts", "reviewStates",
+  "sourceCandidates", "agentTurns", "notifications", "conceptAliases", "conceptMergeSuggestions",
+  "sourceQualityVerdicts", "mergedSources", "autoJobBudget", "conceptBriefs", "deepReadArticles", "weeklyRecaps",
+  "subscriptions", "learningGoals"
+] as const;
+
+export function decodeAITimelinePersistenceSnapshot(input: string | unknown): DecodedAITimelinePersistenceSnapshot {
+  const parsed = typeof input === "string" ? decodeJson(input, "aitimeline") : deepClone(input);
+  const root = expectObject(parsed, "$");
+  const version = root.version;
+  if (version !== 1 && version !== 2) {
+    throw new PersistenceDecodeError("$.version", "expected supported snapshot version 1 or 2");
+  }
+  const updatedAt = expectIsoDate(root.updatedAt, "$.updatedAt");
+  const revision = version === 2 ? expectNonNegativeInteger(root.revision, "$.revision") : 0;
+  const issues: PersistenceLoadIssue[] = [];
+  const migrated: Record<string, unknown> = { ...root, version: 2, revision, updatedAt };
+
+  for (const collection of snapshotCollections) {
+    const value = root[collection];
+    if (value === undefined) {
+      if (version === 2) {
+        throw new PersistenceDecodeError(`$.${collection}`, "canonical v2 snapshot is missing a required collection");
+      }
+      migrated[collection] = [];
+      continue;
+    }
+    migrated[collection] = decodeRecordCollection({
+      snapshotKind: "aitimeline",
+      collection,
+      value,
+      issues,
+      decodeRecord: (record, path) => decodeSnapshotOwnerRecord(collection, record, path, version)
+    });
   }
 
-  const parsed = JSON.parse(serialized) as unknown;
-
-  if (!isRecord(parsed) || parsed.version !== 1) {
-    throw new Error("AITimeline persistence snapshot is invalid.");
+  if (version === 1 && root.dismissedPosts === undefined && root.dismissedPostIds !== undefined) {
+    migrated.dismissedPosts = expectArray(root.dismissedPostIds, "$.dismissedPostIds").map((value, index) => ({
+      postId: expectNonEmptyString(value, `$.dismissedPostIds[${index}]`),
+      dismissedAt: updatedAt,
+      mode: "hard"
+    }));
   }
 
-  return parsed as AITimelinePersistenceSnapshotInput;
+  if (root.userSettings === undefined) {
+    if (version === 2) {
+      throw new PersistenceDecodeError("$.userSettings", "canonical v2 snapshot is missing userSettings");
+    }
+    migrated.userSettings = {};
+  } else {
+    const settings = expectObject(root.userSettings, "$.userSettings");
+    if (settings.contentLanguage !== undefined) {
+      expectEnum(settings.contentLanguage, ["zh", "en"], "$.userSettings.contentLanguage");
+    }
+    migrated.userSettings = deepClone(settings);
+  }
+
+  const snapshot = createSnapshot(migrated as AITimelinePersistenceSnapshotInput);
+  return { snapshot, issues, needsFlushMigration: version === 1 || issues.length > 0 };
 }
 
 function createSnapshot(input: AITimelinePersistenceSnapshotInput = {}): AITimelinePersistenceSnapshot {
   const updatedAt = input.updatedAt ?? new Date().toISOString();
 
   return {
-    version: 1,
+    version: 2,
+    revision: input.revision ?? 0,
     updatedAt,
     sourceImports: input.sourceImports ?? [],
     sourceRegistries: input.sourceRegistries ?? [],
@@ -566,22 +560,183 @@ function createSnapshot(input: AITimelinePersistenceSnapshotInput = {}): AITimel
     memoryEvents: input.memoryEvents ?? [],
     interactionSignals: input.interactionSignals ?? [],
     topicStates: input.topicStates ?? [],
-    dismissedPosts: normalizeDismissedPosts(input, updatedAt),
+    dismissedPosts: input.dismissedPosts ?? normalizeDismissedPosts(input, updatedAt),
     reviewStates: input.reviewStates ?? [],
-    sourceCandidates: normalizeSourceCandidateRecords(input.sourceCandidates ?? []),
-    agentTurns: (input.agentTurns ?? []).map((record) => normalizeAgentTurnRecord(record)),
-    notifications: (input.notifications ?? []).map(normalizeNotificationRecord),
-    userSettings: normalizeUserSettings(input.userSettings),
-    conceptAliases: normalizeConceptAliasesInput(input.conceptAliases ?? []),
-    conceptMergeSuggestions: normalizeConceptMergeSuggestions(input.conceptMergeSuggestions ?? []),
-    sourceQualityVerdicts: normalizeSourceQualityVerdicts(input.sourceQualityVerdicts ?? []),
-    mergedSources: normalizeMergedSourceRecords(input.mergedSources ?? []),
-    autoJobBudget: normalizeDailyAutoJobBudgetRecords(input.autoJobBudget ?? []),
-    conceptBriefs: normalizeConceptBriefs(input.conceptBriefs ?? []),
-    deepReadArticles: normalizeDeepReadArticles(input.deepReadArticles ?? []),
-    weeklyRecaps: normalizeWeeklyRecaps(input.weeklyRecaps ?? []),
-    subscriptions: normalizeSubscriptions(input.subscriptions ?? []),
-    learningGoals: normalizeLearningGoals(input.learningGoals ?? [])
+    sourceCandidates: input.sourceCandidates ?? [],
+    agentTurns: input.agentTurns ?? [],
+    notifications: input.notifications ?? [],
+    userSettings: input.userSettings ?? {},
+    conceptAliases: input.conceptAliases ?? [],
+    conceptMergeSuggestions: input.conceptMergeSuggestions ?? [],
+    sourceQualityVerdicts: input.sourceQualityVerdicts ?? [],
+    mergedSources: input.mergedSources ?? [],
+    autoJobBudget: input.autoJobBudget ?? [],
+    conceptBriefs: input.conceptBriefs ?? [],
+    deepReadArticles: input.deepReadArticles ?? [],
+    weeklyRecaps: input.weeklyRecaps ?? [],
+    subscriptions: input.subscriptions ?? [],
+    learningGoals: input.learningGoals ?? []
+  };
+}
+
+function decodeSnapshotOwnerRecord(
+  collection: typeof snapshotCollections[number],
+  value: unknown,
+  path: string,
+  version: 1 | 2
+): unknown {
+  const record = expectObject(value, path);
+  if (collection === "curationJobs") {
+    return decodeBackgroundCurationJobRecord(record, path, version);
+  }
+  validateKnownTree(record, path);
+
+  if (collection === "posts") {
+    expectNonEmptyString(record.id, `${path}.id`);
+    for (const key of ["title", "hook", "thesis", "shortBody", "summary", "keyTakeaway", "recommendedBecause", "harnessVersion"] as const) {
+      expectString(record[key], `${path}.${key}`);
+    }
+    const thread = expectArray(record.thread, `${path}.thread`).map((block, index) =>
+      decodeThreadBlock(block, `${path}.thread[${index}]`, version === 1)
+    );
+    return { ...record, thread };
+  }
+
+  if (collection === "interactionSignals") {
+    expectNonEmptyString(record.id, `${path}.id`);
+    const createdAt = expectIsoDate(record.createdAt, `${path}.createdAt`);
+    const signal = expectObject(record.signal, `${path}.signal`);
+    for (const key of ["postId", "topicId"] as const) expectNonEmptyString(signal[key], `${path}.signal.${key}`);
+    expectArray(signal.conceptIds, `${path}.signal.conceptIds`).forEach((item, index) => expectString(item, `${path}.signal.conceptIds[${index}]`));
+    expectFiniteNumber(signal.dwellTimeMs, `${path}.signal.dwellTimeMs`);
+    const migratedSignal = { ...signal };
+    if (signal.impression === undefined && version === 1) migratedSignal.impression = false;
+    else expectBoolean(signal.impression, `${path}.signal.impression`);
+    if (signal.createdAt === undefined && version === 1) migratedSignal.createdAt = createdAt;
+    else expectIsoDate(signal.createdAt, `${path}.signal.createdAt`);
+    for (const key of ["openedThread", "liked", "saved", "askedQuestion", "reviewed", "skippedQuickly"] as const) {
+      expectBoolean(signal[key], `${path}.signal.${key}`);
+    }
+    expectObject(record.feedback, `${path}.feedback`);
+    if (record.reviewGrade !== undefined) expectEnum(record.reviewGrade, ["remembered", "fuzzy", "forgot"], `${path}.reviewGrade`);
+    if (record.reviewEventId !== undefined) expectString(record.reviewEventId, `${path}.reviewEventId`);
+    return { ...record, signal: migratedSignal };
+  }
+
+  if (collection === "agentTurns") {
+    for (const key of ["id", "userId", "question", "intent", "tier", "zone", "threadId"] as const) {
+      expectNonEmptyString(record[key], `${path}.${key}`);
+    }
+    expectEnum(record.status, ["answered", "pending_confirmation", "researching", "closed"], `${path}.status`);
+    expectIsoDate(record.createdAt, `${path}.createdAt`);
+    if (record.answerCardId !== undefined) expectString(record.answerCardId, `${path}.answerCardId`);
+    return deepClone(record);
+  }
+
+  if (collection === "notifications") {
+    for (const key of ["id", "turnId", "body"] as const) expectString(record[key], `${path}.${key}`);
+    expectEnum(record.kind, ["agent_answer", "research_progress", "mastery_promotion", "learning_goal_achieved", "supply_drought"], `${path}.kind`);
+    expectArray(record.postIds, `${path}.postIds`).forEach((item, index) => expectString(item, `${path}.postIds[${index}]`));
+    expectIsoDate(record.createdAt, `${path}.createdAt`);
+    return deepClone(record);
+  }
+
+  if (collection === "sourceCandidates") {
+    const status = record.status === undefined && version === 1 ? "pending" : record.status;
+    const intakeKind = record.intakeKind === undefined && version === 1 ? "user_paste" : record.intakeKind;
+    expectEnum(
+      status,
+      ["pending", "queued", "imported", "dismissed", "rejected_source", "unreachable"],
+      `${path}.status`
+    );
+    expectEnum(
+      intakeKind,
+      ["user_paste", "browser_share", "agent_discovery", "manual", "subscription"],
+      `${path}.intakeKind`
+    );
+    return deepClone({ ...record, status, intakeKind });
+  }
+
+  const primaryIdKeys: Partial<Record<typeof snapshotCollections[number], string>> = {
+    sourceImports: "id", sourceRegistries: "id", harnessRuns: "id", validation: "id", curationJobs: "id",
+    sourceCandidates: "id", agentTurns: "id", notifications: "id", mergedSources: "id", conceptBriefs: "id",
+    deepReadArticles: "id", weeklyRecaps: "id", subscriptions: "id", learningGoals: "id"
+  };
+  const primaryId = primaryIdKeys[collection];
+  if (primaryId) expectNonEmptyString(record[primaryId], `${path}.${primaryId}`);
+  if (collection === "userMemories" || collection === "memoryEvents") expectNonEmptyString(record.userId, `${path}.userId`);
+  if (collection === "topicStates") expectNonEmptyString(record.topicId, `${path}.topicId`);
+  if (collection === "dismissedPosts" || collection === "reviewStates") expectNonEmptyString(record.postId, `${path}.postId`);
+  if (collection === "autoJobBudget") expectString(record.date, `${path}.date`);
+  if (collection === "conceptAliases") expectNonEmptyString(record.canonical, `${path}.canonical`);
+  return deepClone(record);
+}
+
+function decodeThreadBlock(value: unknown, path: string, migrateLegacy: boolean): KnowledgePost["thread"][number] {
+  const block = expectObject(value, path);
+  expectNonEmptyString(block.id, `${path}.id`);
+  expectEnum(block.kind, ["explain", "example", "contrast", "extension", "quiz", "user_comment", "agent_reply"], `${path}.kind`);
+  expectString(block.title, `${path}.title`);
+  expectString(block.body, `${path}.body`);
+  if (block.prompt !== undefined) expectString(block.prompt, `${path}.prompt`);
+  const citations = block.citations === undefined && migrateLegacy
+    ? []
+    : expectArray(block.citations ?? [], `${path}.citations`).map((citation, index) => decodeThreadCitation(citation, `${path}.citations[${index}]`));
+  const grounded = block.grounded === undefined && migrateLegacy ? false : block.grounded;
+  if (grounded !== undefined) expectBoolean(grounded, `${path}.grounded`);
+  if (block.runnerKind !== undefined) expectEnum(block.runnerKind, ["model", "deterministic"], `${path}.runnerKind`);
+  if (grounded === true && citations.length === 0) throw new PersistenceDecodeError(`${path}.citations`, "grounded block requires citations");
+  return { ...block, citations, grounded } as unknown as KnowledgePost["thread"][number];
+}
+
+function decodeThreadCitation(value: unknown, path: string): unknown {
+  const citation = expectObject(value, path);
+  for (const key of ["sourceId", "sourceTitle", "chunkId", "quote"] as const) expectString(citation[key], `${path}.${key}`);
+  if (citation.startTimeSeconds !== undefined) expectFiniteNumber(citation.startTimeSeconds, `${path}.startTimeSeconds`);
+  if (citation.endTimeSeconds !== undefined) expectFiniteNumber(citation.endTimeSeconds, `${path}.endTimeSeconds`);
+  if (citation.origin !== undefined) {
+    const origin = expectObject(citation.origin, `${path}.origin`);
+    expectString(origin.turnId, `${path}.origin.turnId`);
+    expectString(origin.question, `${path}.origin.question`);
+    expectIsoDate(origin.createdAt, `${path}.origin.createdAt`);
+  }
+  return deepClone(citation);
+}
+
+const dateKeys = new Set(["createdAt", "updatedAt", "startedAt", "completedAt", "runAfter", "releaseAt", "generatedAt", "evaluatedAt", "decidedAt", "dismissedAt", "dueAt", "lastReviewedAt", "readAt", "importedAt", "rejectedAt", "lastQueuedAt", "cooldownUntil", "achievedAt", "publishedAt"]);
+const finiteNumberKeys = new Set(["priority", "score", "weight", "similarity", "interestScore", "fatigueScore", "comprehensionScore", "signalStrength", "dwellTimeMs", "relevanceScore", "noveltyScore", "qualityScore", "estimatedReadMinutes", "durationSeconds", "overlapScore"]);
+const integerKeys = new Set(["attempts", "attempt", "version", "contentLength", "used", "limit", "discarded", "intervalDays", "dueInDays", "cardCount", "reviewCount"]);
+
+function validateKnownTree(value: unknown, path: string): void {
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => validateKnownTree(item, `${path}[${index}]`));
+    return;
+  }
+  if (!isRecord(value)) return;
+  for (const [key, child] of Object.entries(value)) {
+    const childPath = `${path}.${key}`;
+    if (child === undefined) continue;
+    if (dateKeys.has(key)) expectIsoDate(child, childPath);
+    else if (integerKeys.has(key) && key !== "version") {
+      if (key === "intervalDays" && Array.isArray(child)) {
+        child.forEach((item, index) => expectNonNegativeInteger(item, `${childPath}[${index}]`));
+      } else {
+        expectNonNegativeInteger(child, childPath);
+      }
+    }
+    else if (key === "version" && typeof child === "number") expectNonNegativeInteger(child, childPath);
+    else if (key === "version" && typeof child !== "string") throw new PersistenceDecodeError(childPath, "expected a string or non-negative integer version");
+    else if (finiteNumberKeys.has(key)) expectFiniteNumber(child, childPath);
+    else if ((key === "id" || key.endsWith("Id")) && typeof child !== "string") throw new PersistenceDecodeError(childPath, "expected a string id");
+    validateKnownTree(child, childPath);
+  }
+}
+
+function withQueueLineageDefaults(record: BackgroundCurationJobRecord): BackgroundCurationJobRecord {
+  return {
+    ...record,
+    originalJobId: record.originalJobId ?? record.id,
+    attempt: record.attempt ?? 0
   };
 }
 
@@ -1300,7 +1455,63 @@ function normalizeStringArray(value: unknown): string[] {
     : [];
 }
 
+export interface PreviewSourceImportApplicationsResult {
+  preparedResults: SourceImportWorkerResult[];
+  effectivePosts: KnowledgePost[];
+  nextSnapshot: AITimelinePersistenceSnapshot;
+}
+
+export function previewSourceImportApplications(
+  snapshot: AITimelinePersistenceSnapshot,
+  results: SourceImportWorkerResult[],
+  savedAt: string | Date
+): PreviewSourceImportApplicationsResult {
+  const updatedAt = normalizeDate(savedAt).toISOString();
+  let nextSnapshot = deepClone(snapshot);
+  const preparedResults: SourceImportWorkerResult[] = [];
+  const effectivePosts: KnowledgePost[] = [];
+  for (const result of results) {
+    const applied = applySourceImportResultToSnapshot(nextSnapshot, result, updatedAt);
+    nextSnapshot = applied.nextSnapshot;
+    preparedResults.push(applied.prepared.preparedResult);
+    effectivePosts.push(...applied.prepared.postsToSave);
+  }
+  return { preparedResults, effectivePosts, nextSnapshot };
+}
+
+function applySourceImportResultToSnapshot(
+  base: AITimelinePersistenceSnapshot,
+  result: SourceImportWorkerResult,
+  updatedAt: string
+): { nextSnapshot: AITimelinePersistenceSnapshot; prepared: PreparedSourceImportForPersistence } {
+  const prepared = prepareSourceImportResultForPersistence(base.posts, result, updatedAt);
+  const stableResult = prepared.preparedResult;
+  return {
+    prepared,
+    nextSnapshot: {
+      ...base,
+      sourceImports: upsertById(base.sourceImports, stableResult.importRecord),
+      sourceRegistries: upsertById(base.sourceRegistries, {
+        id: buildSourceRegistryRecordId(stableResult.importRecord.source.id, updatedAt),
+        sourceId: stableResult.importRecord.source.id,
+        registry: stableResult.sourceRegistry,
+        createdAt: updatedAt
+      }),
+      posts: upsertManyById(base.posts, prepared.postsToSave),
+      harnessRuns: stableResult.harnessRun ? upsertById(base.harnessRuns, stableResult.harnessRun) : base.harnessRuns,
+      validation: stableResult.harnessRun
+        ? upsertManyById(base.validation, createValidationRecords(stableResult.harnessRun, stableResult.validation, updatedAt))
+        : base.validation,
+      sourceQualityVerdicts: stableResult.qualityGate
+        ? upsertSourceQualityVerdicts(base.sourceQualityVerdicts, [stableResult.qualityGate])
+        : base.sourceQualityVerdicts,
+      mergedSources: upsertManyById(base.mergedSources, prepared.mergedSources)
+    }
+  };
+}
+
 interface PreparedSourceImportForPersistence {
+  preparedResult: SourceImportWorkerResult;
   postsToSave: KnowledgePost[];
   mergedSources: MergedSourceRecord[];
 }
@@ -1310,6 +1521,7 @@ function prepareSourceImportResultForPersistence(
   result: SourceImportWorkerResult,
   createdAt: string
 ): PreparedSourceImportForPersistence {
+  const preparedResult = deepClone(result);
   const postsById = new Map(existingPosts.map((post) => [post.id, post]));
   const postsToSaveById = new Map<string, KnowledgePost>();
   const mergedSources: MergedSourceRecord[] = [];
@@ -1317,8 +1529,8 @@ function prepareSourceImportResultForPersistence(
   const skippedPostIds = new Set<string>();
   const validationRejectedPostIds = new Set<string>();
 
-  for (const [index, post] of result.posts.entries()) {
-    if (!shouldPersistImportedPost(result, post, index)) {
+  for (const [index, post] of preparedResult.posts.entries()) {
+    if (!shouldPersistImportedPost(preparedResult, post, index)) {
       validationRejectedPostIds.add(post.id);
       continue;
     }
@@ -1332,8 +1544,8 @@ function prepareSourceImportResultForPersistence(
       postsToSaveById.set(mergedPost.id, mergedPost);
       skippedPostIds.add(post.id);
       mergedSources.push({
-        id: `merged-source-${hashText(`${result.importRecord.id}|${post.id}|${duplicate.post.id}`)}`,
-        sourceImportId: result.importRecord.id,
+        id: `merged-source-${hashText(`${preparedResult.importRecord.id}|${post.id}|${duplicate.post.id}`)}`,
+        sourceImportId: preparedResult.importRecord.id,
         sourcePostId: post.id,
         mergedIntoPostId: duplicate.post.id,
         sourceIds: post.sources.map((source) => source.id),
@@ -1352,19 +1564,19 @@ function prepareSourceImportResultForPersistence(
   const removedPostIds = new Set([...skippedPostIds, ...validationRejectedPostIds]);
 
   if (removedPostIds.size) {
-    result.posts = acceptedImportPosts;
+    preparedResult.posts = acceptedImportPosts;
 
     // Near-duplicate cards are represented by the merge record, while failed validation must
     // remain in the ledger for audit even though its post is refused.
-    if (skippedPostIds.size && Array.isArray(result.validation)) {
-      result.validation = result.validation.filter((record) => !record.postId || !skippedPostIds.has(record.postId));
+    if (skippedPostIds.size && Array.isArray(preparedResult.validation)) {
+      preparedResult.validation = preparedResult.validation.filter((record) => !record.postId || !skippedPostIds.has(record.postId));
     }
 
-    if (result.harnessRun) {
-      result.harnessRun = {
-        ...result.harnessRun,
-        outputPostIds: result.harnessRun.outputPostIds.filter((postId) => !removedPostIds.has(postId)),
-        validation: result.harnessRun.validation.filter(
+    if (preparedResult.harnessRun) {
+      preparedResult.harnessRun = {
+        ...preparedResult.harnessRun,
+        outputPostIds: preparedResult.harnessRun.outputPostIds.filter((postId) => !removedPostIds.has(postId)),
+        validation: preparedResult.harnessRun.validation.filter(
           (record) => !record.postId || !skippedPostIds.has(record.postId)
         )
       };
@@ -1372,6 +1584,7 @@ function prepareSourceImportResultForPersistence(
   }
 
   return {
+    preparedResult,
     postsToSave: Array.from(postsToSaveById.values()),
     mergedSources
   };
@@ -1541,10 +1754,6 @@ function createValidationRecords(
 
 function buildSourceRegistryRecordId(sourceId: string, createdAt: string): string {
   return `${sourceId}-registry-${createdAt.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "")}`;
-}
-
-function persist(storage: PersistenceStorageAdapter, snapshot: AITimelinePersistenceSnapshot): void {
-  storage.write(JSON.stringify(snapshot));
 }
 
 function upsertById<T extends { id: string }>(items: T[], item: T): T[] {

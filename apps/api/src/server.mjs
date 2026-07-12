@@ -1,5 +1,20 @@
 import { createServer } from "node:http";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  linkSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+  writeSync
+} from "node:fs";
+import { randomUUID } from "node:crypto";
+import { hostname } from "node:os";
 import { dirname, extname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
@@ -16,6 +31,7 @@ import {
   createAutomaticConceptAliases,
   createConceptBriefInputFromCards,
   createAITimelinePersistenceStore,
+  createMemoryRevisionedStorageAdapter,
   applyDailyAutoJobBudget,
   createBackgroundCurationPlan,
   createDeterministicConceptBrief,
@@ -49,7 +65,9 @@ import {
   mergeSourceRegistries,
   removeConceptAlias,
   parseContentLanguage,
+  previewSourceImportApplications,
   rankPersonalizedTimeline,
+  readSerializedRevision,
   runConversationTurn,
   runDueBackgroundCurationJobs,
   normalizeConceptKey,
@@ -80,22 +98,49 @@ export function createApiServer(options = {}) {
     options.curationDataPath ?? process.env.AITIMELINE_CURATION_DATA_PATH ?? defaultCurationDataPath;
   const mediaRootDir = resolve(options.mediaRootDir ?? process.env.AITIMELINE_MEDIA_ROOT ?? defaultMediaRoot);
   const enableFixtures = options.enableFixtures ?? process.env.AITIMELINE_ENABLE_FIXTURES === "1";
-  const persistenceStore = createStoreWithRecovery(
-    () => createAITimelinePersistenceStore(createFileStorageAdapter(dataPath)),
-    dataPath
-  );
-  const curationStore = createStoreWithRecovery(
-    () => createPersistentBackgroundCurationJobStore(createFileStorageAdapter(curationDataPath)),
-    curationDataPath
-  );
+  const ownerId = options.ownerId ?? randomUUID();
+  const workerId = `${hostname()}:${process.pid}:${ownerId}`;
+  const resources = [];
+  let persistenceStore;
+  let curationStore;
+  try {
+    const persistenceAdapter = createFileStorageAdapter(dataPath, { ownerId, backupCount: 3 });
+    resources.push(persistenceAdapter);
+    const curationAdapter = createFileStorageAdapter(curationDataPath, { ownerId, backupCount: 3 });
+    resources.push(curationAdapter);
+    persistenceStore = createAITimelinePersistenceStore(persistenceAdapter, undefined, {
+      onLoadIssue: (issue) => console.warn("[aitimeline] persistence load issue", issue)
+    });
+    resources.push(persistenceStore);
+    const queueSeedRecords = curationAdapter.read() ? [] : persistenceStore.getSnapshot().curationJobs;
+    curationStore = createPersistentBackgroundCurationJobStore(curationAdapter, queueSeedRecords, {
+      now: options.now,
+      timeZone: process.env.AITIMELINE_TIMEZONE,
+      onLoadIssue: (issue) => console.warn("[aitimeline] curation queue load issue", issue)
+    });
+    resources.push(curationStore);
+    persistenceStore.flushMigration();
+    curationStore.flushMigration?.();
+    curationStore.recoverExpiredLeases(options.now ?? new Date());
+  } catch (error) {
+    for (const resource of resources.reverse()) {
+      try { resource.close?.(); } catch { /* preserve original initialization error */ }
+    }
+    throw error;
+  }
   const sourceImportWorker = createSafeSourceImportWorker(createConfiguredSourceImportWorker(process.env));
   const importRunner = sourceImportWorker.runner;
   const askModelClient = createConfiguredAskModelClient(process.env);
   const deepReadModelClients = createConfiguredDeepReadModelClients(process.env);
   const searchProvider = options.searchProvider ?? createConfiguredSearchProvider(process.env);
   const feedFetch = options.feedFetch ?? globalThis.fetch;
+  reconcileAndMaterializeCurationQueue(
+    persistenceStore,
+    curationStore,
+    resolveContentLanguage(persistenceStore, process.env)
+  );
 
-  return createServer(async (request, response) => {
+  const server = createServer(async (request, response) => {
     response.setHeader("Access-Control-Allow-Origin", "*");
     response.setHeader("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS");
     response.setHeader("Access-Control-Allow-Headers", "content-type");
@@ -549,10 +594,7 @@ export function createApiServer(options = {}) {
         }
 
         const nextReviewState = createReviewStateForGrade(reviewState, reviewedAt, grade);
-        const historicalSignalRecords = filterHistoricalInteractionSignalRecords(
-          snapshot.interactionSignals,
-          "review topic feedback"
-        );
+        const historicalSignalRecords = snapshot.interactionSignals;
         const pendingReviewedRecord = {
           id: signalRecordId,
           signal: reviewedSignal,
@@ -886,10 +928,7 @@ export function createApiServer(options = {}) {
           signal,
           createdAt: signal.createdAt
         };
-        const historicalSignalRecords = filterHistoricalInteractionSignalRecords(
-          currentSnapshot.interactionSignals,
-          "signal coalescing"
-        );
+        const historicalSignalRecords = currentSnapshot.interactionSignals;
         const previousEffectiveSignal = findCoalescedDailySignal(historicalSignalRecords, signal);
         const nextSignalRecords = [...historicalSignalRecords, pendingSignalRecord];
         const effectiveSignal = findCoalescedDailySignal(nextSignalRecords, signal) ?? signal;
@@ -1079,24 +1118,32 @@ export function createApiServer(options = {}) {
             loadSeedPost: (job) => persistenceStore.getSnapshot().posts.find((post) => post.id === job.postId),
             loadSourceQualityVerdicts: () => persistenceStore.getSnapshot().sourceQualityVerdicts,
             loadSourceQualityUserContext: () => buildSourceQualityUserContext(persistenceStore.getSnapshot()),
-            researchQuestion: (job) =>
-              handleResearchQuestionJob(
-                job,
-                persistenceStore,
-                sourceImportWorker,
-                searchProvider,
-                askModelClient,
-                contentLanguage,
-                runNow
+            researchQuestion: (job, context) =>
+              runResearchWithStagedPersistence(
+                persistenceStore.getSnapshot(),
+                context.effectAt,
+                (stagedStore) => handleResearchQuestionJob(
+                  job,
+                  stagedStore,
+                  sourceImportWorker,
+                  searchProvider,
+                  askModelClient,
+                  contentLanguage,
+                  context.effectAt
+                )
               ),
-            researchIdea: (job) =>
-              handleResearchIdeaJob(
-                job,
-                persistenceStore,
-                sourceImportWorker,
-                searchProvider,
-                contentLanguage,
-                runNow
+            researchIdea: (job, context) =>
+              runResearchWithStagedPersistence(
+                persistenceStore.getSnapshot(),
+                context.effectAt,
+                (stagedStore) => handleResearchIdeaJob(
+                  job,
+                  stagedStore,
+                  sourceImportWorker,
+                  searchProvider,
+                  contentLanguage,
+                  context.effectAt
+                )
               ),
             conceptBrief: (job) =>
               handleConceptBriefJob(
@@ -1122,96 +1169,30 @@ export function createApiServer(options = {}) {
           {
             now: runNow,
             limit: body.limit,
-            kinds: body.kinds
+            kinds: body.kinds,
+            workerId
           }
         );
-        const records = filterDuplicateFollowupCurationRecords(
+        const filteredRecords = filterDuplicateFollowupCurationRecords(
           batch.records,
           persistenceStore.getSnapshot().posts
-        ).map((record) => sanitizeCurationRecordForResponse(record));
+        );
 
-        records.forEach((record, index) => {
-          if (record !== batch.records[index]) {
-            curationStore.update(record);
+        filteredRecords.forEach((record, index) => {
+          if (record.result !== batch.records[index]?.result && record.result) {
+            curationStore.updateTerminalResult(record.id, record.result);
           }
         });
 
+        const materializedRecords = materializeCurationJobRecords(
+          persistenceStore,
+          curationStore,
+          filteredRecords,
+          { appliedAt: batch.completedAt, contentLanguage }
+        );
+        const records = materializedRecords.map((record) => sanitizeCurationRecordForResponse(record));
         const filteredBatch = { ...batch, records };
-        let snapshot = persistenceStore.saveCurationJobRecords(filteredBatch.records);
-        const beforeCurationImportSnapshot = snapshot;
-        const curationImportedPosts = [];
-
-        for (const record of filteredBatch.records) {
-          if (record.result?.discoveredSourceCandidates?.length) {
-            snapshot = persistDiscoveredCandidates(
-              persistenceStore,
-              record.result.discoveredSourceCandidates,
-              record.completedAt ?? filteredBatch.completedAt
-            );
-          }
-
-          if (record.result?.sourceImport) {
-            const completedAt = record.completedAt ?? filteredBatch.completedAt;
-            const sourceImport = record.result.sourceImport;
-
-            persistenceStore.saveSourceImportResult(sourceImport, completedAt);
-
-            if (record.job.sourceCandidate) {
-              snapshot = updateSourceCandidateAfterImport(
-                persistenceStore,
-                persistenceStore.getSnapshot(),
-                record.job.sourceCandidate.id,
-                sourceImport,
-                completedAt
-              );
-            } else {
-              snapshot = persistenceStore.getSnapshot();
-            }
-
-            if (sourceImport.posts.length) {
-              curationImportedPosts.push(...sourceImport.posts);
-              snapshot = persistenceStore.saveReleasePlan(
-                createSourcePostReleasePlan({ posts: sourceImport.posts }),
-                completedAt
-              );
-            }
-          }
-
-          if (
-            record.status === "failed" &&
-            record.job.kind === "import_source" &&
-            record.job.sourceCandidate
-          ) {
-            snapshot = markSourceCandidateFailed(
-              persistenceStore,
-              persistenceStore.getSnapshot(),
-              record.job.sourceCandidate.id,
-              record.completedAt ?? filteredBatch.completedAt,
-              record.lastError
-            );
-          }
-
-          if (record.result?.conceptBrief) {
-            const completedAt = record.completedAt ?? filteredBatch.completedAt;
-            snapshot = persistenceStore.saveConceptBriefs([record.result.conceptBrief], completedAt);
-          }
-
-          if (record.result?.deepReadArticle) {
-            const completedAt = record.completedAt ?? filteredBatch.completedAt;
-            snapshot = persistenceStore.saveDeepReadArticles([record.result.deepReadArticle], completedAt);
-          }
-        }
-
-        if (curationImportedPosts.length) {
-          const now = filteredBatch.completedAt ?? runNow;
-          snapshot = persistAutomaticConceptAliases(persistenceStore, persistenceStore.getSnapshot(), now);
-          snapshot = maybePersistConnectionNote(persistenceStore, {
-            beforeImport: beforeCurationImportSnapshot,
-            newPosts: curationImportedPosts,
-            now,
-            contentLanguage
-          });
-        }
+        const snapshot = persistenceStore.getSnapshot();
 
         sendJson(response, 200, {
           ...filteredBatch,
@@ -1408,6 +1389,15 @@ export function createApiServer(options = {}) {
       }
     }
   });
+  let storesClosed = false;
+  const closeStores = () => {
+    if (storesClosed) return;
+    storesClosed = true;
+    for (const resource of resources.reverse()) resource.close?.();
+  };
+  server.once("close", closeStores);
+  server.aitimeline = { persistenceStore, curationStore, workerId, closeStores };
+  return server;
 }
 
 function createSafeSourceImportWorker(worker) {
@@ -2124,7 +2114,7 @@ function getWeeklyRecapResponse(persistenceStore, nowValue, contentLanguage) {
     {
       posts: snapshot.posts,
       reviewStates: snapshot.reviewStates,
-      interactionSignals: filterHistoricalInteractionSignalRecords(snapshot.interactionSignals, "weekly recap"),
+      interactionSignals: snapshot.interactionSignals,
       topicStates: snapshot.topicStates,
       contentLanguage
     },
@@ -2422,6 +2412,44 @@ function handleIdeaResearchRequest(body, userId, persistenceStore, curationStore
   };
 }
 
+async function runResearchWithStagedPersistence(initialSnapshot, effectAt, execute) {
+  const adapter = createMemoryRevisionedStorageAdapter(JSON.stringify(initialSnapshot));
+  const stagedStore = createAITimelinePersistenceStore(adapter);
+  const result = await execute(stagedStore);
+  const sourceImports = result.sourceImports ?? (result.sourceImport ? [result.sourceImport] : []);
+  const preview = previewSourceImportApplications(initialSnapshot, sourceImports, effectAt);
+  const stagedSnapshot = stagedStore.getSnapshot();
+  const changedById = (next, previous, key = "id") => {
+    const previousById = new Map(previous.map((record) => [record[key], record]));
+    return next.filter((record) => JSON.stringify(previousById.get(record[key])) !== JSON.stringify(record));
+  };
+  const previewPostsById = new Map(preview.nextSnapshot.posts.map((post) => [post.id, post]));
+  const materializationPlan = {
+    version: 1,
+    effectAt,
+    sourceImports: preview.preparedResults,
+    discoveredSourceCandidates: [],
+    sourceCandidateRecords: changedById(stagedSnapshot.sourceCandidates, initialSnapshot.sourceCandidates),
+    releasePlans: stagedSnapshot.releasePlans.filter(
+      (plan) => !initialSnapshot.releasePlans.some((previous) => JSON.stringify(previous) === JSON.stringify(plan))
+    ),
+    conceptBriefs: changedById(stagedSnapshot.conceptBriefs, initialSnapshot.conceptBriefs),
+    deepReadArticles: changedById(stagedSnapshot.deepReadArticles, initialSnapshot.deepReadArticles),
+    conceptAliases: changedById(stagedSnapshot.conceptAliases, initialSnapshot.conceptAliases, "canonical"),
+    extraPosts: stagedSnapshot.posts.filter(
+      (post) => JSON.stringify(previewPostsById.get(post.id)) !== JSON.stringify(post)
+    ),
+    notifications: changedById(stagedSnapshot.notifications, initialSnapshot.notifications),
+    agentTurnRecords: changedById(stagedSnapshot.agentTurns, initialSnapshot.agentTurns),
+    agentTurnPatches: []
+  };
+  return {
+    ...result,
+    sourceImports: preview.preparedResults,
+    materializationPlan
+  };
+}
+
 async function handleResearchQuestionJob(
   job,
   persistenceStore,
@@ -2568,7 +2596,7 @@ async function handleResearchQuestionJob(
         continue;
       }
 
-      persistenceStore.saveReleasePlan(createSourcePostReleasePlan({ posts: sourceImport.posts }), now);
+      persistenceStore.saveReleasePlan(createSourcePostReleasePlan({ posts: sourceImport.posts, generatedAt: now }), now);
       importedResults.push(sourceImport);
     } catch (error) {
       console.error("[aitimeline] research source import failed.", error);
@@ -2595,6 +2623,7 @@ async function handleResearchQuestionJob(
 
     return {
       kind: job.kind,
+      sourceImports: importedResults,
       discoveredSourceCandidates: remainingCandidates,
       message: "Research question imports all failed or were blocked by validation."
     };
@@ -2636,6 +2665,7 @@ async function handleResearchQuestionJob(
 
   return {
     kind: job.kind,
+    sourceImports: importedResults,
     discoveredSourceCandidates: remainingCandidates,
     message: `Research question answered with ${importedResults.length} imported sources.`
   };
@@ -2731,6 +2761,7 @@ async function handleResearchIdeaJob(
     return {
       kind: job.kind,
       ideaResearchQueries: queryGroups,
+      sourceImports: [...support.sourceImports, ...challenge.sourceImports],
       discoveredSourceCandidates: [...support.remainingCandidates, ...challenge.remainingCandidates],
       message: "Idea research produced no imported evidence."
     };
@@ -2760,6 +2791,7 @@ async function handleResearchIdeaJob(
   return {
     kind: job.kind,
     ideaResearchQueries: queryGroups,
+    sourceImports: [...support.sourceImports, ...challenge.sourceImports],
     discoveredSourceCandidates: [...support.remainingCandidates, ...challenge.remainingCandidates],
     message: `Idea research imported ${importedPosts.length} sources across both sides.`
   };
@@ -3061,7 +3093,7 @@ async function researchIdeaSide({
         continue;
       }
 
-      persistenceStore.saveReleasePlan(createSourcePostReleasePlan({ posts: sourceImport.posts }), now);
+      persistenceStore.saveReleasePlan(createSourcePostReleasePlan({ posts: sourceImport.posts, generatedAt: now }), now);
       importedResults.push(sourceImport);
     } catch (error) {
       console.error(`[aitimeline] ${side} idea source import failed.`, error);
@@ -3071,6 +3103,7 @@ async function researchIdeaSide({
 
   return {
     side,
+    sourceImports: importedResults,
     posts: importedResults.flatMap((result) => result.posts),
     remainingCandidates,
     errors
@@ -3330,6 +3363,10 @@ function toTrimmedStrings(value) {
     : [];
 }
 
+function cloneAnswerCitations(answer) {
+  return answer?.citations ? structuredClone(answer.citations) : [];
+}
+
 // A user note becomes a first-class post (self-grounded source) and the
 // observer replies against the existing library, metered as an agent turn.
 async function handleUserNote(body, userId, persistenceStore, client, searchProvider, contentLanguage) {
@@ -3377,7 +3414,10 @@ async function handleUserNote(body, userId, persistenceStore, client, searchProv
                 : replySourceTitle
                   ? `知识观察员 · 来源:${replySourceTitle}`
                   : "知识观察员",
-            body: replyBody
+            body: replyBody,
+            citations: cloneAnswerCitations(turn.answer),
+            grounded: turn.answer?.grounded ?? false,
+            ...(turn.answer?.runnerKind ? { runnerKind: turn.answer.runnerKind } : {})
           }
         ]
       : []
@@ -3488,7 +3528,9 @@ async function handleUserIdeaNote(body, userId, persistenceStore, client, conten
             id: `${note.post.id}-agent-reply-1`,
             kind: "agent_reply",
             title: contentLanguage === "en" ? "Knowledge Observer" : "知识观察员",
-            body: replyBody
+            body: replyBody,
+            citations: [],
+            grounded: false
           }
         ]
       : []
@@ -3562,14 +3604,14 @@ async function handlePostReply(postId, body, userId, persistenceStore, client, s
   const replyBody = turn.answer ? turn.answer.answer : turn.notes.join(" ");
   const replySourceTitle = turn.answer?.citations?.[0]?.sourceTitle;
   const commentBlock = {
-    id: `${post.id}-user-comment-${hashText(`${commentText}|${now}`)}`,
+    id: `${post.id}-user-comment-${randomUUID()}`,
     kind: "user_comment",
     title: contentLanguage === "en" ? "You" : "你",
     body: commentText
   };
   const replyBlock = replyBody
     ? {
-        id: `${post.id}-agent-reply-${hashText(`${replyBody}|${now}`)}`,
+        id: `${post.id}-agent-reply-${randomUUID()}`,
         kind: "agent_reply",
         title:
           contentLanguage === "en"
@@ -3579,15 +3621,18 @@ async function handlePostReply(postId, body, userId, persistenceStore, client, s
             : replySourceTitle
               ? `知识观察员 · 来源:${replySourceTitle}`
               : "知识观察员",
-        body: replyBody
+        body: replyBody,
+        citations: cloneAnswerCitations(turn.answer),
+        grounded: turn.answer?.grounded ?? false,
+        ...(turn.answer?.runnerKind ? { runnerKind: turn.answer.runnerKind } : {})
       }
     : null;
-  const updatedPost = {
-    ...post,
-    thread: [...post.thread, commentBlock, ...(replyBlock ? [replyBlock] : [])]
-  };
-
-  persistenceStore.savePosts([updatedPost], now);
+  const appendedSnapshot = persistenceStore.appendThreadBlocks(
+    postId,
+    [commentBlock, ...(replyBlock ? [replyBlock] : [])],
+    { expectedRevision: snapshot.revision, savedAt: now }
+  );
+  const appendedPost = appendedSnapshot.posts.find((candidate) => candidate.id === postId);
 
   const discoveredCandidates = await executeDiscoveryAction(
     turn,
@@ -3613,8 +3658,11 @@ async function handlePostReply(postId, body, userId, persistenceStore, client, s
     );
   }
 
+  const latestMemory = persistenceStore
+    .getSnapshot()
+    .userMemories.find((record) => record.userId === userId)?.memory;
   const memoryEditResult = applyUserMemoryEdits(
-    memory ?? createEmptyUserMemory(),
+    latestMemory ?? createEmptyUserMemory(),
     [
       {
         kind: "add",
@@ -3643,7 +3691,7 @@ async function handlePostReply(postId, body, userId, persistenceStore, client, s
   const finalSnapshot = persistenceStore.saveAgentTurnRecords([turnRecord], now);
 
   return {
-    post: updatedPost,
+    post: appendedPost,
     turn,
     turnRecord,
     discoveredCandidates,
@@ -3893,7 +3941,7 @@ function createLegacyReviewBackfillStates(snapshot, limit = 50) {
   const postById = new Map(snapshot.posts.map((post) => [post.id, post]));
   const reviewStates = [];
 
-  for (const record of filterHistoricalInteractionSignalRecords(snapshot.interactionSignals, "review backfill")) {
+  for (const record of snapshot.interactionSignals) {
     const signal = record.signal;
 
     if (reviewStates.length >= limit) {
@@ -5027,9 +5075,7 @@ function handleDeepReadRequest({ body, persistenceStore, curationStore, contentL
     };
   }
 
-  // Same-day retries need a distinct job id: enqueuePlan returns an existing
-  // record on id collision (including failed ones) without re-queueing it.
-  const failedAttempts = curationStore
+  const latestFailed = curationStore
     .list()
     .filter(
       (record) =>
@@ -5040,20 +5086,18 @@ function handleDeepReadRequest({ body, persistenceStore, curationStore, contentL
         [record.createdAt, record.updatedAt, record.completedAt].some(
           (value) => value && getDayKey(value) === date
         )
-    ).length;
-  const job = createDeepReadArticleJob({
-    topic,
-    goalId,
-    userId,
-    contentLanguage,
-    now: nowIso,
-    attempt: failedAttempts
-  });
-  const records = curationStore.enqueuePlan(createSingleJobPlan(job, nowIso), nowIso);
+    )
+    .sort((left, right) => right.attempt - left.attempt || right.updatedAt.localeCompare(left.updatedAt))[0];
+  const records = latestFailed
+    ? [curationStore.enqueueRetry(latestFailed.id, nowIso)]
+    : curationStore.enqueuePlan(
+        createSingleJobPlan(createDeepReadArticleJob({ topic, goalId, userId, contentLanguage, now: nowIso }), nowIso),
+        nowIso
+      );
   const nextSnapshot = persistenceStore.saveCurationJobRecords(records, nowIso);
 
   return {
-    queued: records.length > 0,
+    queued: records.some((record) => record.status === "queued"),
     records,
     snapshotSummary: summarizeSnapshot(nextSnapshot)
   };
@@ -5100,12 +5144,11 @@ async function handleDeepReadArticleJob(job, persistenceStore, modelClients, con
   };
 }
 
-function createDeepReadArticleJob({ topic, goalId, userId, contentLanguage, now, attempt = 0 }) {
+function createDeepReadArticleJob({ topic, goalId, userId, contentLanguage, now }) {
   const date = getDayKey(now);
-  const attemptSuffix = attempt > 0 ? `|retry-${attempt}` : "";
 
   return {
-    id: `deep-read-${hashText(`${userId}|${normalizeConceptKey(topic)}|${date}${attemptSuffix}`)}`,
+    id: `deep-read-${hashText(`${userId}|${normalizeConceptKey(topic)}|${date}`)}`,
     kind: "deep_read_article",
     topicId: topic,
     conceptIds: [topic],
@@ -5266,7 +5309,7 @@ function persistImportAndReleasePlan(persistenceStore, importResult, options = {
     now: savedAt,
     contentLanguage: options.contentLanguage
   });
-  const releasePlan = createSourcePostReleasePlan({ posts: importResult.posts });
+  const releasePlan = createSourcePostReleasePlan({ posts: importResult.posts, generatedAt: savedAt });
   snapshot = persistenceStore.saveReleasePlan(releasePlan, savedAt);
 
   return { snapshot, releasePlan };
@@ -5299,6 +5342,151 @@ function maybePersistConnectionNote(persistenceStore, options) {
   }
 
   return persistenceStore.savePosts([note], options.now);
+}
+
+export function ensureMaterializationPlan(curationStore, record, snapshot, contentLanguage) {
+  if (record.result?.materializationPlan) return record;
+  const effectAt = record.completedAt ?? record.updatedAt;
+  const sourceImports = record.result?.sourceImports ?? (record.result?.sourceImport ? [record.result.sourceImport] : []);
+  const preview = previewSourceImportApplications(snapshot, sourceImports, effectAt);
+  const releasePlans = preview.preparedResults
+    .filter((result) => result.posts.length > 0)
+    .map((result) => createSourcePostReleasePlan({ posts: result.posts, generatedAt: effectAt }));
+  const conceptAliases = createAutomaticConceptAliases(
+    preview.nextSnapshot.posts,
+    preview.nextSnapshot.conceptAliases,
+    effectAt
+  );
+  const connectionNote = preview.effectivePosts.length
+    ? createConnectionNoteForImport({
+        existingPosts: snapshot.posts,
+        newPosts: preview.effectivePosts,
+        interactionSignals: snapshot.interactionSignals.map((item) => item.signal),
+        dismissedPosts: snapshot.dismissedPosts,
+        conceptAliases: [...preview.nextSnapshot.conceptAliases, ...conceptAliases],
+        now: effectAt,
+        contentLanguage
+      })
+    : undefined;
+  const materializationPlan = {
+    version: 1,
+    effectAt,
+    sourceImports: preview.preparedResults,
+    discoveredSourceCandidates: record.result?.discoveredSourceCandidates ?? [],
+    releasePlans,
+    conceptBriefs: record.result?.conceptBrief ? [record.result.conceptBrief] : [],
+    deepReadArticles: record.result?.deepReadArticle ? [record.result.deepReadArticle] : [],
+    conceptAliases,
+    connectionNote,
+    notifications: [],
+    agentTurnPatches: []
+  };
+  return curationStore.updateTerminalResult(record.id, {
+    ...(record.result ?? { kind: record.job.kind }),
+    sourceImports: preview.preparedResults,
+    materializationPlan
+  });
+}
+
+export function materializeCurationJobRecords(
+  persistenceStore,
+  curationStore,
+  records,
+  { appliedAt, contentLanguage }
+) {
+  const plannedRecords = records.map((record) =>
+    ensureMaterializationPlan(curationStore, curationStore.get(record.id) ?? record, persistenceStore.getSnapshot(), contentLanguage)
+  );
+
+  for (const record of plannedRecords) {
+    const plan = record.result?.materializationPlan;
+    if (!plan) throw new Error(`Terminal curation record is missing a materialization plan: ${record.id}`);
+    const effectAt = plan.effectAt ?? record.completedAt ?? appliedAt;
+    for (const candidate of plan.discoveredSourceCandidates ?? []) {
+      persistDiscoveredCandidates(persistenceStore, [candidate], effectAt);
+    }
+    if (plan.sourceCandidateRecords?.length) {
+      persistenceStore.saveSourceCandidateRecords(plan.sourceCandidateRecords, effectAt);
+    }
+    for (const sourceImport of plan.sourceImports ?? []) {
+      persistenceStore.saveSourceImportResult(sourceImport, effectAt);
+    }
+    if (record.job.sourceCandidate && plan.sourceImports?.[0]) {
+      updateSourceCandidateAfterImport(
+        persistenceStore,
+        persistenceStore.getSnapshot(),
+        record.job.sourceCandidate.id,
+        plan.sourceImports[0],
+        effectAt
+      );
+    }
+    if (record.status === "failed" && record.job.kind === "import_source" && record.job.sourceCandidate) {
+      markSourceCandidateFailed(
+        persistenceStore,
+        persistenceStore.getSnapshot(),
+        record.job.sourceCandidate.id,
+        effectAt,
+        record.lastError
+      );
+    }
+    for (const releasePlan of plan.releasePlans ?? []) persistenceStore.saveReleasePlan(releasePlan, effectAt);
+    if (plan.conceptBriefs?.length) persistenceStore.saveConceptBriefs(plan.conceptBriefs, effectAt);
+    if (plan.deepReadArticles?.length) persistenceStore.saveDeepReadArticles(plan.deepReadArticles, effectAt);
+    if (plan.conceptAliases?.length) {
+      const snapshot = persistenceStore.getSnapshot();
+      persistenceStore.saveConceptAliases([...snapshot.conceptAliases, ...plan.conceptAliases], effectAt);
+    }
+    if (plan.connectionNote) persistenceStore.savePosts([plan.connectionNote], effectAt);
+    if (plan.extraPosts?.length) persistenceStore.savePosts(plan.extraPosts, effectAt);
+    if (plan.notifications?.length) persistenceStore.saveNotifications(plan.notifications, effectAt);
+    if (plan.agentTurnRecords?.length) persistenceStore.saveAgentTurnRecords(plan.agentTurnRecords, effectAt);
+    for (const turnPatch of plan.agentTurnPatches ?? []) {
+      updateAgentTurn(persistenceStore, turnPatch.id, turnPatch.patch, effectAt);
+    }
+  }
+
+  const marked = curationStore.markMaterialized(
+    plannedRecords.map((record) => record.id),
+    appliedAt
+  );
+  persistenceStore.replaceCurationJobRecords(curationStore.list(), appliedAt);
+  return marked;
+}
+
+function reconcileAndMaterializeCurationQueue(persistenceStore, curationStore, contentLanguage) {
+  const startupAt = new Date().toISOString();
+  persistenceStore.replaceCurationJobRecords(curationStore.list(), startupAt);
+  const pending = curationStore.list().filter(
+    (record) => ["succeeded", "failed", "skipped"].includes(record.status) && !record.materializedAt
+  );
+  const replayable = [];
+  const alreadyApplied = [];
+  const snapshot = persistenceStore.getSnapshot();
+  for (const record of pending) {
+    if (record.result?.materializationPlan || record.result?.sourceImport || record.result?.sourceImports?.length) {
+      replayable.push(record);
+      continue;
+    }
+    if (record.job.kind === "research_question" || record.job.kind === "research_idea") {
+      const turnId = record.job.researchQuestion?.turnId ?? record.job.researchIdea?.turnId;
+      const hasEvidence = snapshot.notifications.some((notification) => notification.turnId === turnId) &&
+        snapshot.agentTurns.some((turn) => turn.id === turnId && turn.status !== "researching");
+      if (!hasEvidence) {
+        console.warn(`[aitimeline] legacy research job ${record.id} has no replayable manifest; compensation retry is required.`);
+        continue;
+      }
+    }
+    alreadyApplied.push(record.id);
+  }
+  if (alreadyApplied.length) curationStore.markMaterialized(alreadyApplied, startupAt);
+  if (replayable.length) {
+    materializeCurationJobRecords(persistenceStore, curationStore, replayable, {
+      appliedAt: startupAt,
+      contentLanguage
+    });
+  } else {
+    persistenceStore.replaceCurationJobRecords(curationStore.list(), startupAt);
+  }
 }
 
 export function normalizeFollowupDedupeTitle(title) {
@@ -5395,7 +5583,8 @@ function sanitizePostForResponse(post) {
 }
 
 function sanitizeCurationRecordForResponse(record, logCause = true) {
-  const sanitizedRecord = sanitizeFailedCurationRecord(record, logCause);
+  const { workerId: _workerId, ...publicRecord } = record;
+  const sanitizedRecord = sanitizeFailedCurationRecord(publicRecord, logCause);
 
   if (!sanitizedRecord.result?.sourceImport) {
     return sanitizedRecord;
@@ -5647,10 +5836,6 @@ async function ingestSourceCandidateForBackground(candidate) {
 }
 
 function getTimelineResponse(snapshot, nowValue, userId = "local-user", contentLanguage = "zh", curationStore) {
-  snapshot = {
-    ...snapshot,
-    interactionSignals: filterHistoricalInteractionSignalRecords(snapshot.interactionSignals, "timeline")
-  };
   const now = nowValue ? new Date(nowValue) : new Date();
   const releasePlans = snapshot.releasePlans;
   const releaseItems = releasePlans.flatMap((plan) => plan.items);
@@ -6284,38 +6469,149 @@ function hashText(value) {
   return hash.toString(16);
 }
 
-function createStoreWithRecovery(createStore, filePath) {
-  try {
-    return createStore();
-  } catch (error) {
-    if (!existsSync(filePath)) {
-      throw error;
+export function createFileStorageAdapter(filePath, { ownerId, backupCount = 3 }) {
+  if (!ownerId) throw new Error("File storage adapter requires ownerId.");
+  const targetPath = resolve(filePath);
+  const lockPath = `${targetPath}.lock`;
+  const localHostname = hostname();
+  const processStartedAt = new Date(Date.now() - process.uptime() * 1000).toISOString();
+  const lockOwner = {
+    format: 1,
+    targetPath,
+    pid: process.pid,
+    hostname: localHostname,
+    ownerId,
+    processStartedAt,
+    acquiredAt: new Date().toISOString()
+  };
+  let closed = false;
+  let counter = 0;
+  mkdirSync(dirname(targetPath), { recursive: true });
+  acquireWriterLock(lockPath, lockOwner);
+
+  const adapter = {
+    read() {
+      return existsSync(targetPath) ? readFileSync(targetPath, "utf8") : "";
+    },
+    compareAndSwap(expectedRevision, serialized) {
+      if (closed) throw new Error(`Storage adapter is closed: ${targetPath}`);
+      const tempPath = `${targetPath}.tmp-${process.pid}-${ownerId}-${++counter}`;
+      try {
+        writeAndSyncFile(tempPath, `${serialized}\n`);
+        const current = adapter.read();
+        const actualRevision = readSerializedRevision(current);
+        if (actualRevision !== expectedRevision) return false;
+        if (current) createRollingBackup(targetPath, current, backupCount, ownerId, ++counter);
+        renameSync(tempPath, targetPath);
+        fsyncDirectory(dirname(targetPath));
+        return true;
+      } finally {
+        if (existsSync(tempPath)) unlinkSync(tempPath);
+      }
+    },
+    close() {
+      if (closed) return;
+      closed = true;
+      try {
+        const current = JSON.parse(readFileSync(lockPath, "utf8"));
+        if (current.ownerId === ownerId && current.targetPath === targetPath) unlinkSync(lockPath);
+      } catch (error) {
+        if (existsSync(lockPath) && error?.code !== "ENOENT") throw error;
+      }
+    }
+  };
+  return adapter;
+}
+
+function acquireWriterLock(lockPath, owner) {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      const fd = openSync(lockPath, "wx");
+      try {
+        writeSync(fd, `${JSON.stringify(owner)}\n`);
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
+      fsyncDirectory(dirname(lockPath));
+      return;
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
     }
 
-    const backupPath = `${filePath}.corrupt-${Date.now()}`;
-    renameSync(filePath, backupPath);
-    console.warn(
-      `[aitimeline] data file was invalid; moved it to ${backupPath} and starting fresh (${
-        error instanceof Error ? error.message : "unknown error"
-      }).`
-    );
+    let existing;
+    try {
+      existing = JSON.parse(readFileSync(lockPath, "utf8"));
+    } catch {
+      throw writerLockError(lockPath, "malformed lock; manual cleanup required");
+    }
+    if (!existing || existing.format !== 1 || typeof existing.pid !== "number" || typeof existing.hostname !== "string" || typeof existing.ownerId !== "string" || typeof existing.targetPath !== "string") {
+      throw writerLockError(lockPath, "malformed lock; manual cleanup required");
+    }
+    if (existing.hostname !== owner.hostname) {
+      throw writerLockError(lockPath, `lock belongs to foreign host ${existing.hostname}; manual verification required`);
+    }
+    try {
+      process.kill(existing.pid, 0);
+      throw writerLockError(lockPath, `live writer pid ${existing.pid} (${existing.ownerId})`);
+    } catch (error) {
+      if (error?.code === "EPERM") throw writerLockError(lockPath, `live writer pid ${existing.pid} cannot be probed`);
+      if (error?.code !== "ESRCH") throw error;
+    }
 
-    return createStore();
+    const reapPath = `${lockPath}.reap-${process.pid}-${owner.ownerId}-${attempt}`;
+    try {
+      linkSync(lockPath, reapPath);
+      const currentStat = lstatSync(lockPath);
+      const reapStat = lstatSync(reapPath);
+      if (currentStat.dev !== reapStat.dev || currentStat.ino !== reapStat.ino) {
+        throw writerLockError(lockPath, "lock changed during stale-owner recovery");
+      }
+      unlinkSync(lockPath);
+    } finally {
+      if (existsSync(reapPath)) unlinkSync(reapPath);
+    }
+  }
+  throw writerLockError(lockPath, "could not acquire lock after stale-owner recovery");
+}
+
+function writerLockError(lockPath, detail) {
+  const error = new Error(`Writer lock rejected for ${lockPath}: ${detail}`);
+  error.code = "AITIMELINE_WRITER_LOCKED";
+  return error;
+}
+
+function createRollingBackup(targetPath, current, backupCount, ownerId, counter) {
+  const backupTemp = `${targetPath}.bak.tmp-${process.pid}-${ownerId}-${counter}`;
+  try {
+    writeAndSyncFile(backupTemp, current.endsWith("\n") ? current : `${current}\n`);
+    for (let index = backupCount; index >= 2; index -= 1) {
+      const older = `${targetPath}.bak.${index - 1}`;
+      const destination = `${targetPath}.bak.${index}`;
+      if (existsSync(destination)) unlinkSync(destination);
+      if (existsSync(older)) renameSync(older, destination);
+    }
+    if (existsSync(`${targetPath}.bak.1`)) unlinkSync(`${targetPath}.bak.1`);
+    renameSync(backupTemp, `${targetPath}.bak.1`);
+    fsyncDirectory(dirname(targetPath));
+  } finally {
+    if (existsSync(backupTemp)) unlinkSync(backupTemp);
   }
 }
 
-function createFileStorageAdapter(filePath) {
-  return {
-    read() {
-      return existsSync(filePath) ? readFileSync(filePath, "utf8") : "";
-    },
-    write(serialized) {
-      mkdirSync(dirname(filePath), { recursive: true });
-      const tempPath = `${filePath}.tmp`;
-      writeFileSync(tempPath, `${serialized}\n`, "utf8");
-      renameSync(tempPath, filePath);
-    }
-  };
+function writeAndSyncFile(path, contents) {
+  const fd = openSync(path, "wx");
+  try {
+    writeSync(fd, contents);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function fsyncDirectory(path) {
+  const fd = openSync(path, "r");
+  try { fsyncSync(fd); } finally { closeSync(fd); }
 }
 
 class HttpError extends Error {
@@ -6639,30 +6935,6 @@ function normalizeStringArray(value) {
     : [];
 }
 
-function filterHistoricalInteractionSignalRecords(records, context) {
-  return records.filter((record) => {
-    const signal = record?.signal;
-    const createdAt = signal?.createdAt ?? record?.createdAt;
-
-    try {
-      if (typeof signal !== "object" || signal === null || !createdAt) {
-        throw new RangeError("Historical interaction signal is incomplete.");
-      }
-
-      normalizeIsoDate(createdAt);
-      return true;
-    } catch (error) {
-      const recordId = typeof record?.id === "string" ? record.id : "unknown";
-      const postId = typeof signal?.postId === "string" ? signal.postId : "unknown";
-      console.warn(
-        `[aitimeline] skipped invalid historical interaction signal during ${context} (record=${recordId}, post=${postId}).`,
-        error
-      );
-      return false;
-    }
-  });
-}
-
 function normalizeIsoDate(value) {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 }
@@ -6876,6 +7148,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const host = process.env.AITIMELINE_HOST ?? "127.0.0.1";
   const server = createApiServer();
   const address = await listen(server, port, host);
+  let shuttingDown = false;
+  const shutdown = () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    server.close(() => process.exit(0));
+  };
+  process.once("SIGINT", shutdown);
+  process.once("SIGTERM", shutdown);
 
   console.log(`AITimeline API listening on http://${address.address}:${address.port}`);
 }
