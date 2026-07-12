@@ -115,6 +115,12 @@ export function PostView({
   const reasonInfo = summarizeRecommendReason(card.recommendedBecause, primaryConcept);
   const source = card.sources[0];
   const isUserNote = source?.type === "user_note";
+  // Derived content (follow-ups, connection notes) cites synthetic local
+  // sources; the check badge is reserved for cards with real external grounding.
+  const isDerivedContent =
+    card.kind === "connection_note" ||
+    Boolean(source && (source.id.startsWith("followup-") || source.url.includes("aitimeline.local")));
+  const isSourceCertified = !isUserNote && !isDerivedContent && (card.citations?.length ?? 0) > 0;
   const topConnection = connections[0];
   const cardMedia = getCardMedia(card);
   const leadMedia = cardMedia[0];
@@ -290,6 +296,7 @@ export function PostView({
           <div className="x-post-main">
             <div className="x-head">
               <span className="x-name">{t("connection.title")}</span>
+              <span className="x-derived">{t("post.derived")}</span>
               <span className="x-meta">·</span>
               <span className="x-meta">{formatRelativeTime(card.createdAt)}</span>
             </div>
@@ -372,7 +379,10 @@ export function PostView({
         <div className="x-post-main">
           <div className="x-head">
             <span className="x-name">{isUserNote ? t("post.userNote") : getAgentName(primaryConcept)}</span>
-            {isUserNote ? null : <BadgeCheck aria-label={t("post.hasSource")} className="x-verified" size={17} />}
+            {isSourceCertified ? (
+              <BadgeCheck aria-label={t("post.hasSource")} className="x-verified" size={17} />
+            ) : null}
+            {isDerivedContent ? <span className="x-derived">{t("post.derived")}</span> : null}
             <span className="x-meta">@{isUserNote ? "you" : slugConcept(primaryConcept)}</span>
             <span className="x-meta">·</span>
             <span className="x-meta">{formatRelativeTime(card.createdAt)}</span>

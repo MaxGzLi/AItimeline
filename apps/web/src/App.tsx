@@ -12,7 +12,6 @@ import {
   rankKnowledgeCards,
   resolveConcept,
   slugConcept as slugCanonicalConcept,
-  transformMockYouTubeUrl,
   type Backlink,
   type CardConnection,
   type ConceptAliasRecord,
@@ -496,12 +495,26 @@ export function App() {
   );
 
   const rankedImportedCards = useMemo(() => ensureRankedCards(importedCards), [importedCards]);
+  // Explicit fixture switch (build env or ?demo): the only way demo content renders.
+  const demoModeEnabled = useMemo(
+    () =>
+      import.meta.env.VITE_AITIMELINE_DEMO === "1" ||
+      new URLSearchParams(window.location.search).has("demo"),
+    []
+  );
+  const demoCardIdSet = useMemo(() => new Set(demoCards.map((card) => card.id)), []);
   const demoRankedCards = useMemo(() => rankKnowledgeCards(demoCards, demoProfile), []);
   const rankedCards = useMemo(() => {
-    const cards = rankedImportedCards.length > 0 ? rankedImportedCards : demoRankedCards;
+    // Demo cards only render behind an explicit fixture switch; a connected but
+    // empty library shows the real empty state instead of fake knowledge.
+    const cards = rankedImportedCards.length > 0
+      ? rankedImportedCards
+      : demoModeEnabled
+        ? demoRankedCards
+        : [];
     // Locally removed or reviewed cards leave the feed immediately.
     return locallyRemovedIds.size === 0 ? cards : cards.filter((card) => !locallyRemovedIds.has(card.id));
-  }, [demoRankedCards, locallyRemovedIds, rankedImportedCards]);
+  }, [demoModeEnabled, demoRankedCards, locallyRemovedIds, rankedImportedCards]);
   // "For you" keeps the personalized ranking; "Latest" re-sorts the same cards
   // newest-first by createdAt; "Saved" narrows to bookmarked cards.
   const displayedCards = useMemo(() => {
@@ -779,8 +792,8 @@ export function App() {
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
   const allSignals = useMemo(
-    () => [...demoSignals, ...importedSignals, ...interactionUserSignals],
-    [importedSignals, interactionUserSignals]
+    () => [...(demoModeEnabled ? demoSignals : []), ...importedSignals, ...interactionUserSignals],
+    [demoModeEnabled, importedSignals, interactionUserSignals]
   );
   const selectedCard = useMemo(
     () => (selectedCardId ? rankedCards.find((card) => card.id === selectedCardId) ?? null : null),
@@ -1124,6 +1137,9 @@ export function App() {
     impressionQueue.current.clear();
 
     for (const card of pending) {
+      // Demo fixtures never reach the API: their ids do not exist in the
+      // server snapshot and would pollute topic/curation state.
+      if (demoCardIdSet.has(card.id)) continue;
       // Impression analytics are best-effort and capped to one send per card.
       // Impressions must stay pure-exposure (dwellTimeMs 0) so the server keeps
       // treating them as exposure-only; dwell reaches the server via the
@@ -1278,6 +1294,7 @@ export function App() {
   }
 
   async function syncInteractionSignal(signal: InteractionSignal): Promise<void> {
+    if (demoCardIdSet.has(signal.postId)) return;
     const result = await apiRequest<{
       feedback?: LearningFeedback;
       topicState?: TopicState;
@@ -1403,23 +1420,9 @@ export function App() {
         recordInteraction(result.posts[0], { openedThread: true, dwellTimeMs: 9000 });
       }
     } catch (error) {
-      if (isYouTubeUrl(trimmedUrl)) {
-        const result = transformMockYouTubeUrl(trimmedUrl, new Date().toISOString(), language);
-
-        applyImportResult({
-          importRecord: result.importRecord,
-          assets: [result.asset],
-          chunks: result.chunks,
-          posts: result.cards
-        });
-        if (result.cards[0]) {
-          showDetail(result.cards[0].id);
-        }
-        setApiStatus("offline");
-        setApiMessage(t("import.localFallback"));
-      } else {
-        setImportError(error instanceof Error ? error.message : t("import.error.failed"));
-      }
+      // No mock fallback on the production path: a failed import must say so
+      // instead of fabricating an ungrounded card from canned transcript text.
+      setImportError(error instanceof Error ? error.message : t("import.error.failed"));
     } finally {
       setIsImporting(false);
     }
