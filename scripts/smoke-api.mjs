@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { hostname } from "node:os";
 import { join } from "node:path";
 
 import { createApiServer } from "../apps/api/src/server.mjs";
@@ -36,7 +37,7 @@ const fakeSearchProvider = {
     ];
   }
 };
-const server = createApiServer({
+let server = createApiServer({
   dataPath,
   curationDataPath,
   mediaRootDir,
@@ -131,7 +132,8 @@ try {
     "old snapshots should expose deepReadArticles as an empty compatible field"
   );
 
-  const settingsReloadedServer = createApiServer({
+  await closeServer(server);
+  server = createApiServer({
     dataPath,
     curationDataPath,
     mediaRootDir,
@@ -139,20 +141,16 @@ try {
     searchProvider: fakeSearchProvider
   });
 
-  try {
-    const settingsReloadedResponse = await dispatchToServer(settingsReloadedServer, `${baseUrl}/api/settings`);
-    const settingsReloaded = await settingsReloadedResponse.json();
+  const settingsReloadedResponse = await dispatchToServer(server, `${baseUrl}/api/settings`);
+  const settingsReloaded = await settingsReloadedResponse.json();
 
-    assert.equal(settingsReloadedResponse.ok, true, "reloaded API server should read settings");
-    assert.equal(settingsReloaded.contentLanguage, "en", "settings should survive server recreation");
-    assert.equal(
-      settingsReloaded.userSettings.contentLanguage,
-      "en",
-      "reloaded settings should expose persisted user language"
-    );
-  } finally {
-    await closeServer(settingsReloadedServer);
-  }
+  assert.equal(settingsReloadedResponse.ok, true, "reloaded API server should read settings");
+  assert.equal(settingsReloaded.contentLanguage, "en", "settings should survive server recreation");
+  assert.equal(
+    settingsReloaded.userSettings.contentLanguage,
+    "en",
+    "reloaded settings should expose persisted user language"
+  );
 
   const resetSettings = await requestJson("/api/settings", {
     method: "POST",
@@ -160,6 +158,137 @@ try {
   });
 
   assert.equal(resetSettings.contentLanguage, "zh", "settings API should reset back to Chinese mode");
+
+  const lockDataPath = join(tempDir, "writer-lock-main.json");
+  const lockQueuePath = join(tempDir, "writer-lock-queue.json");
+  const lockServerA = createApiServer({ dataPath: lockDataPath, curationDataPath: lockQueuePath, mediaRootDir });
+  assert.throws(
+    () => createApiServer({ dataPath: lockDataPath, curationDataPath: lockQueuePath, mediaRootDir }),
+    /Writer lock rejected.*live writer/,
+    "a second server must be rejected while the first server owns both snapshot locks"
+  );
+  await closeServer(lockServerA);
+  const lockServerC = createApiServer({ dataPath: lockDataPath, curationDataPath: lockQueuePath, mediaRootDir });
+  await closeServer(lockServerC);
+
+  const partialMainPath = join(tempDir, "partial-init-main.json");
+  const partialQueuePath = join(tempDir, "partial-init-queue.json");
+  const queueBlocker = createApiServer({
+    dataPath: join(tempDir, "partial-blocker-main.json"),
+    curationDataPath: partialQueuePath,
+    mediaRootDir
+  });
+  assert.throws(
+    () => createApiServer({ dataPath: partialMainPath, curationDataPath: partialQueuePath, mediaRootDir }),
+    /Writer lock rejected/,
+    "queue lock failure should reject partial initialization"
+  );
+  const partialCleanupProbe = createApiServer({
+    dataPath: partialMainPath,
+    curationDataPath: join(tempDir, "partial-cleanup-probe-queue.json"),
+    mediaRootDir
+  });
+  await closeServer(partialCleanupProbe);
+  await closeServer(queueBlocker);
+
+  const staleDataPath = join(tempDir, "stale-lock-main.json");
+  const staleQueuePath = join(tempDir, "stale-lock-queue.json");
+  await writeFile(`${staleDataPath}.lock`, JSON.stringify({
+    format: 1,
+    targetPath: staleDataPath,
+    pid: 999999,
+    hostname: hostname(),
+    ownerId: "dead-owner",
+    processStartedAt: "2026-01-01T00:00:00.000Z",
+    acquiredAt: "2026-01-01T00:00:00.000Z"
+  }));
+  const staleRecoveredServer = createApiServer({ dataPath: staleDataPath, curationDataPath: staleQueuePath, mediaRootDir });
+  await closeServer(staleRecoveredServer);
+
+  for (const [name, lockBody, expected] of [
+    ["live", { format: 1, targetPath: join(tempDir, "live-lock-main.json"), pid: process.pid, hostname: hostname(), ownerId: "live-owner", processStartedAt: "2026-01-01T00:00:00.000Z", acquiredAt: "2026-01-01T00:00:00.000Z" }, /live writer/],
+    ["foreign", { format: 1, targetPath: join(tempDir, "foreign-lock-main.json"), pid: 999999, hostname: "foreign-host", ownerId: "foreign-owner", processStartedAt: "2026-01-01T00:00:00.000Z", acquiredAt: "2026-01-01T00:00:00.000Z" }, /foreign host/]
+  ]) {
+    const lockedPath = lockBody.targetPath;
+    await writeFile(`${lockedPath}.lock`, JSON.stringify(lockBody));
+    assert.throws(
+      () => createApiServer({ dataPath: lockedPath, curationDataPath: join(tempDir, `${name}-lock-queue.json`), mediaRootDir }),
+      expected,
+      `${name} writer locks should fail closed`
+    );
+  }
+  const malformedLockPath = join(tempDir, "malformed-lock-main.json");
+  await writeFile(`${malformedLockPath}.lock`, "not-json");
+  assert.throws(
+    () => createApiServer({ dataPath: malformedLockPath, curationDataPath: join(tempDir, "malformed-lock-queue.json"), mediaRootDir }),
+    /malformed lock/,
+    "malformed writer locks should fail closed"
+  );
+
+  const backupDataPath = join(tempDir, "rolling-backup-main.json");
+  const backupQueuePath = join(tempDir, "rolling-backup-queue.json");
+  const backupServer = createApiServer({ dataPath: backupDataPath, curationDataPath: backupQueuePath, mediaRootDir });
+  await requestJsonFromServer(backupServer, "/api/settings", { method: "POST", body: { contentLanguage: "en" } });
+  await requestJsonFromServer(backupServer, "/api/settings", { method: "POST", body: { contentLanguage: "zh" } });
+  await closeServer(backupServer);
+  const backupCurrent = JSON.parse(await readFile(backupDataPath, "utf8"));
+  const backupPrevious = JSON.parse(await readFile(`${backupDataPath}.bak.1`, "utf8"));
+  assert.equal(backupPrevious.revision, backupCurrent.revision - 1, "rolling backup should be exactly one revision behind current");
+  assert.equal(
+    (await readdir(tempDir)).some((name) => name.startsWith("rolling-backup-main.json.tmp-")),
+    false,
+    "successful commits must not leave process temp files"
+  );
+
+  for (const [name, invalidSnapshot, expected] of [
+    ["bad-post-container", { version: 1, updatedAt: "2026-07-10T00:00:00.000Z", posts: {} }, /\$\.posts: expected an array/],
+    ["bad-settings", { version: 1, updatedAt: "2026-07-10T00:00:00.000Z", userSettings: "bad" }, /\$\.userSettings: expected an object/],
+    ["unknown-version", { version: 99, updatedAt: "2026-07-10T00:00:00.000Z" }, /supported snapshot version/]
+  ]) {
+    const invalidPath = join(tempDir, `${name}.json`);
+    const invalidQueuePath = join(tempDir, `${name}-queue.json`);
+    const serialized = JSON.stringify(invalidSnapshot);
+    await writeFile(invalidPath, serialized);
+    assert.throws(() => createApiServer({ dataPath: invalidPath, curationDataPath: invalidQueuePath, mediaRootDir }), expected);
+    assert.equal(await readFile(invalidPath, "utf8"), serialized, `${name} startup failure must leave the primary untouched`);
+  }
+
+  const fixtureRoundTripDataPath = join(tempDir, "w4e-fixture-main.json");
+  const fixtureRoundTripQueuePath = join(tempDir, "w4e-fixture-queue.json");
+  await writeFile(
+    fixtureRoundTripDataPath,
+    await readFile(new URL("./fixtures/w4e/aitimeline-v1.json", import.meta.url), "utf8")
+  );
+  await writeFile(
+    fixtureRoundTripQueuePath,
+    await readFile(new URL("./fixtures/w4e/curation-jobs-v1.json", import.meta.url), "utf8")
+  );
+  let fixtureRoundTripServer = createApiServer({
+    dataPath: fixtureRoundTripDataPath,
+    curationDataPath: fixtureRoundTripQueuePath,
+    mediaRootDir
+  });
+  await closeServer(fixtureRoundTripServer);
+  const firstCanonicalMain = JSON.parse(await readFile(fixtureRoundTripDataPath, "utf8"));
+  const firstCanonicalQueue = JSON.parse(await readFile(fixtureRoundTripQueuePath, "utf8"));
+  assert.equal(firstCanonicalMain.version, 2, "API startup should migrate the production-shape main fixture to v2");
+  assert.equal(firstCanonicalQueue.version, 2, "API startup should migrate the production-shape queue fixture to v2");
+  fixtureRoundTripServer = createApiServer({
+    dataPath: fixtureRoundTripDataPath,
+    curationDataPath: fixtureRoundTripQueuePath,
+    mediaRootDir
+  });
+  await closeServer(fixtureRoundTripServer);
+  assert.deepEqual(
+    JSON.parse(await readFile(fixtureRoundTripDataPath, "utf8")),
+    firstCanonicalMain,
+    "a second API startup should not rewrite or semantically change the canonical main fixture"
+  );
+  assert.deepEqual(
+    JSON.parse(await readFile(fixtureRoundTripQueuePath, "utf8")),
+    firstCanonicalQueue,
+    "a second API startup should not rewrite or semantically change the canonical queue fixture"
+  );
 
   const backfillDataPath = join(tempDir, "review-backfill.json");
   const backfillCurationPath = join(tempDir, "review-backfill-curation.json");
@@ -259,29 +388,28 @@ try {
     })
   );
 
-  const invalidHistoricalSignalServer = createApiServer({
-    dataPath: invalidHistoricalSignalDataPath,
-    curationDataPath: invalidHistoricalSignalCurationPath,
-    mediaRootDir,
-    enableFixtures: true,
-    searchProvider: fakeSearchProvider
-  });
+  const originalConsoleWarn = console.warn;
+  const historicalSignalWarnings = [];
+  let invalidHistoricalSignalServer;
+
+  console.warn = (...args) => historicalSignalWarnings.push(args);
+  try {
+    invalidHistoricalSignalServer = createApiServer({
+      dataPath: invalidHistoricalSignalDataPath,
+      curationDataPath: invalidHistoricalSignalCurationPath,
+      mediaRootDir,
+      enableFixtures: true,
+      searchProvider: fakeSearchProvider
+    });
+  } finally {
+    console.warn = originalConsoleWarn;
+  }
 
   try {
-    const originalConsoleWarn = console.warn;
-    const historicalSignalWarnings = [];
-    let historicalTimelineResponse;
-
-    console.warn = (...args) => historicalSignalWarnings.push(args);
-
-    try {
-      historicalTimelineResponse = await dispatchToServer(
-        invalidHistoricalSignalServer,
-        `${baseUrl}/api/timeline?now=2026-06-10T00:00:00.000Z`
-      );
-    } finally {
-      console.warn = originalConsoleWarn;
-    }
+    const historicalTimelineResponse = await dispatchToServer(
+      invalidHistoricalSignalServer,
+      `${baseUrl}/api/timeline?now=2026-06-10T00:00:00.000Z`
+    );
 
     const historicalTimeline = await historicalTimelineResponse.json();
 
@@ -291,8 +419,13 @@ try {
       "timeline should keep serving posts after isolating a bad historical signal"
     );
     assert.ok(
-      historicalSignalWarnings.some((args) => String(args[0]).includes("skipped invalid historical interaction signal")),
-      "isolated historical signals should be recorded in the server log"
+      historicalSignalWarnings.some(
+        (args) =>
+          String(args[0]).includes("persistence load issue") &&
+          args[1]?.recordId === "signal-historical-signal-post-not-a-date" &&
+          args[1]?.jsonPath === "$.interactionSignals[0].signal.createdAt"
+      ),
+      "isolated historical signals should be reported during store construction with record id and path"
     );
   } finally {
     await closeServer(invalidHistoricalSignalServer);
@@ -3480,7 +3613,8 @@ try {
     "soft dismissed posts should return to the timeline after 30 days"
   );
 
-  const reloadedServer = createApiServer({
+  await closeServer(server);
+  server = createApiServer({
     dataPath,
     curationDataPath,
     mediaRootDir,
@@ -3488,22 +3622,18 @@ try {
     searchProvider: fakeSearchProvider
   });
 
-  try {
-    const reloadedResponse = await dispatchToServer(
-      reloadedServer,
-      `${baseUrl}/api/timeline?now=2026-06-10T00:00:00.000Z`
-    );
-    const reloadedTimeline = await reloadedResponse.json();
+  const reloadedResponse = await dispatchToServer(
+    server,
+    `${baseUrl}/api/timeline?now=2026-06-10T00:00:00.000Z`
+  );
+  const reloadedTimeline = await reloadedResponse.json();
 
-    assert.equal(reloadedResponse.ok, true, "reloaded API server should read the persisted snapshot");
-    assert.equal(
-      reloadedTimeline.posts.some((post) => post.id === dismissedPost.id),
-      false,
-      "dismissed posts should stay dismissed after recreating the store"
-    );
-  } finally {
-    await closeServer(reloadedServer);
-  }
+  assert.equal(reloadedResponse.ok, true, "reloaded API server should read the persisted snapshot");
+  assert.equal(
+    reloadedTimeline.posts.some((post) => post.id === dismissedPost.id),
+    false,
+    "dismissed posts should stay dismissed after recreating the store"
+  );
 
   const legacyDataPath = join(tempDir, "legacy-dismissed.json");
   const legacyCurationPath = join(tempDir, "legacy-curation-jobs.json");
@@ -4360,6 +4490,103 @@ try {
     "auto-imported research sources should record their origin question"
   );
 
+  const authoritativeQueue = JSON.parse(await readFile(curationDataPath, "utf8"));
+  const persistedResearchRecord = authoritativeQueue.records.find(
+    (record) => record.job.kind === "research_question" && record.job.researchQuestion?.turnId === agentDark.turnRecord.id
+  );
+  assert.ok(persistedResearchRecord.result?.materializationPlan, "research terminal must persist a replayable plan");
+  const crashPlan = persistedResearchRecord.result.materializationPlan;
+  const crashDataPath = join(tempDir, "research-terminal-before-apply.json");
+  const crashQueuePath = join(tempDir, "research-terminal-before-apply-queue.json");
+  const crashSnapshot = structuredClone(afterResearchSnapshot);
+  const crashImportIds = new Set(crashPlan.sourceImports.map((result) => result.importRecord.id));
+  const crashSourceIds = new Set(crashPlan.sourceImports.map((result) => result.importRecord.source.id));
+  const crashPostIds = new Set([
+    ...crashPlan.sourceImports.flatMap((result) => result.posts.map((post) => post.id)),
+    ...(crashPlan.extraPosts ?? []).map((post) => post.id)
+  ]);
+  crashSnapshot.sourceImports = crashSnapshot.sourceImports.filter((record) => !crashImportIds.has(record.id));
+  crashSnapshot.sourceRegistries = crashSnapshot.sourceRegistries.filter((record) => !crashSourceIds.has(record.sourceId));
+  crashSnapshot.posts = crashSnapshot.posts.filter((post) => !crashPostIds.has(post.id));
+  crashSnapshot.releasePlans = crashSnapshot.releasePlans.filter(
+    (plan) => !(crashPlan.releasePlans ?? []).some((candidate) => JSON.stringify(candidate) === JSON.stringify(plan))
+  );
+  crashSnapshot.notifications = crashSnapshot.notifications.filter(
+    (record) => !(crashPlan.notifications ?? []).some((candidate) => candidate.id === record.id)
+  );
+  crashSnapshot.sourceCandidates = crashSnapshot.sourceCandidates.filter(
+    (record) => !(crashPlan.sourceCandidateRecords ?? []).some((candidate) => candidate.id === record.id)
+  );
+  crashSnapshot.agentTurns = crashSnapshot.agentTurns.map((record) =>
+    record.id === agentDark.turnRecord.id ? { ...record, status: "researching", answerCardId: undefined } : record
+  );
+  const crashQueueRecord = structuredClone(persistedResearchRecord);
+  delete crashQueueRecord.materializedAt;
+  await writeFile(crashDataPath, JSON.stringify(crashSnapshot));
+  await writeFile(crashQueuePath, JSON.stringify({ version: 2, revision: 0, records: [crashQueueRecord] }));
+  let crashRecoveryServer = createApiServer({
+    dataPath: crashDataPath,
+    curationDataPath: crashQueuePath,
+    mediaRootDir,
+    enableFixtures: true,
+    searchProvider: fakeSearchProvider
+  });
+  const recoveredResearchSnapshot = await requestJsonFromServer(crashRecoveryServer, "/api/snapshot");
+  const recoveredResearchJobs = await requestJsonFromServer(crashRecoveryServer, "/api/curation/jobs");
+  const recoveredResearchRecord = recoveredResearchJobs.jobs.find((record) => record.id === crashQueueRecord.id);
+  assert.ok(recoveredResearchRecord.materializedAt, "startup should mark the replayed research terminal materialized");
+  assert.deepEqual(
+    recoveredResearchSnapshot.curationJobs,
+    recoveredResearchJobs.jobs,
+    "startup reconciliation should make the authoritative queue and main snapshot mirror exactly equal"
+  );
+  assert.ok(
+    crashPlan.sourceImports.every((result) => recoveredResearchSnapshot.sourceImports.some((record) => record.id === result.importRecord.id)),
+    "startup should replay all persisted research imports"
+  );
+  assert.ok(
+    crashPlan.notifications.every((notification) => recoveredResearchSnapshot.notifications.filter((record) => record.id === notification.id).length === 1),
+    "startup should replay each research notification exactly once"
+  );
+  assert.equal(
+    recoveredResearchSnapshot.agentTurns.find((record) => record.id === agentDark.turnRecord.id)?.status,
+    "answered",
+    "startup should replay the research agent-turn patch"
+  );
+  const recoveredCounts = {
+    imports: recoveredResearchSnapshot.sourceImports.length,
+    posts: recoveredResearchSnapshot.posts.length,
+    releases: recoveredResearchSnapshot.releasePlans.length,
+    notifications: recoveredResearchSnapshot.notifications.length
+  };
+  const recoveredMarker = recoveredResearchRecord.materializedAt;
+  await closeServer(crashRecoveryServer);
+  crashRecoveryServer = createApiServer({
+    dataPath: crashDataPath,
+    curationDataPath: crashQueuePath,
+    mediaRootDir,
+    enableFixtures: true,
+    searchProvider: fakeSearchProvider
+  });
+  const replayedAgainSnapshot = await requestJsonFromServer(crashRecoveryServer, "/api/snapshot");
+  const replayedAgainJobs = await requestJsonFromServer(crashRecoveryServer, "/api/curation/jobs");
+  assert.deepEqual(
+    {
+      imports: replayedAgainSnapshot.sourceImports.length,
+      posts: replayedAgainSnapshot.posts.length,
+      releases: replayedAgainSnapshot.releasePlans.length,
+      notifications: replayedAgainSnapshot.notifications.length
+    },
+    recoveredCounts,
+    "a second startup must not duplicate any research materialization effect"
+  );
+  assert.equal(
+    replayedAgainJobs.jobs.find((record) => record.id === crashQueueRecord.id)?.materializedAt,
+    recoveredMarker,
+    "a second startup must preserve the original materialization marker"
+  );
+  await closeServer(crashRecoveryServer);
+
   const notificationsResponse = await requestJson("/api/notifications");
   const notificationDetail = notificationsResponse.records.find((record) => record.id === answerNotification.id);
 
@@ -4407,6 +4634,13 @@ try {
   assert.ok(noteResult.post.citations.length > 0, "note posts should cite their own registry chunk");
   assert.equal(noteResult.turn.intent, "grounded_qa", "notes touching library concepts should get grounded replies");
   assert.ok(noteResult.turn.answer.citations.length > 0, "observer replies to notes should cite source chunks");
+  assert.deepEqual(
+    noteResult.post.thread[0].citations,
+    noteResult.turn.answer.citations,
+    "note observer blocks should persist the complete answer citations"
+  );
+  assert.equal(noteResult.post.thread[0].grounded, noteResult.turn.answer.grounded, "note grounded metadata should match the answer");
+  assert.equal(noteResult.post.thread[0].runnerKind, noteResult.turn.answer.runnerKind, "note runner metadata should match the answer");
   assert.equal(noteResult.snapshotSummary.agentTurns, 4, "note replies should be metered as agent turns");
 
   const noteTimeline = await requestJson("/api/timeline?now=2026-06-11T00:00:00.000Z");
@@ -4425,29 +4659,51 @@ try {
   );
 
   // --- Inline replies: commenting on a card appends a public in-post thread ---
-  const replyResult = await requestJson(`/api/posts/${encodeURIComponent(firstPost.id)}/replies`, {
+  const beforeReplyTimeline = await requestJson("/api/timeline?now=2026-06-11T00:00:00.000Z");
+  const beforeReplyPost = beforeReplyTimeline.posts.find((post) => post.id === firstPost.id);
+  const replyRequest = {
     method: "POST",
     body: {
       text: `How does ${firstTopic} keep its citations grounded?`,
       createdAt: "2026-06-10T03:00:00.000Z"
     }
+  };
+  const replyResults = await Promise.all([
+    requestJson(`/api/posts/${encodeURIComponent(firstPost.id)}/replies`, replyRequest),
+    requestJson(`/api/posts/${encodeURIComponent(firstPost.id)}/replies`, replyRequest)
+  ]);
+
+  for (const replyResult of replyResults) {
+    const persistedAgentBlock = replyResult.post.thread.at(-1);
+    assert.equal(replyResult.turn.intent, "grounded_qa", "replies target the card and answer grounded");
+    assert.ok(replyResult.turn.answer.citations.length > 0, "observer replies to comments should cite source chunks");
+    assert.equal(persistedAgentBlock.kind, "agent_reply", "each reply append should end with its observer block");
+    assert.deepEqual(persistedAgentBlock.citations, replyResult.turn.answer.citations, "persisted reply citations should match the answer exactly");
+    assert.equal(persistedAgentBlock.grounded, replyResult.turn.answer.grounded, "persisted reply grounded metadata should match");
+    assert.equal(persistedAgentBlock.runnerKind, replyResult.turn.answer.runnerKind, "persisted reply runner metadata should match");
+  }
+
+  await closeServer(server);
+  server = createApiServer({
+    dataPath,
+    curationDataPath,
+    mediaRootDir,
+    enableFixtures: true,
+    searchProvider: fakeSearchProvider
   });
-
-  const replyKinds = replyResult.post.thread.map((block) => block.kind);
-
-  assert.ok(replyKinds.includes("user_comment"), "a reply should append the user's comment block");
-  assert.ok(replyKinds.includes("agent_reply"), "a reply should append the observer's reply block");
-  assert.equal(replyResult.turn.intent, "grounded_qa", "replies target the card and answer grounded");
-  assert.ok(replyResult.turn.answer.citations.length > 0, "observer replies to comments should cite source chunks");
-  assert.equal(replyResult.snapshotSummary.agentTurns, 5, "comment replies should be metered as agent turns");
-
   const replyTimeline = await requestJson("/api/timeline?now=2026-06-11T00:00:00.000Z");
   const replyTimelinePost = replyTimeline.posts.find((post) => post.id === firstPost.id);
-  const persistedCommentBlocks = replyTimelinePost.thread.filter(
-    (block) => block.kind === "user_comment" || block.kind === "agent_reply"
-  );
+  const appendedReplyBlocks = replyTimelinePost.thread.slice(beforeReplyPost.thread.length);
 
-  assert.equal(persistedCommentBlocks.length, 2, "the comment and observer reply should persist on the card thread after reload");
+  assert.equal(appendedReplyBlocks.length, 4, "concurrent replies should survive a true server restart as four appended blocks");
+  assert.equal(appendedReplyBlocks.filter((block) => block.kind === "user_comment").length, 2, "both user comments should survive");
+  assert.equal(appendedReplyBlocks.filter((block) => block.kind === "agent_reply").length, 2, "both observer replies should survive");
+  assert.equal(new Set(appendedReplyBlocks.map((block) => block.id)).size, 4, "concurrent reply block ids must all be unique");
+  for (const block of appendedReplyBlocks.filter((candidate) => candidate.kind === "agent_reply")) {
+    assert.ok(block.citations[0]?.quote, "reloaded reply citations should retain quotes");
+    assert.equal(block.runnerKind, "deterministic", "reloaded replies should retain runner metadata");
+    assert.equal(block.grounded, true, "reloaded replies should retain grounded metadata");
+  }
 
   // --- Idea flow: kind=idea notes get library links, probes, testable research, and no card from probe answers ---
   const firstSourceTitle = firstPost.sources[0]?.title ?? firstPost.title;

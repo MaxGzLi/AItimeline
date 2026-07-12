@@ -1,0 +1,106 @@
+{
+  "version": 1,
+  "records": [
+    {
+      "id": "w4e-queued",
+      "job": {
+        "id": "w4e-queued",
+        "kind": "generate_followup",
+        "postId": "w4e-post-1",
+        "topicId": "persistence",
+        "conceptIds": ["Persistence"],
+        "nextAction": "continue_deeper",
+        "priority": 10,
+        "reason": "queued fixture",
+        "createdAt": "2026-07-03T11:20:00.000Z",
+        "runAfter": "2026-07-03T11:20:00.000Z"
+      },
+      "status": "queued",
+      "attempts": 0,
+      "createdAt": "2026-07-03T11:20:00.000Z",
+      "updatedAt": "2026-07-03T11:20:00.000Z"
+    },
+    {
+      "id": "w4e-running-crash",
+      "job": {
+        "id": "w4e-running-crash",
+        "kind": "concept_brief",
+        "topicId": "persistence",
+        "conceptIds": ["Persistence"],
+        "priority": 8,
+        "reason": "legacy running record without a lease",
+        "createdAt": "2026-07-03T11:20:00.000Z"
+      },
+      "status": "running",
+      "attempts": 1,
+      "createdAt": "2026-07-03T11:20:00.000Z",
+      "updatedAt": "2026-07-03T11:21:00.000Z",
+      "startedAt": "2026-07-03T11:21:00.000Z"
+    },
+    {
+      "id": "w4e-succeeded",
+      "job": {
+        "id": "w4e-succeeded",
+        "kind": "generate_followup",
+        "postId": "w4e-post-1",
+        "topicId": "persistence",
+        "conceptIds": ["CAS"],
+        "priority": 7,
+        "reason": "succeeded fixture",
+        "createdAt": "2026-07-03T11:20:00.000Z"
+      },
+      "status": "succeeded",
+      "attempts": 1,
+      "createdAt": "2026-07-03T11:20:00.000Z",
+      "updatedAt": "2026-07-03T11:22:00.000Z",
+      "startedAt": "2026-07-03T11:21:00.000Z",
+      "completedAt": "2026-07-03T11:22:00.000Z",
+      "result": {
+        "kind": "generate_followup",
+        "message": "fixture succeeded"
+      }
+    },
+    {
+      "id": "w4e-root|retry-2",
+      "job": {
+        "id": "w4e-root|retry-2",
+        "kind": "deep_read_article",
+        "topicId": "persistence",
+        "conceptIds": ["CAS"],
+        "priority": 6,
+        "reason": "explicit retry fixture",
+        "createdAt": "2026-07-03T11:20:00.000Z",
+        "deepReadArticle": { "userId": "fixture-user" }
+      },
+      "status": "failed",
+      "attempts": 1,
+      "createdAt": "2026-07-03T11:20:00.000Z",
+      "updatedAt": "2026-07-03T11:22:00.000Z",
+      "startedAt": "2026-07-03T11:21:00.000Z",
+      "completedAt": "2026-07-03T11:22:00.000Z",
+      "lastError": "fixture failure"
+    },
+    {
+      "id": "deep-read-opaque-fixture-hash",
+      "job": {
+        "id": "deep-read-opaque-fixture-hash",
+        "kind": "deep_read_article",
+        "topicId": "persistence",
+        "conceptIds": ["CAS"],
+        "priority": 5,
+        "reason": "opaque retry lineage fixture",
+        "createdAt": "2026-07-03T11:20:00.000Z",
+        "deepReadArticle": { "userId": "fixture-user" }
+      },
+      "status": "skipped",
+      "attempts": 0,
+      "createdAt": "2026-07-03T11:20:00.000Z",
+      "updatedAt": "2026-07-03T11:22:00.000Z",
+      "completedAt": "2026-07-03T11:22:00.000Z",
+      "result": {
+        "kind": "deep_read_article",
+        "message": "Skipped: fixture"
+      }
+    }
+  ]
+}

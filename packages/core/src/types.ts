@@ -195,6 +195,16 @@ export interface Citation {
   endTimeSeconds?: number;
 }
 
+export interface KnowledgeThreadCitation {
+  sourceId: string;
+  sourceTitle: string;
+  chunkId: string;
+  quote: string;
+  startTimeSeconds?: number;
+  endTimeSeconds?: number;
+  origin?: SourceOrigin;
+}
+
 export interface EvidenceSpan {
   sourceId: string;
   chunkId: string;
@@ -266,6 +276,25 @@ export interface KnowledgeThreadBlock {
   title: string;
   body: string;
   prompt?: string;
+  citations?: KnowledgeThreadCitation[];
+  grounded?: boolean;
+  runnerKind?: "model" | "deterministic";
+}
+
+export type AgentTurnStatus = "answered" | "pending_confirmation" | "researching" | "closed";
+
+export type AgentNotificationKind =
+  | "agent_answer"
+  | "research_progress"
+  | "mastery_promotion"
+  | "learning_goal_achieved"
+  | "supply_drought";
+
+export interface AgentNotificationCitation {
+  sourceId: string;
+  sourceTitle: string;
+  chunkId: string;
+  quote: string;
 }
 
 export interface KnowledgeGraphEdge {

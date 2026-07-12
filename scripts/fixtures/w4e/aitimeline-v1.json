@@ -1,0 +1,182 @@
+{
+  "version": 1,
+  "updatedAt": "2026-07-03T11:22:42.000Z",
+  "sourceImports": [
+    {
+      "id": "w4e-import-1",
+      "source": {
+        "id": "w4e-source-1",
+        "title": "W4-E legacy source",
+        "url": "https://example.com/w4e",
+        "type": "article",
+        "author": "Fixture Author",
+        "publishedAt": "2026-07-01T00:00:00.000Z"
+      },
+      "status": "ready",
+      "createdAt": "2026-07-03T11:20:00.000Z"
+    }
+  ],
+  "sourceRegistries": [
+    {
+      "id": "w4e-registry-record-1",
+      "sourceId": "w4e-source-1",
+      "registry": {
+        "sources": [
+          {
+            "id": "w4e-source-1",
+            "title": "W4-E legacy source",
+            "url": "https://example.com/w4e",
+            "type": "article",
+            "author": "Fixture Author",
+            "publishedAt": "2026-07-01T00:00:00.000Z"
+          }
+        ],
+        "assets": [],
+        "snapshots": [],
+        "chunks": [
+          {
+            "id": "w4e-chunk-1",
+            "sourceId": "w4e-source-1",
+            "content": "A stable legacy evidence chunk used for migration and round-trip verification.",
+            "conceptHints": ["Persistence", "CAS"]
+          }
+        ],
+        "chunkVersions": [
+          {
+            "id": "w4e-chunk-1-version-v1",
+            "chunkId": "w4e-chunk-1",
+            "sourceId": "w4e-source-1",
+            "version": 1,
+            "contentHash": "fixture-hash-001",
+            "contentLength": 77,
+            "createdAt": "2026-07-03T11:20:00.000Z",
+            "conceptHints": ["Persistence", "CAS"]
+          }
+        ]
+      },
+      "createdAt": "2026-07-03T11:20:00.000Z"
+    }
+  ],
+  "posts": [
+    {
+      "id": "w4e-post-1",
+      "title": "Legacy persistence card",
+      "hook": "A fixture should preserve every supported field.",
+      "thesis": "Revisioned storage must migrate legacy records without losing evidence.",
+      "shortBody": "This fixture represents a minimal production-shaped knowledge post.",
+      "summary": "A production-shaped v1 card for W4-E migration tests.",
+      "keyTakeaway": "Decode first, then commit canonically.",
+      "concepts": ["Persistence", "CAS"],
+      "sources": [
+        {
+          "id": "w4e-source-1",
+          "title": "W4-E legacy source",
+          "url": "https://example.com/w4e",
+          "type": "article"
+        }
+      ],
+      "citations": [
+        {
+          "sourceId": "w4e-source-1",
+          "chunkId": "w4e-chunk-1",
+          "url": "https://example.com/w4e"
+        }
+      ],
+      "recommendedBecause": "Migration compatibility is under test.",
+      "trustState": "supported",
+      "createdAt": "2026-07-03T11:20:00.000Z",
+      "estimatedReadMinutes": 2,
+      "difficulty": "intermediate",
+      "confidence": "high",
+      "thread": [
+        {
+          "id": "w4e-thread-explain-1",
+          "kind": "explain",
+          "title": "Legacy thread block",
+          "body": "This historical thread block intentionally omits citations, grounded and runnerKind so the v1 whitelist migration is exercised."
+        }
+      ],
+      "graphEdges": [],
+      "reviewPrompts": [
+        {
+          "id": "w4e-review-1",
+          "kind": "recall",
+          "prompt": "What protects an append from stale overwrite?",
+          "answerHint": "Revision CAS",
+          "dueInDays": 1
+        }
+      ],
+      "nextActions": ["schedule_review"],
+      "harnessVersion": "fixture-v1"
+    }
+  ],
+  "harnessRuns": [],
+  "validation": [],
+  "curationJobs": [],
+  "releasePlans": [],
+  "userMemories": [],
+  "memoryEvents": [],
+  "interactionSignals": [
+    {
+      "id": "w4e-signal-ledger-1",
+      "signal": {
+        "postId": "w4e-post-1",
+        "topicId": "persistence",
+        "conceptIds": ["Persistence"],
+        "dwellTimeMs": 12000,
+        "openedThread": true,
+        "liked": true,
+        "saved": false,
+        "askedQuestion": false,
+        "reviewed": false,
+        "skippedQuickly": false
+      },
+      "feedback": {
+        "postId": "w4e-post-1",
+        "topicId": "persistence",
+        "conceptIds": ["Persistence"],
+        "signalStrength": 1,
+        "inferredState": "interested",
+        "nextAction": "continue_deeper",
+        "reason": "fixture"
+      },
+      "createdAt": "2026-07-03T11:21:00.000Z",
+      "reviewEventId": "w4e-review-event-1",
+      "reviewGrade": "remembered",
+      "signalResult": {
+        "topicState": null,
+        "plan": {
+          "generatedAt": "2026-07-03T11:21:00.000Z",
+          "jobs": [],
+          "suppressions": [],
+          "acceptedSourceCandidateIds": [],
+          "cooledTopicIds": [],
+          "expansionPlan": {
+            "generatedAt": "2026-07-03T11:21:00.000Z",
+            "jobs": [],
+            "suppressions": [],
+            "cooledTopicIds": []
+          }
+        },
+        "records": []
+      }
+    }
+  ],
+  "topicStates": [],
+  "dismissedPosts": [],
+  "reviewStates": [],
+  "sourceCandidates": [],
+  "agentTurns": [],
+  "notifications": [],
+  "userSettings": { "contentLanguage": "zh" },
+  "conceptAliases": [],
+  "conceptMergeSuggestions": [],
+  "sourceQualityVerdicts": [],
+  "mergedSources": [],
+  "autoJobBudget": [],
+  "conceptBriefs": [],
+  "deepReadArticles": [],
+  "weeklyRecaps": [],
+  "subscriptions": [],
+  "learningGoals": []
+}

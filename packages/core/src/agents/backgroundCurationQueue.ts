@@ -17,6 +17,28 @@ import type {
   SourceQualityVerdict,
   SourceRegistry
 } from "../types.js";
+import { normalizeConceptKey } from "../graph/conceptAliases.js";
+import { getDayKey } from "../time/calendarKeys.js";
+import {
+  decodeJson,
+  decodeRecordCollection,
+  deepClone,
+  expectArray,
+  expectEnum,
+  expectFiniteNumber,
+  expectIsoDate,
+  expectNonEmptyString,
+  expectNonNegativeInteger,
+  expectObject,
+  expectString,
+  PersistenceDecodeError,
+  type PersistenceLoadIssue
+} from "../storage/runtimeDecoder.js";
+import {
+  commitWithRetry,
+  createMemoryRevisionedStorageAdapter,
+  type RevisionedStorageAdapter
+} from "../storage/revisionedStorage.js";
 
 export type BackgroundCurationJobStatus = "queued" | "running" | "succeeded" | "failed" | "skipped";
 
@@ -24,6 +46,8 @@ export interface BackgroundCurationJobResult {
   kind: BackgroundCurationJobKind;
   message?: string;
   sourceImport?: SourceImportWorkerResult;
+  sourceImports?: SourceImportWorkerResult[];
+  materializationPlan?: unknown;
   discoveredSourceCandidates?: BackgroundSourceCandidate[];
   ideaResearchQueries?: {
     support: string[];
@@ -45,6 +69,12 @@ export interface BackgroundCurationJobRecord {
   completedAt?: string;
   lastError?: string;
   result?: BackgroundCurationJobResult;
+  originalJobId: string;
+  attempt: number;
+  claimedAt?: string;
+  leaseUntil?: string;
+  workerId?: string;
+  materializedAt?: string;
 }
 
 export interface BackgroundCurationJobStore {
@@ -52,17 +82,57 @@ export interface BackgroundCurationJobStore {
   list(status?: BackgroundCurationJobStatus): BackgroundCurationJobRecord[];
   get(jobId: string): BackgroundCurationJobRecord | undefined;
   getDueJobs(now?: string | Date, options?: { limit?: number; kinds?: BackgroundCurationJobKind[] }): BackgroundCurationJobRecord[];
-  update(record: BackgroundCurationJobRecord): BackgroundCurationJobRecord;
+  claimNextDueJob(
+    now: string | Date,
+    options: { kinds?: BackgroundCurationJobKind[]; workerId: string; leaseDurationMs: number }
+  ): BackgroundCurationJobRecord | undefined;
+  renewLease(
+    jobId: string,
+    owner: { workerId: string; claimGeneration: number },
+    now: string | Date,
+    leaseDurationMs: number
+  ): BackgroundCurationJobRecord;
+  completeClaim(
+    jobId: string,
+    owner: { workerId: string; claimGeneration: number },
+    terminal: {
+      status: "succeeded" | "failed" | "skipped";
+      completedAt: string | Date;
+      result?: BackgroundCurationJobResult;
+      lastError?: string;
+    }
+  ): BackgroundCurationJobRecord;
+  recoverExpiredLeases(now: string | Date): BackgroundCurationJobRecord[];
+  enqueueRetry(jobId: string, retriedAt: string | Date): BackgroundCurationJobRecord;
+  updateTerminalResult(jobId: string, result: BackgroundCurationJobResult): BackgroundCurationJobRecord;
+  markMaterialized(jobIds: string[], at: string | Date): BackgroundCurationJobRecord[];
+  flushMigration(savedAt?: string | Date): boolean;
+  close(): void;
 }
 
 export interface BackgroundCurationJobStoreSnapshot {
-  version: 1;
+  version: 2;
+  revision: number;
   records: BackgroundCurationJobRecord[];
 }
 
-export interface BackgroundCurationJobStorageAdapter {
-  read(): string | null | undefined;
-  write(serialized: string): void;
+export interface DecodedBackgroundCurationJobStoreSnapshot {
+  snapshot: {
+    version: 2;
+    revision: number;
+    records: BackgroundCurationJobRecord[];
+  };
+  issues: PersistenceLoadIssue[];
+  needsFlushMigration: boolean;
+}
+
+export type BackgroundCurationJobStorageAdapter = RevisionedStorageAdapter;
+
+export class BackgroundCurationTransitionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BackgroundCurationTransitionError";
+  }
 }
 
 export interface SourceCandidateIngestionResult {
@@ -85,20 +155,36 @@ export interface BackgroundCurationExecutionHandlers {
   loadSeedPost?: (job: BackgroundCurationJob) => Promise<KnowledgePost | undefined> | KnowledgePost | undefined;
   loadSourceQualityVerdicts?: () => Promise<SourceQualityVerdict[]> | SourceQualityVerdict[];
   loadSourceQualityUserContext?: () => Promise<AgentHarnessUserContext | undefined> | AgentHarnessUserContext | undefined;
-  generateFollowup?: (job: BackgroundCurationJob) => Promise<BackgroundCurationJobResult> | BackgroundCurationJobResult;
-  scheduleReview?: (job: BackgroundCurationJob) => Promise<BackgroundCurationJobResult> | BackgroundCurationJobResult;
-  askClarifyingQuestion?: (job: BackgroundCurationJob) => Promise<BackgroundCurationJobResult> | BackgroundCurationJobResult;
-  cooldownTopic?: (job: BackgroundCurationJob) => Promise<BackgroundCurationJobResult> | BackgroundCurationJobResult;
-  researchQuestion?: (job: BackgroundCurationJob) => Promise<BackgroundCurationJobResult> | BackgroundCurationJobResult;
-  researchIdea?: (job: BackgroundCurationJob) => Promise<BackgroundCurationJobResult> | BackgroundCurationJobResult;
-  conceptBrief?: (job: BackgroundCurationJob) => Promise<BackgroundCurationJobResult> | BackgroundCurationJobResult;
-  deepReadArticle?: (job: BackgroundCurationJob) => Promise<BackgroundCurationJobResult> | BackgroundCurationJobResult;
+  generateFollowup?: BackgroundCurationJobHandler;
+  scheduleReview?: BackgroundCurationJobHandler;
+  askClarifyingQuestion?: BackgroundCurationJobHandler;
+  cooldownTopic?: BackgroundCurationJobHandler;
+  researchQuestion?: BackgroundCurationJobHandler;
+  researchIdea?: BackgroundCurationJobHandler;
+  conceptBrief?: BackgroundCurationJobHandler;
+  deepReadArticle?: BackgroundCurationJobHandler;
 }
+
+export interface BackgroundCurationExecutionContext {
+  readonly recordId: string;
+  readonly originalJobId: string;
+  readonly attempt: number;
+  readonly effectAt: string;
+}
+
+export type BackgroundCurationJobHandler = (
+  job: BackgroundCurationJob,
+  context: BackgroundCurationExecutionContext
+) => Promise<BackgroundCurationJobResult> | BackgroundCurationJobResult;
 
 export interface RunBackgroundCurationJobsOptions {
   now?: string | Date;
   limit?: number;
   kinds?: BackgroundCurationJobKind[];
+  workerId: string;
+  clock?: () => Date;
+  leaseDurationMs?: number;
+  heartbeatIntervalMs?: number;
 }
 
 export interface BackgroundCurationExecutionBatch {
@@ -110,91 +196,263 @@ export interface BackgroundCurationExecutionBatch {
 export function createInMemoryBackgroundCurationJobStore(
   initialRecords: BackgroundCurationJobRecord[] = []
 ): BackgroundCurationJobStore {
-  const recordsById = new Map(initialRecords.map((record) => [record.id, cloneRecord(record)]));
-
-  return {
-    enqueuePlan(plan, enqueuedAt = plan.generatedAt) {
-      const now = normalizeDate(enqueuedAt).toISOString();
-      const records: BackgroundCurationJobRecord[] = [];
-
-      for (const job of plan.jobs) {
-        const existing = recordsById.get(job.id) ?? findActiveEquivalentJob(recordsById, job);
-
-        if (existing) {
-          records.push(cloneRecord(existing));
-          continue;
-        }
-
-        const record: BackgroundCurationJobRecord = {
-          id: job.id,
-          job,
-          status: "queued",
-          attempts: 0,
-          createdAt: now,
-          updatedAt: now
-        };
-
-        recordsById.set(record.id, cloneRecord(record));
-        records.push(cloneRecord(record));
-      }
-
-      return records;
-    },
-    list(status) {
-      const records = Array.from(recordsById.values());
-      const filtered = status ? records.filter((record) => record.status === status) : records;
-
-      return filtered.map(cloneRecord).sort(compareRecords);
-    },
-    get(jobId) {
-      const record = recordsById.get(jobId);
-
-      return record ? cloneRecord(record) : undefined;
-    },
-    getDueJobs(now = new Date(), options = {}) {
-      const nowDate = normalizeDate(now);
-      const allowedKinds = options.kinds ? new Set(options.kinds) : undefined;
-
-      return Array.from(recordsById.values())
-        .filter((record) => record.status === "queued")
-        .filter((record) => !allowedKinds || allowedKinds.has(record.job.kind))
-        .filter((record) => !record.job.runAfter || new Date(record.job.runAfter) <= nowDate)
-        .sort(compareRecords)
-        .slice(0, options.limit ?? Number.POSITIVE_INFINITY)
-        .map(cloneRecord);
-    },
-    update(record) {
-      recordsById.set(record.id, cloneRecord(record));
-
-      return cloneRecord(record);
-    }
-  };
+  const normalized = initialRecords.map(withQueueLineageDefaults);
+  const adapter = createMemoryRevisionedStorageAdapter(JSON.stringify({ version: 2, revision: 0, records: normalized }));
+  return createPersistentBackgroundCurationJobStore(adapter);
 }
 
 export function createPersistentBackgroundCurationJobStore(
   storage: BackgroundCurationJobStorageAdapter,
-  initialRecords: BackgroundCurationJobRecord[] = []
+  initialRecords: BackgroundCurationJobRecord[] = [],
+  options: {
+    now?: string | Date;
+    timeZone?: string;
+    onLoadIssue?: (issue: PersistenceLoadIssue) => void;
+  } = {}
 ): BackgroundCurationJobStore {
-  const persistedRecords = readStoredRecords(storage);
-  const innerStore = createInMemoryBackgroundCurationJobStore([...persistedRecords, ...initialRecords]);
+  const initialRaw = storage.read();
+  const initialDecoded = initialRaw
+    ? decodeBackgroundCurationJobStoreSnapshot(initialRaw, { timeZone: options.timeZone })
+    : {
+        snapshot: {
+          version: 2 as const,
+          revision: 0,
+          records: initialRecords.map(withQueueLineageDefaults)
+        },
+        issues: [],
+        needsFlushMigration: initialRecords.length > 0
+      };
+  const reportedLoadIssues = new Set<string>();
+  const reportLoadIssues = (issues: PersistenceLoadIssue[]) => {
+    for (const issue of issues) {
+      const key = `${issue.collection}|${issue.index}|${issue.jsonPath}|${issue.message}`;
+      if (reportedLoadIssues.has(key)) continue;
+      reportedLoadIssues.add(key);
+      options.onLoadIssue?.(issue);
+    }
+  };
+  reportLoadIssues(initialDecoded.issues);
+  let snapshot = initialDecoded.snapshot;
+  let needsFlushMigration = initialDecoded.needsFlushMigration;
+
+  const readLatest = (): BackgroundCurationJobStoreSnapshot => {
+    const raw = storage.read();
+    if (!raw) return deepClone(snapshot);
+    const decoded = decodeBackgroundCurationJobStoreSnapshot(raw, { timeZone: options.timeZone });
+    reportLoadIssues(decoded.issues);
+    return decoded.snapshot;
+  };
+  const commit = (
+    mutate: (base: BackgroundCurationJobStoreSnapshot) => BackgroundCurationJobStoreSnapshot | undefined
+  ): BackgroundCurationJobStoreSnapshot => {
+    const result = commitWithRetry({
+      readAndDecode: readLatest,
+      mutate,
+      serialize: JSON.stringify,
+      compareAndSwap: storage.compareAndSwap.bind(storage)
+    });
+    snapshot = result.value;
+    if (result.committed) needsFlushMigration = false;
+    return deepClone(snapshot);
+  };
 
   return {
-    enqueuePlan(plan, enqueuedAt) {
-      const records = innerStore.enqueuePlan(plan, enqueuedAt);
-
-      persistRecords(storage, innerStore.list());
-
-      return records;
+    enqueuePlan(plan, enqueuedAt = plan.generatedAt) {
+      const now = normalizeDate(enqueuedAt).toISOString();
+      const selectedIds: string[] = [];
+      const next = commit((base) => {
+        selectedIds.length = 0;
+        const recordsById = new Map(base.records.map((record) => [record.id, record]));
+        let changed = false;
+        for (const job of plan.jobs) {
+          const existing = recordsById.get(job.id) ?? findActiveEquivalentJob(recordsById, job);
+          if (existing) {
+            selectedIds.push(existing.id);
+            continue;
+          }
+          const record: BackgroundCurationJobRecord = {
+            id: job.id,
+            job: deepClone(job),
+            originalJobId: job.id,
+            attempt: 0,
+            status: "queued",
+            attempts: 0,
+            createdAt: now,
+            updatedAt: now
+          };
+          recordsById.set(record.id, record);
+          selectedIds.push(record.id);
+          changed = true;
+        }
+        return changed ? { ...base, records: Array.from(recordsById.values()) } : undefined;
+      });
+      return selectedIds.map((id) => cloneRecord(requireRecord(next.records, id)));
     },
-    list: (status) => innerStore.list(status),
-    get: (jobId) => innerStore.get(jobId),
-    getDueJobs: (now, options) => innerStore.getDueJobs(now, options),
-    update(record) {
-      const updatedRecord = innerStore.update(record);
-
-      persistRecords(storage, innerStore.list());
-
-      return updatedRecord;
+    list(status) {
+      const records = readLatest().records;
+      return records.filter((record) => !status || record.status === status).map(cloneRecord).sort(compareRecords);
+    },
+    get(jobId) {
+      const record = readLatest().records.find((candidate) => candidate.id === jobId);
+      return record ? cloneRecord(record) : undefined;
+    },
+    getDueJobs(now = new Date(), dueOptions = {}) {
+      return selectDueRecords(readLatest().records, now, dueOptions).map(cloneRecord);
+    },
+    claimNextDueJob(now, claimOptions) {
+      const claimedAt = normalizeDate(now).toISOString();
+      let claimedId: string | undefined;
+      const next = commit((base) => {
+        claimedId = undefined;
+        const recovered = recoverExpiredRecords(base.records, claimedAt);
+        const due = selectDueRecords(recovered.records, claimedAt, {
+          limit: 1,
+          kinds: claimOptions.kinds
+        })[0];
+        if (!due) return recovered.changed ? { ...base, records: recovered.records } : undefined;
+        claimedId = due.id;
+        const leaseUntil = new Date(normalizeDate(claimedAt).getTime() + claimOptions.leaseDurationMs).toISOString();
+        return {
+          ...base,
+          records: recovered.records.map((record) =>
+            record.id === due.id
+              ? {
+                  ...record,
+                  status: "running" as const,
+                  attempts: record.attempts + 1,
+                  startedAt: record.startedAt ?? claimedAt,
+                  claimedAt,
+                  leaseUntil,
+                  workerId: claimOptions.workerId,
+                  updatedAt: claimedAt,
+                  lastError: undefined
+                }
+              : record
+          )
+        };
+      });
+      return claimedId ? cloneRecord(requireRecord(next.records, claimedId)) : undefined;
+    },
+    renewLease(jobId, owner, now, leaseDurationMs) {
+      const renewedAt = normalizeDate(now).toISOString();
+      const next = commit((base) => {
+        const current = requireRecord(base.records, jobId);
+        assertActiveOwner(current, owner, renewedAt);
+        const renewed = {
+          ...current,
+          leaseUntil: new Date(normalizeDate(renewedAt).getTime() + leaseDurationMs).toISOString(),
+          updatedAt: renewedAt
+        };
+        return { ...base, records: replaceRecord(base.records, renewed) };
+      });
+      return cloneRecord(requireRecord(next.records, jobId));
+    },
+    completeClaim(jobId, owner, terminal) {
+      const completedAt = normalizeDate(terminal.completedAt).toISOString();
+      const next = commit((base) => {
+        const current = requireRecord(base.records, jobId);
+        assertActiveOwner(current, owner, completedAt);
+        const completed: BackgroundCurationJobRecord = {
+          ...current,
+          status: terminal.status,
+          completedAt,
+          updatedAt: completedAt,
+          result: terminal.result ? deepClone(terminal.result) : undefined,
+          lastError: terminal.lastError
+        };
+        return { ...base, records: replaceRecord(base.records, completed) };
+      });
+      return cloneRecord(requireRecord(next.records, jobId));
+    },
+    recoverExpiredLeases(now) {
+      const recoveredAt = normalizeDate(now).toISOString();
+      const recoveredIds: string[] = [];
+      const next = commit((base) => {
+        recoveredIds.length = 0;
+        const recovered = recoverExpiredRecords(base.records, recoveredAt);
+        recoveredIds.push(...recovered.recoveredIds);
+        return recovered.changed ? { ...base, records: recovered.records } : undefined;
+      });
+      return recoveredIds.map((id) => cloneRecord(requireRecord(next.records, id)));
+    },
+    enqueueRetry(jobId, retriedAt) {
+      const at = normalizeDate(retriedAt).toISOString();
+      let retryId = "";
+      const next = commit((base) => {
+        const current = requireRecord(base.records, jobId);
+        if (current.status !== "failed") {
+          throw new BackgroundCurationTransitionError(`Retry requires a failed terminal record: ${jobId}`);
+        }
+        const active = base.records.find(
+          (record) => record.originalJobId === current.originalJobId && (record.status === "queued" || record.status === "running")
+        );
+        if (active) {
+          retryId = active.id;
+          return undefined;
+        }
+        const nextAttempt = 1 + Math.max(
+          ...base.records.filter((record) => record.originalJobId === current.originalJobId).map((record) => record.attempt),
+          current.attempt
+        );
+        const baseId = `${current.originalJobId}|retry-${nextAttempt}`;
+        retryId = baseId;
+        let suffix = 1;
+        while (base.records.some((record) => record.id === retryId)) retryId = `${baseId}-${suffix++}`;
+        const job = deepClone(current.job);
+        job.id = retryId;
+        job.createdAt = at;
+        job.runAfter = at;
+        const retry: BackgroundCurationJobRecord = {
+          id: retryId,
+          job,
+          originalJobId: current.originalJobId,
+          attempt: nextAttempt,
+          status: "queued",
+          attempts: 0,
+          createdAt: at,
+          updatedAt: at
+        };
+        return { ...base, records: [...base.records, retry] };
+      });
+      return cloneRecord(requireRecord(next.records, retryId));
+    },
+    updateTerminalResult(jobId, result) {
+      const next = commit((base) => {
+        const current = requireRecord(base.records, jobId);
+        if (!isTerminalStatus(current.status) || current.materializedAt) {
+          throw new BackgroundCurationTransitionError(`Result update requires an unmaterialized terminal record: ${jobId}`);
+        }
+        if (JSON.stringify(current.result) === JSON.stringify(result)) return undefined;
+        return { ...base, records: replaceRecord(base.records, { ...current, result: deepClone(result) }) };
+      });
+      return cloneRecord(requireRecord(next.records, jobId));
+    },
+    markMaterialized(jobIds, at) {
+      const materializedAt = normalizeDate(at).toISOString();
+      const ids = new Set(jobIds);
+      const next = commit((base) => {
+        let changed = false;
+        const records = base.records.map((record) => {
+          if (!ids.has(record.id)) return record;
+          if (!isTerminalStatus(record.status)) {
+            throw new BackgroundCurationTransitionError(`Materialization marker requires a terminal record: ${record.id}`);
+          }
+          if (record.materializedAt) return record;
+          changed = true;
+          return { ...record, materializedAt, updatedAt: materializedAt };
+        });
+        for (const id of ids) requireRecord(base.records, id);
+        return changed ? { ...base, records } : undefined;
+      });
+      return jobIds.map((id) => cloneRecord(requireRecord(next.records, id)));
+    },
+    flushMigration() {
+      if (!needsFlushMigration) return false;
+      commit((base) => ({ ...base }));
+      return true;
+    },
+    close() {
+      storage.close?.();
     }
   };
 }
@@ -202,40 +460,53 @@ export function createPersistentBackgroundCurationJobStore(
 export async function runDueBackgroundCurationJobs(
   store: BackgroundCurationJobStore,
   handlers: BackgroundCurationExecutionHandlers,
-  options: RunBackgroundCurationJobsOptions = {}
+  options: RunBackgroundCurationJobsOptions
 ): Promise<BackgroundCurationExecutionBatch> {
-  const startedAt = normalizeDate(options.now).toISOString();
-  const dueJobs = store.getDueJobs(startedAt, {
-    limit: options.limit,
-    kinds: options.kinds
+  const wallStartedAt = Date.now();
+  const logicalStartedAt = normalizeDate(options.now).getTime();
+  let lastLogicalClock = logicalStartedAt - 1;
+  const clock = options.clock ?? (() => {
+    lastLogicalClock = Math.max(logicalStartedAt + (Date.now() - wallStartedAt), lastLogicalClock + 1);
+    return new Date(lastLogicalClock);
   });
+  const startedAt = new Date(logicalStartedAt).toISOString();
+  const leaseDurationMs = options.leaseDurationMs ?? 15 * 60 * 1000;
+  const heartbeatIntervalMs = options.heartbeatIntervalMs ?? Math.max(1, Math.floor(leaseDurationMs / 3));
+  const limit = options.limit ?? Number.POSITIVE_INFINITY;
   const records: BackgroundCurationJobRecord[] = [];
 
-  for (const record of dueJobs) {
-    // Re-check before claiming: a concurrent run may have taken this job
-    // while we were awaiting an earlier one.
-    const current = store.get(record.id) ?? record;
-
-    if (current.status !== "queued") {
-      continue;
-    }
-
-    const runningRecord = store.update({
-      ...current,
-      status: "running",
-      attempts: current.attempts + 1,
-      startedAt,
-      updatedAt: startedAt,
-      lastError: undefined
+  while (records.length < limit) {
+    const claimed = store.claimNextDueJob(clock(), {
+      kinds: options.kinds,
+      workerId: options.workerId,
+      leaseDurationMs
     });
-    const completedRecord = await executeBackgroundCurationJob(runningRecord, handlers, startedAt);
+    if (!claimed) break;
+    const owner = { workerId: options.workerId, claimGeneration: claimed.attempts };
+    let heartbeatFailure: unknown;
+    const heartbeat = setInterval(() => {
+      try {
+        store.renewLease(claimed.id, owner, clock(), leaseDurationMs);
+      } catch (error) {
+        heartbeatFailure = error;
+        clearInterval(heartbeat);
+      }
+    }, heartbeatIntervalMs);
+    const terminal = await executeBackgroundCurationJob(claimed, handlers, clock);
+    clearInterval(heartbeat);
+    if (heartbeatFailure) throw heartbeatFailure;
 
-    records.push(store.update(completedRecord));
+    records.push(store.completeClaim(claimed.id, owner, {
+      status: terminal.status as "succeeded" | "failed" | "skipped",
+      completedAt: terminal.completedAt ?? clock(),
+      result: terminal.result,
+      lastError: terminal.lastError
+    }));
   }
 
   return {
     startedAt,
-    completedAt: new Date().toISOString(),
+    completedAt: clock().toISOString(),
     records
   };
 }
@@ -243,12 +514,18 @@ export async function runDueBackgroundCurationJobs(
 export async function executeBackgroundCurationJob(
   record: BackgroundCurationJobRecord,
   handlers: BackgroundCurationExecutionHandlers,
-  now: string | Date = new Date()
+  clock: () => Date = () => new Date()
 ): Promise<BackgroundCurationJobRecord> {
-  const completedAt = normalizeDate(now).toISOString();
+  const context: BackgroundCurationExecutionContext = Object.freeze({
+    recordId: record.id,
+    originalJobId: record.originalJobId,
+    attempt: record.attempt,
+    effectAt: record.startedAt ?? record.claimedAt ?? record.updatedAt
+  });
 
   try {
-    const result = await runJob(record.job, handlers, completedAt);
+    const result = await runJob(record.job, handlers, context);
+    const completedAt = clock().toISOString();
     const status: BackgroundCurationJobStatus = result.message?.startsWith("Skipped") ? "skipped" : "succeeded";
 
     return {
@@ -259,6 +536,7 @@ export async function executeBackgroundCurationJob(
       result
     };
   } catch (error) {
+    const completedAt = clock().toISOString();
     return {
       ...record,
       status: "failed",
@@ -272,8 +550,9 @@ export async function executeBackgroundCurationJob(
 async function runJob(
   job: BackgroundCurationJob,
   handlers: BackgroundCurationExecutionHandlers,
-  now: string
+  context: BackgroundCurationExecutionContext
 ): Promise<BackgroundCurationJobResult> {
+  const now = context.effectAt;
   if (job.kind === "import_source") {
     return runImportSourceJob(job, handlers, now);
   }
@@ -284,47 +563,47 @@ async function runJob(
 
   if (job.kind === "research_question") {
     return handlers.researchQuestion
-      ? handlers.researchQuestion(job)
+      ? handlers.researchQuestion(job, context)
       : skippedResult(job, "research question handler is not configured.");
   }
 
   if (job.kind === "research_idea") {
     return handlers.researchIdea
-      ? handlers.researchIdea(job)
+      ? handlers.researchIdea(job, context)
       : skippedResult(job, "idea research handler is not configured.");
   }
 
   if (job.kind === "generate_followup") {
-    return handlers.generateFollowup ? handlers.generateFollowup(job) : runGenerateFollowupJob(job, handlers, now);
+    return handlers.generateFollowup ? handlers.generateFollowup(job, context) : runGenerateFollowupJob(job, handlers, now);
   }
 
   if (job.kind === "concept_brief") {
     return handlers.conceptBrief
-      ? handlers.conceptBrief(job)
+      ? handlers.conceptBrief(job, context)
       : skippedResult(job, "concept brief handler is not configured.");
   }
 
   if (job.kind === "deep_read_article") {
     return handlers.deepReadArticle
-      ? handlers.deepReadArticle(job)
+      ? handlers.deepReadArticle(job, context)
       : skippedResult(job, "deep-read article handler is not configured.");
   }
 
   if (job.kind === "schedule_review") {
     return handlers.scheduleReview
-      ? handlers.scheduleReview(job)
+      ? handlers.scheduleReview(job, context)
       : skippedResult(job, "review scheduling handler is not configured.");
   }
 
   if (job.kind === "ask_clarifying_question") {
     return handlers.askClarifyingQuestion
-      ? handlers.askClarifyingQuestion(job)
+      ? handlers.askClarifyingQuestion(job, context)
       : skippedResult(job, "clarifying question handler is not configured.");
   }
 
   if (job.kind === "cooldown_topic") {
     return handlers.cooldownTopic
-      ? handlers.cooldownTopic(job)
+      ? handlers.cooldownTopic(job, context)
       : {
           kind: job.kind,
           message: "Topic cooldown recorded."
@@ -652,32 +931,80 @@ function mergeUnique(left: string[], right: string[]): string[] {
   return Array.from(new Set([...left, ...right].map((value) => value.trim()).filter(Boolean)));
 }
 
-function readStoredRecords(storage: BackgroundCurationJobStorageAdapter): BackgroundCurationJobRecord[] {
-  const serialized = storage.read();
-
-  if (!serialized) {
-    return [];
-  }
-
-  const parsed = JSON.parse(serialized) as unknown;
-
-  if (!isRecord(parsed) || parsed.version !== 1 || !Array.isArray(parsed.records)) {
-    throw new Error("Background curation job store snapshot is invalid.");
-  }
-
-  return parsed.records.map(parseStoredRecord);
+function withQueueLineageDefaults(record: BackgroundCurationJobRecord): BackgroundCurationJobRecord {
+  return deepClone({
+    ...record,
+    originalJobId: record.originalJobId ?? record.id,
+    attempt: record.attempt ?? 0
+  });
 }
 
-function persistRecords(
-  storage: BackgroundCurationJobStorageAdapter,
-  records: BackgroundCurationJobRecord[]
-): void {
-  const snapshot: BackgroundCurationJobStoreSnapshot = {
-    version: 1,
-    records
-  };
+function selectDueRecords(
+  records: BackgroundCurationJobRecord[],
+  now: string | Date,
+  options: { limit?: number; kinds?: BackgroundCurationJobKind[] }
+): BackgroundCurationJobRecord[] {
+  const nowDate = normalizeDate(now);
+  const allowedKinds = options.kinds ? new Set(options.kinds) : undefined;
+  return records
+    .filter((record) => record.status === "queued")
+    .filter((record) => !allowedKinds || allowedKinds.has(record.job.kind))
+    .filter((record) => !record.job.runAfter || new Date(record.job.runAfter) <= nowDate)
+    .sort(compareRecords)
+    .slice(0, options.limit ?? Number.POSITIVE_INFINITY);
+}
 
-  storage.write(JSON.stringify(snapshot));
+function recoverExpiredRecords(
+  records: BackgroundCurationJobRecord[],
+  now: string
+): { records: BackgroundCurationJobRecord[]; recoveredIds: string[]; changed: boolean } {
+  const nowMs = normalizeDate(now).getTime();
+  const recoveredIds: string[] = [];
+  const recovered = records.map((record) => {
+    if (
+      record.status !== "running" ||
+      (record.claimedAt && record.workerId && record.leaseUntil && new Date(record.leaseUntil).getTime() > nowMs)
+    ) {
+      return record;
+    }
+    recoveredIds.push(record.id);
+    const { claimedAt: _claimedAt, leaseUntil: _leaseUntil, workerId: _workerId, ...rest } = record;
+    return { ...rest, status: "queued" as const, updatedAt: now };
+  });
+  return { records: recovered, recoveredIds, changed: recoveredIds.length > 0 };
+}
+
+function assertActiveOwner(
+  record: BackgroundCurationJobRecord,
+  owner: { workerId: string; claimGeneration: number },
+  now: string
+): void {
+  if (record.status !== "running") {
+    throw new BackgroundCurationTransitionError(`Job is not running: ${record.id}`);
+  }
+  if (record.workerId !== owner.workerId || record.attempts !== owner.claimGeneration) {
+    throw new BackgroundCurationTransitionError(`Claim owner or generation mismatch for job: ${record.id}`);
+  }
+  if (!record.leaseUntil || new Date(record.leaseUntil).getTime() <= normalizeDate(now).getTime()) {
+    throw new BackgroundCurationTransitionError(`Claim lease expired for job: ${record.id}`);
+  }
+}
+
+function requireRecord(records: BackgroundCurationJobRecord[], jobId: string): BackgroundCurationJobRecord {
+  const record = records.find((candidate) => candidate.id === jobId);
+  if (!record) throw new BackgroundCurationTransitionError(`Unknown background curation job: ${jobId}`);
+  return record;
+}
+
+function replaceRecord(
+  records: BackgroundCurationJobRecord[],
+  replacement: BackgroundCurationJobRecord
+): BackgroundCurationJobRecord[] {
+  return records.map((record) => record.id === replacement.id ? replacement : record);
+}
+
+function isTerminalStatus(status: BackgroundCurationJobStatus): status is "succeeded" | "failed" | "skipped" {
+  return status === "succeeded" || status === "failed" || status === "skipped";
 }
 
 function compareRecords(left: BackgroundCurationJobRecord, right: BackgroundCurationJobRecord): number {
@@ -716,59 +1043,234 @@ function createSemanticJobKey(job: BackgroundCurationJob): string {
   ].join("|");
 }
 
-function parseStoredRecord(value: unknown): BackgroundCurationJobRecord {
-  if (!isRecord(value) || typeof value.id !== "string" || !isRecord(value.job)) {
-    throw new Error("Background curation job record is invalid.");
-  }
-
-  if (!isBackgroundCurationJobStatus(value.status)) {
-    throw new Error("Background curation job record has an invalid status.");
-  }
-
-  if (typeof value.attempts !== "number" || typeof value.createdAt !== "string" || typeof value.updatedAt !== "string") {
-    throw new Error("Background curation job record is missing required metadata.");
-  }
-
-  return cloneRecord(value as unknown as BackgroundCurationJobRecord);
-}
-
-function isBackgroundCurationJobStatus(value: unknown): value is BackgroundCurationJobStatus {
-  return value === "queued" || value === "running" || value === "succeeded" || value === "failed" || value === "skipped";
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function cloneRecord(record: BackgroundCurationJobRecord): BackgroundCurationJobRecord {
+  return deepClone(record);
+}
+
+export function decodeBackgroundCurationJobStoreSnapshot(
+  input: string | unknown,
+  options: { timeZone?: string } = {}
+): DecodedBackgroundCurationJobStoreSnapshot {
+  const parsed = typeof input === "string" ? decodeJson(input, "curation-jobs") : deepClone(input);
+  const root = expectObject(parsed, "$");
+  if (root.version !== 1 && root.version !== 2) {
+    throw new PersistenceDecodeError("$.version", "expected supported queue snapshot version 1 or 2");
+  }
+  const version = root.version;
+  const revision = version === 2 ? expectNonNegativeInteger(root.revision, "$.revision") : 0;
+  const issues: PersistenceLoadIssue[] = [];
+  const records = decodeRecordCollection({
+    snapshotKind: "curation-jobs",
+    collection: "records",
+    value: root.records,
+    issues,
+    decodeRecord: (value, path) => decodeBackgroundCurationJobRecord(value, path, version, issues, options.timeZone)
+  });
+  const seen = new Set<string>();
+  for (const record of records) {
+    if (seen.has(record.id)) {
+      throw new PersistenceDecodeError("$.records", `duplicate queue record id: ${record.id}`);
+    }
+    seen.add(record.id);
+  }
   return {
-    ...record,
-    job: {
-      ...record.job,
-      conceptIds: [...record.job.conceptIds],
-      sourceCandidate: record.job.sourceCandidate
-        ? {
-            ...record.job.sourceCandidate,
-            conceptIds: [...record.job.sourceCandidate.conceptIds],
-            source: { ...record.job.sourceCandidate.source }
-          }
-        : undefined,
-      researchQuestion: record.job.researchQuestion
-        ? {
-            ...record.job.researchQuestion,
-            choices: { ...record.job.researchQuestion.choices }
-          }
-        : undefined
-    },
-    result: record.result
-      ? {
-          ...record.result,
-          discoveredSourceCandidates: record.result.discoveredSourceCandidates?.map((candidate) => ({
-            ...candidate,
-            conceptIds: [...candidate.conceptIds],
-            source: { ...candidate.source }
-          }))
-        }
-      : undefined
+    snapshot: { version: 2, revision, records },
+    issues,
+    needsFlushMigration: version === 1 || issues.length > 0
   };
+}
+
+export function decodeBackgroundCurationJobRecord(
+  value: unknown,
+  path: string,
+  version: 1 | 2,
+  issues: PersistenceLoadIssue[] = [],
+  _timeZone?: string
+): BackgroundCurationJobRecord {
+  const record = expectObject(value, path);
+  const id = expectNonEmptyString(record.id, `${path}.id`);
+  const job = expectObject(record.job, `${path}.job`);
+  const jobId = expectNonEmptyString(job.id, `${path}.job.id`);
+  expectEnum(job.kind, ["generate_followup", "deep_read_article", "concept_brief", "discover_sources", "research_question", "research_idea", "import_source", "schedule_review", "ask_clarifying_question", "cooldown_topic"], `${path}.job.kind`);
+  expectNonEmptyString(job.topicId, `${path}.job.topicId`);
+  expectArray(job.conceptIds, `${path}.job.conceptIds`).forEach((item, index) => expectString(item, `${path}.job.conceptIds[${index}]`));
+  expectFiniteNumber(job.priority, `${path}.job.priority`);
+  expectString(job.reason, `${path}.job.reason`);
+  expectIsoDate(job.createdAt, `${path}.job.createdAt`);
+  if (job.runAfter !== undefined) expectIsoDate(job.runAfter, `${path}.job.runAfter`);
+  if (job.postId !== undefined) expectString(job.postId, `${path}.job.postId`);
+  if (job.sourceCandidate !== undefined) decodeBackgroundCandidate(job.sourceCandidate, `${path}.job.sourceCandidate`);
+  if (job.researchQuestion !== undefined) decodeResearchPayload(job.researchQuestion, `${path}.job.researchQuestion`);
+  if (job.researchIdea !== undefined) decodeResearchPayload(job.researchIdea, `${path}.job.researchIdea`);
+  if (job.deepReadArticle !== undefined) {
+    const deepRead = expectObject(job.deepReadArticle, `${path}.job.deepReadArticle`);
+    expectNonEmptyString(deepRead.userId, `${path}.job.deepReadArticle.userId`);
+  }
+  expectEnum(record.status, ["queued", "running", "succeeded", "failed", "skipped"], `${path}.status`);
+  expectNonNegativeInteger(record.attempts, `${path}.attempts`);
+  expectIsoDate(record.createdAt, `${path}.createdAt`);
+  expectIsoDate(record.updatedAt, `${path}.updatedAt`);
+  for (const key of ["startedAt", "completedAt", "claimedAt", "leaseUntil", "materializedAt"] as const) {
+    if (record[key] !== undefined) expectIsoDate(record[key], `${path}.${key}`);
+  }
+  if (record.workerId !== undefined) expectNonEmptyString(record.workerId, `${path}.workerId`);
+  if (record.lastError !== undefined) expectString(record.lastError, `${path}.lastError`);
+  if (record.result !== undefined) validateQueueResult(record.result, `${path}.result`);
+
+  let originalJobId: string;
+  let attempt: number;
+  let materializedAt = record.materializedAt as string | undefined;
+  if (version === 2) {
+    originalJobId = expectNonEmptyString(record.originalJobId, `${path}.originalJobId`);
+    attempt = expectNonNegativeInteger(record.attempt, `${path}.attempt`);
+  } else {
+    const parsedRetry =
+      parseLegacyRetryLineage(id) ??
+      parseLegacyRetryLineage(jobId) ??
+      inferOpaqueDeepReadLineage(id, job, record, _timeZone);
+    originalJobId = parsedRetry?.originalJobId ?? id;
+    attempt = parsedRetry?.attempt ?? 0;
+    if (!parsedRetry && id.startsWith("deep-read-")) {
+      issues.push({
+        snapshotKind: "curation-jobs",
+        collection: "records",
+        index: Number(path.match(/\[(\d+)\]/)?.[1] ?? -1),
+        recordId: id,
+        jsonPath: `${path}.id`,
+        message: "opaque deep-read lineage could not be proven; conservatively mapped to itself/attempt 0",
+        severity: "warning"
+      });
+    }
+    // v1 history is settled at the migration boundary: the legacy writer applied
+    // terminal results inline (and later cleanups may have pruned their artifacts),
+    // so backfill the marker instead of letting startup replay resurrect them.
+    if (materializedAt === undefined && ["succeeded", "failed", "skipped"].includes(record.status as string)) {
+      materializedAt = (record.completedAt ?? record.updatedAt) as string;
+    }
+  }
+
+  return deepClone({
+    ...record,
+    id,
+    job: { ...job, id: jobId },
+    originalJobId,
+    attempt,
+    ...(materializedAt !== undefined ? { materializedAt } : {})
+  } as unknown as BackgroundCurationJobRecord);
+}
+
+function parseLegacyRetryLineage(id: string): { originalJobId: string; attempt: number } | undefined {
+  const match = /^(.*?)(?:\|retry-|:retry-|-retry-)(\d+)$/.exec(id);
+  if (!match || !match[1]) return undefined;
+  return { originalJobId: match[1], attempt: Number(match[2]) };
+}
+
+function inferOpaqueDeepReadLineage(
+  id: string,
+  job: Record<string, unknown>,
+  record: Record<string, unknown>,
+  timeZone = "UTC"
+): { originalJobId: string; attempt: number } | undefined {
+  if (job.kind !== "deep_read_article" || !id.startsWith("deep-read-")) return undefined;
+  const payload = isRecord(job.deepReadArticle) ? job.deepReadArticle : undefined;
+  if (typeof payload?.userId !== "string" || typeof job.topicId !== "string") return undefined;
+  const dateValues = [job.createdAt, record.createdAt, record.updatedAt, record.completedAt]
+    .filter((value): value is string => typeof value === "string");
+  const dates = new Set<string>();
+  for (const value of dateValues) {
+    dates.add(value.slice(0, 10));
+    try { dates.add(getDayKey(value, timeZone)); } catch { /* validated elsewhere */ }
+  }
+  const topicKeys = new Set([job.topicId.trim().toLowerCase(), normalizeConceptKey(job.topicId)]);
+  for (const topicKey of topicKeys) {
+    if (!topicKey) continue;
+    for (const date of dates) {
+      for (let retryAttempt = 0; retryAttempt <= 64; retryAttempt += 1) {
+        const suffix = retryAttempt > 0 ? `|retry-${retryAttempt}` : "";
+        const candidate = `deep-read-${queueHashText(`${payload.userId}|${topicKey}|${date}${suffix}`)}`;
+        if (candidate === id || candidate === job.id) {
+          return {
+            originalJobId: `deep-read-${queueHashText(`${payload.userId}|${topicKey}|${date}`)}`,
+            attempt: retryAttempt
+          };
+        }
+      }
+    }
+  }
+  return undefined;
+}
+
+function queueHashText(value: string): string {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+  return hash.toString(16);
+}
+
+function decodeBackgroundCandidate(value: unknown, path: string): void {
+  const candidate = expectObject(value, path);
+  expectNonEmptyString(candidate.id, `${path}.id`);
+  const source = expectObject(candidate.source, `${path}.source`);
+  for (const key of ["id", "title", "url"] as const) expectNonEmptyString(source[key], `${path}.source.${key}`);
+  expectEnum(source.type, ["youtube", "article", "paper", "blog", "news", "repo", "pdf", "audio", "manual", "user_note"], `${path}.source.type`);
+  expectArray(candidate.conceptIds, `${path}.conceptIds`).forEach((item, index) => expectString(item, `${path}.conceptIds[${index}]`));
+  for (const key of ["relevanceScore", "noveltyScore", "qualityScore"] as const) expectFiniteNumber(candidate[key], `${path}.${key}`);
+  expectString(candidate.reason, `${path}.reason`);
+  expectIsoDate(candidate.discoveredAt, `${path}.discoveredAt`);
+}
+
+function decodeResearchPayload(value: unknown, path: string): void {
+  const payload = expectObject(value, path);
+  for (const key of ["turnId", "threadId", "userId", "question"] as const) expectNonEmptyString(payload[key], `${path}.${key}`);
+  if (payload.choices !== undefined) expectObject(payload.choices, `${path}.choices`);
+  for (const key of ["supportQueries", "challengeQueries"] as const) {
+    if (payload[key] !== undefined) expectArray(payload[key], `${path}.${key}`).forEach((item, index) => expectString(item, `${path}.${key}[${index}]`));
+  }
+}
+
+function validateQueueResult(value: unknown, path: string): void {
+  const result = expectObject(value, path);
+  expectEnum(result.kind, ["generate_followup", "deep_read_article", "concept_brief", "discover_sources", "research_question", "research_idea", "import_source", "schedule_review", "ask_clarifying_question", "cooldown_topic"], `${path}.kind`);
+  if (result.message !== undefined) expectString(result.message, `${path}.message`);
+  if (result.discoveredSourceCandidates !== undefined) {
+    expectArray(result.discoveredSourceCandidates, `${path}.discoveredSourceCandidates`).forEach((item, index) => decodeBackgroundCandidate(item, `${path}.discoveredSourceCandidates[${index}]`));
+  }
+  if (result.sourceImport !== undefined) validateSourceImportResult(result.sourceImport, `${path}.sourceImport`);
+  if (result.sourceImports !== undefined) expectArray(result.sourceImports, `${path}.sourceImports`).forEach((item, index) => validateSourceImportResult(item, `${path}.sourceImports[${index}]`));
+  validateQueueKnownTree(result, path);
+}
+
+function validateSourceImportResult(value: unknown, path: string): void {
+  const sourceImport = expectObject(value, path);
+  const importRecord = expectObject(sourceImport.importRecord, `${path}.importRecord`);
+  expectNonEmptyString(importRecord.id, `${path}.importRecord.id`);
+  expectObject(importRecord.source, `${path}.importRecord.source`);
+  expectEnum(importRecord.status, ["queued", "extracting", "transforming", "ready", "failed"], `${path}.importRecord.status`);
+  expectIsoDate(importRecord.createdAt, `${path}.importRecord.createdAt`);
+  expectArray(sourceImport.posts, `${path}.posts`);
+  expectArray(sourceImport.validation, `${path}.validation`);
+  expectObject(sourceImport.sourceRegistry, `${path}.sourceRegistry`);
+}
+
+function validateQueueKnownTree(value: unknown, path: string): void {
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => validateQueueKnownTree(item, `${path}[${index}]`));
+    return;
+  }
+  if (!isRecord(value)) return;
+  for (const [key, child] of Object.entries(value)) {
+    const childPath = `${path}.${key}`;
+    if (child === undefined) continue;
+    if (key.endsWith("At") || key === "runAfter" || key === "publishedAt") expectIsoDate(child, childPath);
+    else if (["priority", "score", "weight", "overlapScore", "relevanceScore", "noveltyScore", "qualityScore"].includes(key)) expectFiniteNumber(child, childPath);
+    else if (["attempt", "attempts", "contentLength"].includes(key)) expectNonNegativeInteger(child, childPath);
+    else if (key === "version" && typeof child === "number") expectNonNegativeInteger(child, childPath);
+    else if (key === "version" && typeof child !== "string") throw new PersistenceDecodeError(childPath, "expected a string or non-negative integer version");
+    validateQueueKnownTree(child, childPath);
+  }
 }
