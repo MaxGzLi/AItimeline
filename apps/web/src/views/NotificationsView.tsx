@@ -65,7 +65,9 @@ export function NotificationsView({
           <div className="x-post-main">
             <div className="x-head">
               <span className="x-name">{t("notifications.detailTitle")}</span>
-              <BadgeCheck aria-label={t("post.hasSource")} className="x-verified" size={17} />
+              {selected.citations?.length ? (
+                <BadgeCheck aria-label={t("post.hasSource")} className="x-verified" size={17} />
+              ) : null}
               <span className="x-meta">·</span>
               <span className="x-meta">{new Date(selected.createdAt).toLocaleString()}</span>
             </div>

@@ -91,7 +91,9 @@ export function AgentReplyThread({
         <div className="x-post-main">
           <div className="x-head">
             <span className="x-name">{t("agent.name")}</span>
-            <BadgeCheck aria-label={t("post.hasSource")} className="x-verified" size={17} />
+            {turn.answer?.grounded === true && citation ? (
+              <BadgeCheck aria-label={t("post.hasSource")} className="x-verified" size={17} />
+            ) : null}
             <span className="x-meta">@ai-agent</span>
             <span className="x-meta">·</span>
             <span className="x-meta">{t("agent.replyToYou")}</span>

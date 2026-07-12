@@ -52,3 +52,25 @@ export type ApiCurationRunResponse = {
 };
 
 export type InteractionSignals = Record<string, InteractionSignal>;
+
+export type ReviewDueItem = {
+  postId: string;
+  intervalDays: number;
+  dueAt: string;
+  reviewPrompt?: {
+    id: string;
+    prompt: string;
+    answerHint: string;
+  } | null;
+};
+
+export type ReviewGrade = "remembered" | "fuzzy" | "forgot";
+
+export type ApiReviewDueResponse = {
+  due: ReviewDueItem[];
+};
+
+export type ApiReviewCompleteResponse = {
+  nextDueAt?: string;
+  idempotentReplay?: boolean;
+};

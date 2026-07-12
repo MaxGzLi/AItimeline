@@ -40,6 +40,12 @@ export function PostCard({
   const primaryConcept = card.concepts[0] ?? "知识";
   const source = card.sources[0];
   const isUserNote = source?.type === "user_note";
+  // 与 web PostView 同口径:派生内容(跟进/连接播报)引用合成本地来源,
+  // 认证徽章只给有真实外部出处的卡。
+  const isDerivedContent =
+    card.kind === "connection_note" ||
+    Boolean(source && (source.id.startsWith("followup-") || source.url.includes("aitimeline.local")));
+  const isSourceCertified = !isUserNote && !isDerivedContent && (card.citations?.length ?? 0) > 0;
   const commentBlocks = (card.thread ?? []).filter(
     (block) => block.kind === "user_comment" || block.kind === "agent_reply"
   );
@@ -85,7 +91,7 @@ export function PostCard({
             <Text style={styles.name} numberOfLines={1}>
               {isUserNote ? "你的笔记" : getAgentName(primaryConcept)}
             </Text>
-            {isUserNote ? null : <Feather color={theme.verified} name="check-circle" size={15} />}
+            {isSourceCertified ? <Feather color={theme.verified} name="check-circle" size={15} /> : null}
             <Text style={styles.meta} numberOfLines={1}>
               @{isUserNote ? "you" : slugConcept(primaryConcept)}
             </Text>
@@ -114,12 +120,11 @@ export function PostCard({
           {source && !isUserNote ? (
             <View style={styles.quote}>
               <View style={styles.quoteHead}>
-                <Text style={styles.name}>原文出处</Text>
+                <Text style={styles.name}>来源</Text>
                 <Text style={styles.meta} numberOfLines={1}>
                   · {source.title}
                 </Text>
               </View>
-              <Text style={styles.quoteText}>“{card.keyTakeaway}”</Text>
             </View>
           ) : null}
 
@@ -182,7 +187,9 @@ export function PostCard({
                         <Text style={styles.replyName} numberOfLines={1}>
                           {block.title}
                         </Text>
-                        {isAgent ? <Feather color={theme.verified} name="check-circle" size={13} /> : null}
+                        {isAgent && block.grounded === true && (block.citations?.length ?? 0) > 0 ? (
+                          <Feather color={theme.verified} name="check-circle" size={13} />
+                        ) : null}
                       </View>
                       <Text style={styles.body}>{block.body}</Text>
                     </View>
@@ -260,7 +267,6 @@ function createStyles(theme: Theme) {
       padding: 12
     },
     quoteHead: { flexDirection: "row", alignItems: "center", gap: 4 },
-    quoteText: { color: theme.ink, fontSize: 14, lineHeight: 20, marginTop: 4 },
     acts: { flexDirection: "row", alignItems: "center", gap: 40, marginTop: 12 },
     act: { flexDirection: "row", alignItems: "center", gap: 6 },
     actCount: { color: theme.muted, fontSize: 13 },

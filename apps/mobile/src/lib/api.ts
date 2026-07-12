@@ -6,8 +6,11 @@ import type {
   ApiCurationRunResponse,
   ApiNoteResponse,
   ApiReplyResponse,
+  ApiReviewCompleteResponse,
+  ApiReviewDueResponse,
   ApiSnapshot,
-  ApiTimelineResponse
+  ApiTimelineResponse,
+  ReviewGrade
 } from "./types";
 
 export const defaultApiBaseUrl = "http://127.0.0.1:8787";
@@ -74,6 +77,25 @@ export function postReply(baseUrl: string, postId: string, text: string): Promis
 
 export function runCuration(baseUrl: string): Promise<ApiCurationRunResponse> {
   return apiRequest<ApiCurationRunResponse>(baseUrl, "/api/curation/run", { method: "POST", body: {} });
+}
+
+export function fetchReviewDue(baseUrl: string): Promise<ApiReviewDueResponse> {
+  return apiRequest<ApiReviewDueResponse>(
+    baseUrl,
+    `/api/review/due?now=${encodeURIComponent(new Date().toISOString())}`
+  );
+}
+
+export function postReviewComplete(
+  baseUrl: string,
+  postId: string,
+  grade: ReviewGrade,
+  reviewEventId: string
+): Promise<ApiReviewCompleteResponse> {
+  return apiRequest<ApiReviewCompleteResponse>(baseUrl, `/api/review/${encodeURIComponent(postId)}/complete`, {
+    method: "POST",
+    body: { reviewedAt: new Date().toISOString(), grade, reviewEventId }
+  });
 }
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
