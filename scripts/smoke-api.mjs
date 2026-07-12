@@ -1,15 +1,30 @@
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { createServer as createHttpServer } from "node:http";
 import { tmpdir } from "node:os";
 import { hostname } from "node:os";
 import { join } from "node:path";
 
-import { createApiServer } from "../apps/api/src/server.mjs";
+import { createGuardedFetch } from "../apps/api/src/guardedFetch.mjs";
+import { createApiServer as createRawApiServer } from "../apps/api/src/server.mjs";
 
 const previousContentLanguage = process.env.AITIMELINE_CONTENT_LANGUAGE;
 const previousTimelineTimeZone = process.env.AITIMELINE_TIMEZONE;
+const previousAllowPrivateFetch = process.env.AITIMELINE_ALLOW_PRIVATE_FETCH;
+const previousAuthToken = process.env.AITIMELINE_AUTH_TOKEN;
+const previousCorsOrigins = process.env.AITIMELINE_CORS_ORIGINS;
 process.env.AITIMELINE_CONTENT_LANGUAGE = "zh";
 process.env.AITIMELINE_TIMEZONE = "UTC";
+process.env.AITIMELINE_ALLOW_PRIVATE_FETCH = "true";
+delete process.env.AITIMELINE_AUTH_TOKEN;
+delete process.env.AITIMELINE_CORS_ORIGINS;
+
+function createApiServer(options = {}) {
+  return createRawApiServer({
+    ...options,
+    guardedFetch: options.guardedFetch ?? ((input, init) => globalThis.fetch(input, init))
+  });
+}
 
 const tempDir = await mkdtemp(join(tmpdir(), "aitimeline-api-"));
 const mediaRootDir = join(tempDir, "media");
@@ -96,6 +111,211 @@ try {
   const health = await requestJson("/health");
 
   assert.equal(health.ok, true, "API health check should pass");
+
+  assert.throws(
+    () => createRawApiServer({
+      host: "0.0.0.0",
+      authToken: "",
+      dataPath: join(tempDir, "auth-missing.json"),
+      curationDataPath: join(tempDir, "auth-missing-jobs.json"),
+      mediaRootDir
+    }),
+    /Set AITIMELINE_AUTH_TOKEN/,
+    "non-loopback binding without a token must fail closed before startup"
+  );
+  const authenticatedServer = createRawApiServer({
+    host: "0.0.0.0",
+    authToken: "smoke-secret",
+    dataPath: join(tempDir, "auth.json"),
+    curationDataPath: join(tempDir, "auth-jobs.json"),
+    mediaRootDir
+  });
+  try {
+    const unauthenticated = await dispatchToServer(authenticatedServer, `${baseUrl}/api/snapshot`);
+    assert.equal(unauthenticated.status, 401, "non-loopback API requests without a token must be rejected");
+    assert.equal((await unauthenticated.json()).code, "AUTH_REQUIRED", "auth rejection must expose a stable code");
+    const bearerAuthenticated = await dispatchToServer(authenticatedServer, `${baseUrl}/api/snapshot`, {
+      headers: { authorization: "Bearer smoke-secret" }
+    });
+    assert.equal(bearerAuthenticated.status, 200, "a matching bearer token must authorize an API request");
+    const headerAuthenticated = await dispatchToServer(authenticatedServer, `${baseUrl}/api/snapshot`, {
+      headers: { "x-aitimeline-token": "smoke-secret" }
+    });
+    assert.equal(headerAuthenticated.status, 200, "the dedicated token header must authorize an API request");
+  } finally {
+    await closeServer(authenticatedServer);
+  }
+  const loopbackTokenServer = createRawApiServer({
+    authToken: "loopback-secret",
+    dataPath: join(tempDir, "loopback-token.json"),
+    curationDataPath: join(tempDir, "loopback-token-jobs.json"),
+    mediaRootDir
+  });
+  try {
+    const loopbackDenied = await dispatchToServer(loopbackTokenServer, `${baseUrl}/api/snapshot`);
+    assert.equal(loopbackDenied.status, 401, "a configured token must be enforced even on loopback bindings");
+    const loopbackAllowed = await dispatchToServer(loopbackTokenServer, `${baseUrl}/api/snapshot`, {
+      headers: { authorization: "Bearer loopback-secret" }
+    });
+    assert.equal(loopbackAllowed.status, 200, "the configured token must authorize loopback requests");
+  } finally {
+    await closeServer(loopbackTokenServer);
+  }
+
+  const allowedCors = await dispatchToServer(server, `${baseUrl}/health`, {
+    headers: { origin: "http://localhost:5173" }
+  });
+  assert.equal(
+    allowedCors.headers.get("access-control-allow-origin"),
+    "http://localhost:5173",
+    "allowlisted CORS origins must be echoed"
+  );
+  const deniedCors = await dispatchToServer(server, `${baseUrl}/health`, {
+    headers: { origin: "https://evil.example" }
+  });
+  assert.equal(
+    deniedCors.headers.has("access-control-allow-origin"),
+    false,
+    "non-allowlisted CORS origins must not receive an allow-origin header"
+  );
+  const originlessHealth = await dispatchToServer(server, `${baseUrl}/health`);
+  assert.equal(originlessHealth.status, 200, "originless curl and same-origin requests must remain available");
+
+  const privateGuardServer = createRawApiServer({
+    dataPath: join(tempDir, "private-guard.json"),
+    curationDataPath: join(tempDir, "private-guard-jobs.json"),
+    mediaRootDir,
+    guardedFetchOptions: { allowPrivate: false }
+  });
+  try {
+    const beforePrivateSnapshot = await requestJsonFromServer(privateGuardServer, "/api/snapshot");
+    const blockedPrivate = await dispatchToServer(privateGuardServer, `${baseUrl}/api/import/article`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url: "http://127.0.0.1/private-source" })
+    });
+    const blockedPrivatePayload = await blockedPrivate.json();
+    assert.equal(blockedPrivate.status, 400, "private article imports must be rejected");
+    assert.equal(
+      blockedPrivatePayload.code,
+      "FETCH_PRIVATE_ADDRESS_BLOCKED",
+      "private fetch rejection must expose a stable code"
+    );
+    const afterPrivateSnapshot = await requestJsonFromServer(privateGuardServer, "/api/snapshot");
+    assert.equal(
+      afterPrivateSnapshot.sourceImports.length,
+      beforePrivateSnapshot.sourceImports.length,
+      "blocked private imports must not persist an import record"
+    );
+    assert.equal(
+      afterPrivateSnapshot.posts.length,
+      beforePrivateSnapshot.posts.length,
+      "blocked private imports must not persist cards"
+    );
+  } finally {
+    await closeServer(privateGuardServer);
+  }
+
+  const guardedFixture = createHttpServer((request, response) => {
+    if (request.url === "/figure.png") {
+      response.setHeader("content-type", "image/png");
+      response.end(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+      return;
+    }
+    if (request.url === "/binary") {
+      response.setHeader("content-type", "application/octet-stream");
+      response.end(Buffer.from([0x00, 0x01, 0x02, 0x03]));
+      return;
+    }
+    response.setHeader("content-type", "text/html; charset=utf-8");
+    if (request.url === "/large") {
+      response.end(`<html><body><article><p>${"oversized ".repeat(800)}</p></article></body></html>`);
+      return;
+    }
+    response.end(`
+      <html><head><title>Guarded loopback fixture</title></head><body><article>
+      <p>Guarded fetch allows a trusted local fixture when the explicit private-fetch gate is enabled, while retaining response limits and content checks.</p>
+      <p>The imported fixture provides enough grounded source material for deterministic smoke cards and verifies that local development remains usable.</p>
+      </article></body></html>
+    `);
+  });
+  const guardedFixtureAddress = await listenOnTemporaryPort(guardedFixture);
+  const gatedImportServer = createRawApiServer({
+    dataPath: join(tempDir, "gated-import.json"),
+    curationDataPath: join(tempDir, "gated-import-jobs.json"),
+    mediaRootDir,
+    guardedFetchOptions: { allowPrivate: true, maxResponseBytes: 1_200 }
+  });
+  try {
+    const allowedPrivate = await dispatchToServer(gatedImportServer, `${baseUrl}/api/import/article`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url: `http://127.0.0.1:${guardedFixtureAddress.port}/article` })
+    });
+    assert.equal(allowedPrivate.status, 200, "the explicit private-fetch gate must allow loopback fixtures");
+    const beforeLargeSnapshot = await requestJsonFromServer(gatedImportServer, "/api/snapshot");
+    const oversized = await dispatchToServer(gatedImportServer, `${baseUrl}/api/import/article`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url: `http://127.0.0.1:${guardedFixtureAddress.port}/large` })
+    });
+    const oversizedPayload = await oversized.json();
+    assert.equal(oversized.status, 400, "oversized fetch responses must be rejected");
+    assert.equal(
+      oversizedPayload.code,
+      "FETCH_RESPONSE_TOO_LARGE",
+      "oversized response rejection must expose a stable code"
+    );
+    const afterLargeSnapshot = await requestJsonFromServer(gatedImportServer, "/api/snapshot");
+    assert.equal(
+      afterLargeSnapshot.sourceImports.length,
+      beforeLargeSnapshot.sourceImports.length,
+      "oversized responses must not persist partial import records"
+    );
+    assert.equal(
+      afterLargeSnapshot.posts.length,
+      beforeLargeSnapshot.posts.length,
+      "oversized responses must not produce partial cards"
+    );
+
+    const gatedGuardedFetch = createGuardedFetch({ allowPrivate: true });
+    const figureResponse = await gatedGuardedFetch(`http://127.0.0.1:${guardedFixtureAddress.port}/figure.png`);
+    assert.equal(figureResponse.status, 200, "image content types must pass the guard so arXiv figure caching keeps working");
+    assert.equal(
+      (await figureResponse.arrayBuffer()).byteLength,
+      8,
+      "guarded image responses must deliver their bytes intact"
+    );
+    await assert.rejects(
+      () => gatedGuardedFetch(`http://127.0.0.1:${guardedFixtureAddress.port}/binary`),
+      (error) => error?.code === "FETCH_CONTENT_TYPE_BLOCKED",
+      "content types outside the whitelist must be rejected even with the private gate open"
+    );
+  } finally {
+    await closeServer(gatedImportServer);
+    await closeServer(guardedFixture);
+  }
+
+  let redirectRequests = 0;
+  const redirectGuard = createGuardedFetch({
+    allowPrivate: false,
+    resolver: async (host) => host === "public.example"
+      ? [{ address: "93.184.216.34", family: 4 }]
+      : [{ address: "127.0.0.1", family: 4 }],
+    requestImpl: async () => {
+      redirectRequests += 1;
+      return new Response(null, {
+        status: 302,
+        headers: { location: "http://private.example/secret" }
+      });
+    }
+  });
+  await assert.rejects(
+    () => redirectGuard("https://public.example/start"),
+    (error) => error?.code === "FETCH_PRIVATE_ADDRESS_BLOCKED",
+    "redirects from a public target to a private address must be checked and blocked"
+  );
+  assert.equal(redirectRequests, 1, "the private redirect target must be rejected before a second request is sent");
 
   const initialSettings = await requestJson("/api/settings");
 
@@ -5106,6 +5326,20 @@ try {
   } else {
     process.env.AITIMELINE_TIMEZONE = previousTimelineTimeZone;
   }
+
+  if (previousAllowPrivateFetch === undefined) {
+    delete process.env.AITIMELINE_ALLOW_PRIVATE_FETCH;
+  } else {
+    process.env.AITIMELINE_ALLOW_PRIVATE_FETCH = previousAllowPrivateFetch;
+  }
+
+  if (previousAuthToken !== undefined) {
+    process.env.AITIMELINE_AUTH_TOKEN = previousAuthToken;
+  }
+
+  if (previousCorsOrigins !== undefined) {
+    process.env.AITIMELINE_CORS_ORIGINS = previousCorsOrigins;
+  }
 }
 
 function getFetchUrl(input) {
@@ -5238,6 +5472,16 @@ function createMockResponse() {
 async function closeServer(targetServer) {
   await new Promise((resolveClose) => {
     targetServer.close(() => resolveClose());
+  });
+}
+
+async function listenOnTemporaryPort(targetServer) {
+  return new Promise((resolveListen, rejectListen) => {
+    targetServer.once("error", rejectListen);
+    targetServer.listen(0, "127.0.0.1", () => {
+      targetServer.off("error", rejectListen);
+      resolveListen(targetServer.address());
+    });
   });
 }
 
