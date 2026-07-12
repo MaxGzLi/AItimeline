@@ -82,6 +82,7 @@ import {
   transformYouTubeUrl
 } from "../../../packages/core/dist/index.js";
 import { createEvidenceLedger } from "../../../packages/core/dist/harness/evidenceLedger.js";
+import { createGuardedFetch, GuardedFetchError } from "./guardedFetch.mjs";
 
 const defaultPort = 8787;
 const currentDir = dirname(fileURLToPath(import.meta.url));
@@ -91,8 +92,20 @@ const defaultMediaRoot = resolve(currentDir, "../data/media");
 const supplyDroughtNewCardThreshold = 3;
 const supplyDroughtWindowHours = 48;
 const supplyRefillLimit = 5;
+const defaultCorsOrigins = [
+  "http://127.0.0.1:5173",
+  "http://localhost:5173",
+  "http://127.0.0.1:5198",
+  "http://localhost:5198"
+];
 
 export function createApiServer(options = {}) {
+  const bindingHost = options.host ?? process.env.AITIMELINE_HOST ?? "127.0.0.1";
+  const authToken = options.authToken ?? process.env.AITIMELINE_AUTH_TOKEN;
+  const security = createBindingSecurity(bindingHost, authToken);
+  const corsOrigins = resolveCorsOrigins(options.corsOrigins, process.env.AITIMELINE_CORS_ORIGINS);
+  const guardedFetchImpl = options.guardedFetch ?? createGuardedFetch(options.guardedFetchOptions);
+  const ingestSource = (candidate) => ingestSourceCandidate(candidate, guardedFetchImpl);
   const dataPath = options.dataPath ?? process.env.AITIMELINE_DATA_PATH ?? defaultDataPath;
   const curationDataPath =
     options.curationDataPath ?? process.env.AITIMELINE_CURATION_DATA_PATH ?? defaultCurationDataPath;
@@ -133,7 +146,7 @@ export function createApiServer(options = {}) {
   const askModelClient = createConfiguredAskModelClient(process.env);
   const deepReadModelClients = createConfiguredDeepReadModelClients(process.env);
   const searchProvider = options.searchProvider ?? createConfiguredSearchProvider(process.env);
-  const feedFetch = options.feedFetch ?? globalThis.fetch;
+  const feedFetch = options.feedFetch ?? guardedFetchImpl;
   reconcileAndMaterializeCurationQueue(
     persistenceStore,
     curationStore,
@@ -141,9 +154,13 @@ export function createApiServer(options = {}) {
   );
 
   const server = createServer(async (request, response) => {
-    response.setHeader("Access-Control-Allow-Origin", "*");
+    const requestOrigin = request.headers.origin;
+    if (typeof requestOrigin === "string" && corsOrigins.has(requestOrigin)) {
+      response.setHeader("Access-Control-Allow-Origin", requestOrigin);
+      response.setHeader("Vary", "Origin");
+    }
     response.setHeader("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS");
-    response.setHeader("Access-Control-Allow-Headers", "content-type");
+    response.setHeader("Access-Control-Allow-Headers", "content-type,authorization,x-aitimeline-token");
 
     if (request.method === "OPTIONS") {
       response.writeHead(204);
@@ -157,6 +174,11 @@ export function createApiServer(options = {}) {
 
     try {
       const url = new URL(request.url ?? "/", getRequestOrigin(request));
+
+      if (url.pathname.startsWith("/api/") && security.requireAuth && !hasValidApiToken(request, security.authToken)) {
+        sendJson(response, 401, { error: "API authentication is required.", code: "AUTH_REQUIRED" });
+        return;
+      }
 
       if (enableFixtures && request.method === "GET" && url.pathname === "/fixtures/article") {
         sendHtml(response, fixtureArticleHtml("Learning agents need a timeline surface"));
@@ -820,7 +842,8 @@ export function createApiServer(options = {}) {
           importRunner,
           mediaRootDir,
           contentLanguage,
-          buildSourceQualityUserContext(persistenceStore.getSnapshot())
+          buildSourceQualityUserContext(persistenceStore.getSnapshot()),
+          guardedFetchImpl
         );
         const { snapshot, releasePlan } = persistImportAndReleasePlan(persistenceStore, importResult, {
           contentLanguage
@@ -841,7 +864,8 @@ export function createApiServer(options = {}) {
           body,
           importRunner,
           contentLanguage,
-          buildSourceQualityUserContext(persistenceStore.getSnapshot())
+          buildSourceQualityUserContext(persistenceStore.getSnapshot()),
+          guardedFetchImpl
         );
         const { snapshot, releasePlan } = persistImportAndReleasePlan(persistenceStore, importResult, {
           contentLanguage
@@ -1113,7 +1137,7 @@ export function createApiServer(options = {}) {
           {
             contentLanguage,
             sourceImportWorker,
-            ingestSourceCandidate: (candidate) => ingestSourceCandidateForBackground(candidate),
+            ingestSourceCandidate: (candidate) => ingestSourceCandidateForBackground(candidate, ingestSource),
             discoverSources: (job) => discoverSourcesForJob(job, searchProvider, persistenceStore, contentLanguage),
             loadSeedPost: (job) => persistenceStore.getSnapshot().posts.find((post) => post.id === job.postId),
             loadSourceQualityVerdicts: () => persistenceStore.getSnapshot().sourceQualityVerdicts,
@@ -1129,7 +1153,8 @@ export function createApiServer(options = {}) {
                   searchProvider,
                   askModelClient,
                   contentLanguage,
-                  context.effectAt
+                  context.effectAt,
+                  ingestSource
                 )
               ),
             researchIdea: (job, context) =>
@@ -1142,7 +1167,8 @@ export function createApiServer(options = {}) {
                   sourceImportWorker,
                   searchProvider,
                   contentLanguage,
-                  context.effectAt
+                  context.effectAt,
+                  ingestSource
                 )
               ),
             conceptBrief: (job) =>
@@ -1370,8 +1396,11 @@ export function createApiServer(options = {}) {
         return;
       }
 
-      const statusCode = error instanceof HttpError ? error.statusCode : 500;
-      const safeMessage = error instanceof HttpError && statusCode < 500 ? error.message : "Internal server error.";
+      const guardedFetchError = error instanceof GuardedFetchError ? error : undefined;
+      const statusCode = guardedFetchError ? 400 : error instanceof HttpError ? error.statusCode : 500;
+      const safeMessage = guardedFetchError
+        ? "Remote source fetch was blocked."
+        : error instanceof HttpError && statusCode < 500 ? error.message : "Internal server error.";
 
       if (!(error instanceof HttpError) || statusCode >= 500 || error.cause) {
         console.error(`[aitimeline] API request failed (${request.method} ${request.url}).`, error);
@@ -1382,7 +1411,10 @@ export function createApiServer(options = {}) {
         response.shouldKeepAlive = false;
       }
 
-      sendJson(response, statusCode, { error: safeMessage });
+      sendJson(response, statusCode, {
+        error: safeMessage,
+        ...(guardedFetchError ? { code: guardedFetchError.code } : {})
+      });
 
       if (statusCode === 413) {
         safelyDrainRequest(request);
@@ -1396,7 +1428,16 @@ export function createApiServer(options = {}) {
     for (const resource of resources.reverse()) resource.close?.();
   };
   server.once("close", closeStores);
-  server.aitimeline = { persistenceStore, curationStore, workerId, closeStores };
+  server.aitimeline = {
+    persistenceStore,
+    curationStore,
+    workerId,
+    closeStores,
+    security,
+    configureBinding(host) {
+      Object.assign(security, createBindingSecurity(host, authToken));
+    }
+  };
   return server;
 }
 
@@ -2457,7 +2498,8 @@ async function handleResearchQuestionJob(
   searchProvider,
   askModelClient,
   defaultContentLanguage,
-  now
+  now,
+  ingestSource
 ) {
   const payload = job.researchQuestion;
 
@@ -2558,7 +2600,7 @@ async function handleResearchQuestionJob(
     const candidateWithOrigin = withCandidateOrigin(candidate, origin);
 
     try {
-      const ingested = await ingestSourceCandidate(candidateWithOrigin);
+      const ingested = await ingestSource(candidateWithOrigin);
       const sourceImport = await sourceImportWorker.run({
         source: candidateWithOrigin.source,
         assets: ingested.assets,
@@ -2677,7 +2719,8 @@ async function handleResearchIdeaJob(
   sourceImportWorker,
   searchProvider,
   defaultContentLanguage,
-  now
+  now,
+  ingestSource
 ) {
   const payload = job.researchIdea;
 
@@ -2724,7 +2767,8 @@ async function handleResearchIdeaJob(
     sourceImportWorker,
     searchProvider,
     contentLanguage,
-    now
+    now,
+    ingestSource
   });
   const challenge = await researchIdeaSide({
     side: "challenge",
@@ -2735,7 +2779,8 @@ async function handleResearchIdeaJob(
     sourceImportWorker,
     searchProvider,
     contentLanguage,
-    now
+    now,
+    ingestSource
   });
   const importedPosts = [...support.posts, ...challenge.posts];
 
@@ -3011,7 +3056,8 @@ async function researchIdeaSide({
   sourceImportWorker,
   searchProvider,
   contentLanguage,
-  now
+  now,
+  ingestSource
 }) {
   const snapshot = persistenceStore.getSnapshot();
   const researchConcepts = concepts?.length ? concepts : deriveResearchConcepts(payload.question);
@@ -3055,7 +3101,7 @@ async function researchIdeaSide({
     });
 
     try {
-      const ingested = await ingestSourceCandidate(candidateWithOrigin);
+      const ingested = await ingestSource(candidateWithOrigin);
       const sourceImport = await sourceImportWorker.run({
         source: candidateWithOrigin.source,
         assets: ingested.assets,
@@ -5257,7 +5303,7 @@ function countConceptReviews(snapshot, cardIds) {
   return reviewedSignals + reviewedStates;
 }
 
-async function importArticle(body, runner, mediaRootDir, contentLanguage, userContext) {
+async function importArticle(body, runner, mediaRootDir, contentLanguage, userContext, fetchImpl) {
   requireString(body.url, "url");
   const result = await transformArticleUrl(body.url, {
     createdAt: body.createdAt,
@@ -5265,20 +5311,22 @@ async function importArticle(body, runner, mediaRootDir, contentLanguage, userCo
     runner,
     mediaRootDir,
     contentLanguage,
-    userContext
+    userContext,
+    fetch: fetchImpl
   });
 
   return toSourceImportWorkerResult(result);
 }
 
-async function importYouTube(body, runner, contentLanguage, userContext) {
+async function importYouTube(body, runner, contentLanguage, userContext, fetchImpl) {
   requireString(body.url, "url");
   const result = await transformYouTubeUrl(body.url, {
     createdAt: body.createdAt,
     recommendedBecause: body.recommendedBecause,
     runner,
     contentLanguage,
-    userContext
+    userContext,
+    fetch: fetchImpl
   });
 
   return toSourceImportWorkerResult(result);
@@ -5775,9 +5823,9 @@ function scoreCandidateRecord(record) {
   );
 }
 
-async function ingestSourceCandidate(candidate) {
+async function ingestSourceCandidate(candidate, fetchImpl) {
   if (candidate.source.type === "article" || candidate.source.type === "blog" || candidate.source.type === "news") {
-    const fetched = await fetchArticle(candidate.source.url);
+    const fetched = await fetchArticle(candidate.source.url, { fetch: fetchImpl });
 
     return {
       assets: [
@@ -5798,7 +5846,7 @@ async function ingestSourceCandidate(candidate) {
   }
 
   if (candidate.source.type === "youtube") {
-    const fetched = await fetchYouTubeTranscript(candidate.source.url);
+    const fetched = await fetchYouTubeTranscript(candidate.source.url, { fetch: fetchImpl });
 
     return {
       assets: [
@@ -5823,9 +5871,9 @@ async function ingestSourceCandidate(candidate) {
   throw new Error(`Background source ingestion does not support ${candidate.source.type} yet.`);
 }
 
-async function ingestSourceCandidateForBackground(candidate) {
+async function ingestSourceCandidateForBackground(candidate, ingestSource) {
   try {
-    return await ingestSourceCandidate(candidate);
+    return await ingestSource(candidate);
   } catch (error) {
     console.error("[aitimeline] background source ingestion failed.", error);
     const message = error instanceof Error ? error.message : String(error);
@@ -7069,6 +7117,39 @@ function getRequestOrigin(request) {
   return `http://${request.headers.host ?? "127.0.0.1"}`;
 }
 
+function createBindingSecurity(host, tokenValue) {
+  const authToken = typeof tokenValue === "string" ? tokenValue.trim() : "";
+  if (!isLoopbackHost(host) && !authToken) {
+    throw new Error(
+      `Refusing to bind AITimeline API to non-loopback host "${host}" without authentication. ` +
+      "Set AITIMELINE_AUTH_TOKEN to a non-empty secret before starting the server."
+    );
+  }
+  // A configured token is enforced even on loopback: setting a secret and
+  // having it silently ignored would be worse than requiring the header.
+  return { host, requireAuth: Boolean(authToken), authToken };
+}
+
+function isLoopbackHost(hostValue) {
+  const host = String(hostValue).trim().toLowerCase().replace(/^\[|\]$/g, "");
+  return host === "127.0.0.1" || host === "localhost" || host === "::1";
+}
+
+function hasValidApiToken(request, expectedToken) {
+  const authorization = request.headers.authorization;
+  const bearer = typeof authorization === "string" && /^Bearer\s+(.+)$/i.exec(authorization)?.[1];
+  const alternate = request.headers["x-aitimeline-token"];
+  return bearer === expectedToken || alternate === expectedToken;
+}
+
+function resolveCorsOrigins(optionValue, environmentValue) {
+  const configured = optionValue ?? environmentValue;
+  const values = configured === undefined
+    ? defaultCorsOrigins
+    : Array.isArray(configured) ? configured : String(configured).split(",");
+  return new Set(values.map((value) => String(value).trim()).filter(Boolean));
+}
+
 function fixtureSubscriptionFeedXml(variant) {
   const safeVariant = sanitizeSlug(variant);
 
@@ -7134,6 +7215,12 @@ function fixtureArticleHtml(title) {
 }
 
 export function listen(server, port = defaultPort, host = "127.0.0.1") {
+  try {
+    server.aitimeline?.configureBinding(host);
+  } catch (error) {
+    server.aitimeline?.closeStores();
+    throw error;
+  }
   return new Promise((resolveListen) => {
     server.listen(port, host, () => {
       resolveListen(server.address());
@@ -7146,7 +7233,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // Default to loopback. Set AITIMELINE_HOST=0.0.0.0 to expose the API on the
   // local network so a phone (Expo Go) can reach it — trusted LANs only.
   const host = process.env.AITIMELINE_HOST ?? "127.0.0.1";
-  const server = createApiServer();
+  const server = createApiServer({ host });
   const address = await listen(server, port, host);
   let shuttingDown = false;
   const shutdown = () => {
