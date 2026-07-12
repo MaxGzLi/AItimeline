@@ -5006,6 +5006,32 @@ for (const post of followupImport.posts) {
   assert.ok(post.citations.every((citation) => citation.chunkId), "follow-up posts should cite chunk-level evidence");
 }
 
+const followupProvenanceSeed = result.cards.find((card) => card.id === followupJobRecord.job.postId);
+const followupSeedExternalCitations = (followupProvenanceSeed.citations ?? []).filter(
+  (citation) => !citation.sourceId.startsWith("followup-")
+);
+assert.ok(followupSeedExternalCitations.length, "the follow-up seed card must cite an external source for this lock to hold");
+for (const post of followupImport.posts) {
+  assert.equal(
+    post.derivedFromPostId,
+    followupJobRecord.job.postId,
+    "follow-up posts must record the seed post they derive from"
+  );
+  for (const rootCitation of followupSeedExternalCitations) {
+    assert.ok(
+      post.citations.some(
+        (citation) => citation.sourceId === rootCitation.sourceId && citation.chunkId === rootCitation.chunkId
+      ),
+      "follow-up posts must carry the seed's external root citations so provenance resolves to the original source"
+    );
+  }
+  const rootSource = followupProvenanceSeed.sources.find((source) => source.id === followupSeedExternalCitations[0].sourceId);
+  assert.ok(
+    rootSource && !rootSource.url.includes("aitimeline.local"),
+    "the follow-up root citation must resolve to an external URL, not a synthetic follow-up source"
+  );
+}
+
 for (const validation of followupImport.validation) {
   assert.equal(validation.valid, true, `${validation.postId} follow-up validation should pass`);
   assert.equal(validation.grounding?.valid, true, `${validation.postId} follow-up grounding should be valid`);

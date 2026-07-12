@@ -1,4 +1,4 @@
-import { getRegistryChunk, getRegistrySource } from "../source/sourceRegistry.js";
+import { getRegistryChunk, getRegistrySource, resolveCitedChunk } from "../source/sourceRegistry.js";
 import type {
   GroundingCheckStatus,
   HarnessValidationIssue,
@@ -117,7 +117,7 @@ function createEvidenceSpansForClaim(
   const spans = (post.citations ?? [])
     .flatMap((citation) => {
       if (citation.chunkId) {
-        const chunk = getRegistryChunk(registry, citation.chunkId);
+        const chunk = resolveCitedChunk(registry, citation);
         const source = chunk ? getRegistrySource(registry, chunk.sourceId) : undefined;
 
         return chunk && source

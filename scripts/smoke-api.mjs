@@ -6,6 +6,7 @@ import { hostname } from "node:os";
 import { join } from "node:path";
 
 import { createGuardedFetch } from "../apps/api/src/guardedFetch.mjs";
+import { mergeSourceRegistries, resolveCitedChunk } from "../packages/core/dist/index.js";
 import { createApiServer as createRawApiServer } from "../apps/api/src/server.mjs";
 
 const previousContentLanguage = process.env.AITIMELINE_CONTENT_LANGUAGE;
@@ -294,6 +295,98 @@ try {
   } finally {
     await closeServer(gatedImportServer);
     await closeServer(guardedFixture);
+  }
+
+  // --- Source version chain: re-importing a changed URL must not drift old evidence (W6-D) ---
+  const versionedParagraphV1 =
+    "Grounded timelines archive the first edition paragraph so early citations keep their exact original wording forever.";
+  const versionedParagraphV2 =
+    "Grounded timelines publish a revised second edition paragraph while superseded citations stay pinned to their archived text.";
+  let versionedFixtureBody = versionedParagraphV1;
+  const versionedFixture = createHttpServer((request, response) => {
+    response.setHeader("content-type", "text/html; charset=utf-8");
+    response.end(`<html><head><title>Versioned source</title></head><body><article><p>${versionedFixtureBody}</p></article></body></html>`);
+  });
+  const versionedFixtureAddress = await listenOnTemporaryPort(versionedFixture);
+  const versionedServer = createApiServer({
+    dataPath: join(tempDir, "versioned-source.json"),
+    curationDataPath: join(tempDir, "versioned-source-jobs.json"),
+    mediaRootDir
+  });
+  try {
+    const versionedUrl = `http://127.0.0.1:${versionedFixtureAddress.port}/versioned-article`;
+    const firstEdition = await requestJsonFromServer(versionedServer, "/api/import/article", {
+      method: "POST",
+      body: { url: versionedUrl, createdAt: "2026-07-01T00:00:00.000Z" }
+    });
+    const cardA = firstEdition.posts[0];
+    assert.ok(cardA.citations[0]?.chunkVersionId, "new cards must bind citations to a content-addressed chunk version");
+    versionedFixtureBody = versionedParagraphV2;
+    const secondEdition = await requestJsonFromServer(versionedServer, "/api/import/article", {
+      method: "POST",
+      body: { url: versionedUrl, createdAt: "2026-07-02T00:00:00.000Z" }
+    });
+    const cardB = secondEdition.posts[0];
+    assert.notEqual(
+      cardB.citations[0].chunkVersionId,
+      cardA.citations[0].chunkVersionId,
+      "a changed re-import must mint a distinct chunk version"
+    );
+    const versionedSnapshot = await requestJsonFromServer(versionedServer, "/api/snapshot");
+    const versionedRegistry = mergeSourceRegistries(
+      ...versionedSnapshot.sourceRegistries.map((record) => record.registry)
+    );
+    const citedChunkId = cardA.citations[0].chunkId;
+    const versionsForChunk = versionedRegistry.chunkVersions.filter((version) => version.chunkId === citedChunkId);
+    assert.equal(versionsForChunk.length, 2, "both content versions must coexist in the merged registry");
+    const resolvedA = resolveCitedChunk(versionedRegistry, cardA.citations[0]);
+    const resolvedB = resolveCitedChunk(versionedRegistry, cardB.citations[0]);
+    assert.ok(
+      resolvedA?.content.includes("first edition paragraph"),
+      "the first card's evidence must keep resolving to the archived first-edition text"
+    );
+    assert.ok(
+      resolvedB?.content.includes("second edition paragraph"),
+      "the second card's evidence must resolve to the current second-edition text"
+    );
+    assert.ok(
+      versionedRegistry.chunks.find((chunk) => chunk.id === citedChunkId)?.content.includes("second edition paragraph"),
+      "the live chunk view must show the latest content"
+    );
+
+    await closeServer(versionedServer);
+    const reopenedVersionedServer = createApiServer({
+      dataPath: join(tempDir, "versioned-source.json"),
+      curationDataPath: join(tempDir, "versioned-source-jobs.json"),
+      mediaRootDir
+    });
+    try {
+      const reopenedSnapshot = await requestJsonFromServer(reopenedVersionedServer, "/api/snapshot");
+      // Re-importing the same URL replaces the post (same id), so the persisted
+      // card is the second edition; the first edition's citation object stands
+      // in for any older entity (follow-up, reply) still bound to that version.
+      const reopenedCurrent = reopenedSnapshot.posts.find((post) => post.id === cardB.id);
+      assert.equal(
+        reopenedCurrent?.citations[0]?.chunkVersionId,
+        cardB.citations[0].chunkVersionId,
+        "chunk version bindings must survive the strict decoder across a restart"
+      );
+      const reopenedRegistry = mergeSourceRegistries(
+        ...reopenedSnapshot.sourceRegistries.map((record) => record.registry)
+      );
+      assert.ok(
+        resolveCitedChunk(reopenedRegistry, cardA.citations[0])?.content.includes("first edition paragraph"),
+        "archived version text must survive a restart so old citations never drift"
+      );
+      assert.ok(
+        resolveCitedChunk(reopenedRegistry, reopenedCurrent.citations[0])?.content.includes("second edition paragraph"),
+        "the current card must keep resolving to its own edition after a restart"
+      );
+    } finally {
+      await closeServer(reopenedVersionedServer);
+    }
+  } finally {
+    await closeServer(versionedFixture);
   }
 
   let redirectRequests = 0;
