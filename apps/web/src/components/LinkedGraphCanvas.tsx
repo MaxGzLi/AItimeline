@@ -122,7 +122,11 @@ export function LinkedGraphCanvas({
   // Re-run the setup effect whenever the graph's shape changes; positions of
   // surviving nodes are preserved through nodesRef, and the view (pan/zoom)
   // survives in viewRef, so a rebuild reheats without resetting the camera.
-  const graphSignature = `${graph.nodes.map((node) => node.id).join("|")}::${graph.edges.length}`;
+  // Edge ids and node visual fields are part of the signature: an edge swap
+  // that keeps the count, or a weight/zone/label change, must also rebuild.
+  const graphSignature = `${graph.nodes
+    .map((node) => `${node.id}:${node.weight}:${node.zone ?? ""}:${node.label}`)
+    .join("|")}::${graph.edges.map((edge) => edge.id).join("|")}`;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -741,8 +745,9 @@ export function LinkedGraphCanvas({
     // the fling-into-place animation at the user (the graph regrows whenever
     // background curation adds cards, so it would replay mid-read). Drag
     // interactions still animate through reheat(). Deferred one frame so the
-    // ResizeObserver has centered the view first.
-    requestAnimationFrame(() => settle());
+    // ResizeObserver has centered the view first; canceled on teardown so a
+    // stale settle can't run against the next graph.
+    const settleRaf = requestAnimationFrame(() => settle());
 
     canvas.addEventListener("pointerdown", onPointerDown);
     canvas.addEventListener("pointermove", onPointerMove);
@@ -751,6 +756,7 @@ export function LinkedGraphCanvas({
     resizeObserver.observe(wrap);
 
     return () => {
+      cancelAnimationFrame(settleRaf);
       cancelAnimationFrame(rafRef.current);
       runningRef.current = false;
       canvas.removeEventListener("pointerdown", onPointerDown);

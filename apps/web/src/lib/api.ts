@@ -3,37 +3,93 @@ import { t } from "./i18n";
 export const apiBaseUrl = (import.meta.env.VITE_AITIMELINE_API_URL ?? "http://127.0.0.1:8787").replace(/\/$/, "");
 export const sampleSourceUrl = `${apiBaseUrl}/fixtures/article`;
 
-export async function apiRequest<T>(
-  path: string,
-  options: { method?: "GET" | "POST" | "DELETE"; body?: unknown; keepalive?: boolean } = {}
-): Promise<T> {
-  const response = await fetch(`${apiBaseUrl}${path}`, {
-    method: options.method ?? "GET",
-    headers: {
-      "content-type": "application/json"
-    },
-    body: options.body ? JSON.stringify(options.body) : undefined,
-    keepalive: options.keepalive
-  });
-  const payload = (await response.json()) as unknown;
+/** HTTP error with the response status, so callers can tell business 4xx from outages. */
+export class ApiHttpError extends Error {
+  readonly status: number;
 
-  if (!response.ok) {
-    const message =
-      isRecord(payload) && typeof payload.error === "string"
-        ? payload.error
-        : t("api.requestFailed", { status: response.status });
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiHttpError";
+    this.status = status;
+  }
+}
 
-    throw new Error(message);
+/** Transport-level failures (fetch rejection, timeout) — the only errors that mean "offline". */
+export function isTransportError(error: unknown): boolean {
+  if (error instanceof ApiHttpError) {
+    return false;
   }
 
-  return payload as T;
+  return error instanceof TypeError || isAbortError(error);
+}
+
+export function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
+const defaultTimeoutMs = 20000;
+
+export async function apiRequest<T>(
+  path: string,
+  options: {
+    method?: "GET" | "POST" | "DELETE";
+    body?: unknown;
+    keepalive?: boolean;
+    signal?: AbortSignal;
+    timeoutMs?: number;
+  } = {}
+): Promise<T> {
+  // Every request gets a timeout so a hung endpoint cannot accumulate open
+  // connections across polls; callers can additionally pass their own signal.
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), options.timeoutMs ?? defaultTimeoutMs);
+  const forwardAbort = () => controller.abort();
+
+  if (options.signal) {
+    if (options.signal.aborted) {
+      controller.abort();
+    } else {
+      options.signal.addEventListener("abort", forwardAbort, { once: true });
+    }
+  }
+
+  try {
+    const response = await fetch(`${apiBaseUrl}${path}`, {
+      method: options.method ?? "GET",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: options.body ? JSON.stringify(options.body) : undefined,
+      keepalive: options.keepalive,
+      signal: controller.signal
+    });
+    const payload = (await response.json()) as unknown;
+
+    if (!response.ok) {
+      const message =
+        isRecord(payload) && typeof payload.error === "string"
+          ? payload.error
+          : t("api.requestFailed", { status: response.status });
+
+      throw new ApiHttpError(message, response.status);
+    }
+
+    return payload as T;
+  } finally {
+    window.clearTimeout(timer);
+    options.signal?.removeEventListener("abort", forwardAbort);
+  }
 }
 
 export function isYouTubeUrl(url: string): boolean {
   try {
-    const parsedUrl = new URL(url);
+    const host = new URL(url).hostname.toLowerCase();
 
-    return parsedUrl.hostname.includes("youtube.com") || parsedUrl.hostname.includes("youtu.be");
+    return (
+      host === "youtube.com" ||
+      host.endsWith(".youtube.com") ||
+      host === "youtu.be"
+    );
   } catch {
     return false;
   }

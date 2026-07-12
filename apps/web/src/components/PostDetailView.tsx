@@ -14,6 +14,7 @@ import {
   Bookmark,
   Brain,
   CheckCircle2,
+  ExternalLink,
   FileText,
   GitBranch,
   GraduationCap,
@@ -63,6 +64,7 @@ export function PostDetailView({
   cards,
   chunks,
   connections,
+  evidenceError,
   evidenceLedger,
   feedback,
   graph,
@@ -74,6 +76,7 @@ export function PostDetailView({
   onOpenConcept,
   onPromptChange,
   onReply,
+  onRetryEvidence,
   onSave,
   prompt,
   quoteText,
@@ -86,6 +89,7 @@ export function PostDetailView({
   cards: KnowledgeCard[];
   chunks: KnowledgeChunk[];
   connections: CardConnection[];
+  evidenceError?: boolean;
   evidenceLedger?: EvidenceLedger | null;
   feedback?: LearningFeedback;
   graph?: LinkedKnowledgeGraph;
@@ -97,6 +101,7 @@ export function PostDetailView({
   onOpenConcept: (concept: string) => void;
   onPromptChange: (value: string) => void;
   onReply: (card: RankedKnowledgeCard, text: string) => Promise<void>;
+  onRetryEvidence?: () => void;
   onSave: (card: RankedKnowledgeCard) => void;
   prompt: string;
   quoteText?: string;
@@ -181,7 +186,20 @@ export function PostDetailView({
             <div className="x-detail-quote-head">
               <Quote size={17} />
               <span className="x-name">{t("detail.sourceQuote")}</span>
-              <span className="x-meta">· {source?.title ?? t("format.unknownSource")}</span>
+              {isExternalSourceUrl(source?.url) ? (
+                <a
+                  className="x-meta x-srclink"
+                  href={source?.url}
+                  rel="noreferrer noopener"
+                  target="_blank"
+                  title={t("detail.openSource")}
+                >
+                  · {source?.title ?? t("format.unknownSource")}
+                  <ExternalLink size={13} />
+                </a>
+              ) : (
+                <span className="x-meta">· {source?.title ?? t("format.unknownSource")}</span>
+              )}
             </div>
             {source?.type === "youtube" && citation?.startTimeSeconds !== undefined ? (
               <a className="x-detail-time" href={buildTimestampUrl(source?.url, citation.startTimeSeconds)}>
@@ -428,7 +446,7 @@ export function PostDetailView({
         </section>
       ) : null}
 
-      <EvidenceLedgerPanel ledger={evidenceLedger} />
+      <EvidenceLedgerPanel error={evidenceError} ledger={evidenceLedger} onRetry={onRetryEvidence} />
 
       <section className="x-detail-sec">
         <div className="x-detail-sechead">
@@ -509,6 +527,16 @@ export function PostDetailView({
   );
 }
 
+// Only genuinely external URLs open in a new tab; synthetic local sources
+// (follow-ups, notes) have nothing to open.
+function isExternalSourceUrl(url: string | undefined): url is string {
+  if (!url || !/^https?:\/\//i.test(url)) {
+    return false;
+  }
+
+  return !url.includes("aitimeline.local");
+}
+
 function formatSourceChunkLabel(chunk: KnowledgeChunk, index: number, sourceType: string | undefined): string {
   if (sourceType === "youtube" && chunk.startTimeSeconds !== undefined) {
     return `${formatTimestamp(chunk.startTimeSeconds)}-${formatTimestamp(chunk.endTimeSeconds ?? chunk.startTimeSeconds)}`;
@@ -517,7 +545,15 @@ function formatSourceChunkLabel(chunk: KnowledgeChunk, index: number, sourceType
   return t("detail.chunkIndex", { index: index + 1 });
 }
 
-function EvidenceLedgerPanel({ ledger }: { ledger?: EvidenceLedger | null }) {
+function EvidenceLedgerPanel({
+  error,
+  ledger,
+  onRetry
+}: {
+  error?: boolean;
+  ledger?: EvidenceLedger | null;
+  onRetry?: () => void;
+}) {
   return (
     <section className="x-detail-sec x-detail-ev">
       <div className="x-detail-sechead">
@@ -525,7 +561,16 @@ function EvidenceLedgerPanel({ ledger }: { ledger?: EvidenceLedger | null }) {
         <h3>{t("detail.evidence")}</h3>
       </div>
 
-      {ledger === undefined ? (
+      {error && ledger === undefined ? (
+        <p className="x-muted-copy">
+          {t("detail.evidenceError")}
+          {onRetry ? (
+            <button className="x-linklike" onClick={onRetry} type="button">
+              {t("detail.evidenceRetry")}
+            </button>
+          ) : null}
+        </p>
+      ) : ledger === undefined ? (
         <p className="x-muted-copy">{t("detail.evidenceLoading")}</p>
       ) : ledger === null ? (
         <p className="x-muted-copy">{t("detail.evidenceEmpty")}</p>

@@ -24,7 +24,6 @@ export function buildGraphGrowthTimeline(input: {
   nowMs?: number;
 }): GraphGrowthTimeline {
   const endMs = input.nowMs ?? Date.now();
-  const startMs = endMs - 30 * DAY_MS;
   const nodeFirstSeen: Record<string, number> = {};
   const cardsById = new Map(input.cards.map((card) => [card.id, card]));
 
@@ -70,6 +69,13 @@ export function buildGraphGrowthTimeline(input: {
   for (const edge of input.graph.edges) {
     edgeFirstSeen[edge.id] = Math.max(nodeFirstSeen[edge.source] ?? endMs, nodeFirstSeen[edge.target] ?? endMs);
   }
+
+  // Replay opens at the first real event (with a half-day lead-in) instead of
+  // a fixed 30-day window that is mostly empty for young libraries.
+  const windowStartMs = endMs - 30 * DAY_MS;
+  const firstSeenTimes = Object.values(nodeFirstSeen);
+  const firstEventMs = firstSeenTimes.length > 0 ? Math.min(...firstSeenTimes) : windowStartMs;
+  const startMs = Math.max(windowStartMs, Math.min(firstEventMs - DAY_MS / 2, endMs - DAY_MS / 2));
 
   return {
     edgeFirstSeen,

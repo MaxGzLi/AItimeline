@@ -145,6 +145,12 @@ export function PostView({
       return;
     }
 
+    // Connection notes are system-derived: passive dwell on them must not feed
+    // back into production (dwell triggers follow-up generation server-side).
+    if (card.kind === "connection_note") {
+      return;
+    }
+
     const getCurrentDwellMs = () => {
       const activeVisibleMs = visibleSince.current === null ? 0 : performance.now() - visibleSince.current;
 
@@ -164,13 +170,20 @@ export function PostView({
       }
     };
 
+    // Track intersection so a tab switch can resume timing: the observer only
+    // fires on intersection changes, not on visibility changes.
+    let isIntersecting = false;
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry?.isIntersecting && entry.intersectionRatio >= 0.6) {
-          visibleSince.current ??= performance.now();
+          isIntersecting = true;
+          if (!document.hidden) {
+            visibleSince.current ??= performance.now();
+          }
           return;
         }
 
+        isIntersecting = false;
         flushDwell();
       },
       { threshold: [0, 0.6, 1] }
@@ -190,6 +203,12 @@ export function PostView({
     const handleVisibilityChange = () => {
       if (document.hidden) {
         flushDwell();
+        return;
+      }
+
+      // Coming back to a card still in the viewport restarts the clock.
+      if (isIntersecting) {
+        visibleSince.current ??= performance.now();
       }
     };
 
@@ -216,11 +235,30 @@ export function PostView({
     }
 
     let timer: number | null = null;
+    let isIntersecting = false;
     const clearTimer = () => {
       if (timer !== null) {
         window.clearTimeout(timer);
         timer = null;
       }
+    };
+    // Impressions require the tab to be visible: a background tab still gets
+    // intersection callbacks but the user never saw the card.
+    const armTimer = () => {
+      if (timer !== null || impressionFired.current || document.hidden) {
+        return;
+      }
+
+      timer = window.setTimeout(() => {
+        timer = null;
+
+        if (document.hidden) {
+          return;
+        }
+
+        impressionFired.current = true;
+        onImpression(impressionCard.current);
+      }, 1000);
     };
     const observer = new IntersectionObserver(
       (entries) => {
@@ -231,25 +269,33 @@ export function PostView({
         }
 
         if (entry?.isIntersecting && entry.intersectionRatio >= 0.5) {
-          if (timer === null) {
-            timer = window.setTimeout(() => {
-              timer = null;
-              impressionFired.current = true;
-              onImpression(impressionCard.current);
-            }, 1000);
-          }
+          isIntersecting = true;
+          armTimer();
           return;
         }
 
+        isIntersecting = false;
         clearTimer();
       },
       { threshold: [0, 0.5] }
     );
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        clearTimer();
+        return;
+      }
+
+      if (isIntersecting) {
+        armTimer();
+      }
+    };
 
     observer.observe(node);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
       clearTimer();
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
       observer.disconnect();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
