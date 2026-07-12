@@ -100,7 +100,11 @@ export function GraphView({
   );
   const [currentMs, setCurrentMs] = useState(timeline.startMs);
   const currentMsRef = useRef(timeline.startMs);
-  const graphSignature = `${linkedGraph.nodes.map((node) => node.id).join("|")}::${linkedGraph.edges.length}`;
+  // Structural signature (node ids + edge ids): an edge swap that keeps the
+  // count must reset replay state, but weight-only changes must not.
+  const graphSignature = `${linkedGraph.nodes.map((node) => node.id).join("|")}::${linkedGraph.edges
+    .map((edge) => edge.id)
+    .join("|")}`;
   const suggestion = conceptMergeSuggestions[0];
   const sliderValue = Math.round(timeToProgress(timeline, currentMs) * 1000);
   const replayFinished = replayActive && !playing && currentMs >= timeline.endMs - 1;

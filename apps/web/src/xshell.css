@@ -641,6 +641,24 @@ body:has(.x-frame) {
   margin-bottom: 3px;
 }
 .x-quote .x-qhead .x-name { font-weight: 700; flex-shrink: 0; }
+.x-linklike {
+  background: none;
+  border: none;
+  padding: 0;
+  margin-left: 6px;
+  color: var(--x-blue);
+  cursor: pointer;
+  font: inherit;
+}
+.x-linklike:hover { text-decoration: underline; }
+.x-srclink {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--x-muted);
+  text-decoration: none;
+}
+.x-srclink:hover { color: var(--x-blue); text-decoration: underline; }
 .x-quote .x-qhead .x-meta { color: var(--x-muted); }
 .x-quote .x-qtext {
   margin: 0;

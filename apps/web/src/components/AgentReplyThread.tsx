@@ -59,7 +59,9 @@ export function AgentReplyThread({
   const isConfirmReady =
     confirmQuestions.length > 0 && confirmQuestions.every((confirmQuestion) => choices[confirmQuestion.id]);
   const effectiveTurnStatus = turnStatus ?? response.turnRecord?.status;
-  const body = turn.answer?.answer ?? turn.notes.join("\n") ?? t("agent.askFallback");
+  // join() always returns a string, so `??` alone could never reach the
+  // fallback; treat blank answers and empty notes as missing.
+  const body = turn.answer?.answer?.trim() || turn.notes.join("\n").trim() || t("agent.askFallback");
 
   useEffect(() => {
     setChoices({});

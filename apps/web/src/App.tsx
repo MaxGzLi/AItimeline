@@ -66,7 +66,7 @@ import { GraphView } from "./views/GraphView";
 import { NotificationsView } from "./views/NotificationsView";
 import { ReviewView, type ReviewQueueEntry } from "./views/ReviewView";
 import { SettingsView } from "./views/SettingsView";
-import { apiBaseUrl, apiRequest, isYouTubeUrl, sampleSourceUrl } from "./lib/api";
+import { ApiHttpError, apiBaseUrl, apiRequest, isAbortError, isTransportError, isYouTubeUrl, sampleSourceUrl } from "./lib/api";
 import { buildGroundedAnswer, formatAskAnswer, getTopicId, scrollMotion, slugConcept } from "./lib/format";
 import { normalizeLanguage, setI18nLanguage, t, type Language } from "./lib/i18n";
 import { buildCardNeighborhoodGraph } from "./lib/localGraph";
@@ -238,6 +238,9 @@ export function App() {
   const [subscriptionUrl, setSubscriptionUrl] = useState("");
   const [sourceImports, setSourceImports] = useState<SourceImport[]>([]);
   const [importedCards, setImportedCards] = useState<KnowledgeCard[]>([]);
+  // Full knowledge library (snapshot.posts): resting or dismissed cards leave the
+  // feed but must stay visible to the graph, backlinks, review and notifications.
+  const [libraryPosts, setLibraryPosts] = useState<KnowledgeCard[]>([]);
   // Newly synced cards stay buffered until the user inserts them into the feed.
   const [pendingCards, setPendingCards] = useState<KnowledgeCard[]>([]);
   // Server due-review data is the single review source for the feed and rail.
@@ -273,8 +276,15 @@ export function App() {
   const [agentMessage, setAgentMessage] = useState("");
   const [isAgentAsking, setIsAgentAsking] = useState(false);
   const [interactionSignals, setInteractionSignals] = useState<InteractionSignals>({});
+  // Bumped when an in-flight signal send settles or a retry backoff expires, so
+  // the sync effect re-scans for newer signal versions.
+  const [signalSyncTick, setSignalSyncTick] = useState(0);
   const [learningFeedback, setLearningFeedback] = useState<LearningFeedbackByPost>({});
   const [evidenceLedgers, setEvidenceLedgers] = useState<Record<string, EvidenceLedger | null>>({});
+  // Posts whose evidence fetch failed (distinct from "loaded, no evidence"):
+  // cleared on reconnect or manual retry so a transient failure is not cached
+  // for the whole session.
+  const [evidenceErrors, setEvidenceErrors] = useState<ReadonlySet<string>>(() => new Set());
   const [apiStatus, setApiStatus] = useState<ApiStatus>("checking");
   const [apiMessage, setApiMessage] = useState(() => t("api.connecting"));
   const [curationMessage, setCurationMessage] = useState(() => t("curation.default"));
@@ -313,7 +323,9 @@ export function App() {
     }
     return "light";
   });
-  const [aiPrompt, setAiPrompt] = useState("");
+  // Ask-AI drafts are keyed by card so switching cards never carries a draft
+  // (or submits it) to the wrong post.
+  const [aiPromptByCard, setAiPromptByCard] = useState<Record<string, string>>({});
   const [isImporting, setIsImporting] = useState(false);
   const [isSavingCandidate, setIsSavingCandidate] = useState(false);
   const [isSavingSubscription, setIsSavingSubscription] = useState(false);
@@ -325,6 +337,9 @@ export function App() {
   const [hasHydrated, setHasHydrated] = useState(false);
   const syncedSignalSignatures = useRef<Record<string, string>>(loadSyncedSignalSignatures());
   const pendingSignalSignatures = useRef<Record<string, string>>({});
+  const signalRetryTimers = useRef<Record<string, number>>({});
+  const signalRetryDelays = useRef<Record<string, number>>({});
+  const refreshAbortRef = useRef<AbortController | null>(null);
   const curationRunInFlight = useRef(false);
   const refreshSequence = useRef(0);
   const settingsReady = useRef(false);
@@ -576,7 +591,31 @@ export function App() {
 
     setTopicFilter("all");
   }, [topicFilter, topicFilterOptions]);
-  const allCards = useMemo(() => rankedCards, [rankedCards]);
+  // Library view: every post the server knows about, regardless of feed
+  // lifecycle. The feed (rankedCards) is a ranked, lifecycle-filtered subset;
+  // graph, backlinks, skill tree, review and notification lookups must not
+  // shrink when a card rests or is dismissed from the feed.
+  const allCards = useMemo(() => {
+    if (libraryPosts.length === 0 && importedCards.length === 0 && pendingCards.length === 0) {
+      return demoModeEnabled ? demoRankedCards : [];
+    }
+
+    const byId = new Map<string, KnowledgeCard>();
+
+    for (const post of libraryPosts) {
+      byId.set(post.id, post);
+    }
+    // Timeline/pending versions of the same post win: they carry the freshest
+    // server state for cards currently in the feed.
+    for (const card of importedCards) {
+      byId.set(card.id, card);
+    }
+    for (const card of pendingCards) {
+      byId.set(card.id, card);
+    }
+
+    return ensureRankedCards(Array.from(byId.values()));
+  }, [demoModeEnabled, demoRankedCards, importedCards, libraryPosts, pendingCards]);
   const wikilinkCandidates = useMemo(() => buildWikilinkAutocompleteCandidates(allCards), [allCards]);
   const connectionsByCard = useMemo(() => {
     const byCard: Record<string, CardConnection[]> = {};
@@ -795,10 +834,15 @@ export function App() {
     () => [...(demoModeEnabled ? demoSignals : []), ...importedSignals, ...interactionUserSignals],
     [demoModeEnabled, importedSignals, interactionUserSignals]
   );
-  const selectedCard = useMemo(
-    () => (selectedCardId ? rankedCards.find((card) => card.id === selectedCardId) ?? null : null),
-    [rankedCards, selectedCardId]
-  );
+  const selectedCard = useMemo(() => {
+    if (!selectedCardId) {
+      return null;
+    }
+
+    // Prefer the feed version (it carries the active ranking context), but fall
+    // back to the library so detail opens for cards that left the feed.
+    return rankedCards.find((card) => card.id === selectedCardId) ?? cardsById[selectedCardId] ?? null;
+  }, [cardsById, rankedCards, selectedCardId]);
   const selectedSourceId = selectedCard?.sources[0]?.id;
   const selectedChunks = useMemo(
     () => sourceChunks.filter((chunk) => chunk.sourceId === selectedSourceId),
@@ -844,6 +888,7 @@ export function App() {
   const selectedFeedback = selectedCard ? learningFeedback[selectedCard.id] : undefined;
   const selectedSignal = selectedCard ? interactionSignals[selectedCard.id] : undefined;
   const selectedEvidenceLedger = selectedCard ? evidenceLedgers[selectedCard.id] : undefined;
+  const selectedEvidenceFailed = selectedCard ? evidenceErrors.has(selectedCard.id) : false;
   // Backlinks that point at the open card's id or any of its concepts, minus
   // links authored on the card itself.
   const selectedBacklinks = useMemo<Backlink[]>(() => {
@@ -964,7 +1009,14 @@ export function App() {
         continue;
       }
 
-      if (pendingSignalSignatures.current[signal.postId] === signature) {
+      // One in-flight send per post: a newer version waits until the current
+      // send settles, so acks can never land out of order.
+      if (signal.postId in pendingSignalSignatures.current) {
+        continue;
+      }
+
+      // A failed send sits out its backoff before the next attempt.
+      if (signal.postId in signalRetryTimers.current) {
         continue;
       }
 
@@ -973,20 +1025,45 @@ export function App() {
         .then(() => {
           syncedSignalSignatures.current[signal.postId] = signature;
           saveSyncedSignalSignatures(syncedSignalSignatures.current);
+          delete signalRetryDelays.current[signal.postId];
         })
-        .catch(() => {
+        .catch((error: unknown) => {
           setApiMessage(t("api.signalSyncFailed"));
+
+          if (error instanceof ApiHttpError && error.status < 500) {
+            // The server rejected this payload outright; retrying the same
+            // signature forever would poison the queue. Drop it.
+            syncedSignalSignatures.current[signal.postId] = signature;
+            saveSyncedSignalSignatures(syncedSignalSignatures.current);
+            return;
+          }
+
+          const delay = Math.min(signalRetryDelays.current[signal.postId] ?? 5000, 60000);
+          signalRetryDelays.current[signal.postId] = Math.min(delay * 2, 60000);
+          signalRetryTimers.current[signal.postId] = window.setTimeout(() => {
+            delete signalRetryTimers.current[signal.postId];
+            setSignalSyncTick((tick) => tick + 1);
+          }, delay);
         })
         .finally(() => {
           if (pendingSignalSignatures.current[signal.postId] === signature) {
             delete pendingSignalSignatures.current[signal.postId];
           }
+
+          // Re-scan for a newer version that accumulated while in flight.
+          setSignalSyncTick((tick) => tick + 1);
         });
     }
-  }, [apiStatus, hasHydrated, interactionSignals]);
+  }, [apiStatus, hasHydrated, interactionSignals, signalSyncTick]);
 
   useEffect(() => {
     if (!selectedCard || apiStatus !== "connected" || selectedCard.id in evidenceLedgers) {
+      return;
+    }
+
+    // A failed fetch waits for reconnect or an explicit retry; without this
+    // guard a persistent failure would refetch in a hot loop.
+    if (evidenceErrors.has(selectedCard.id)) {
       return;
     }
 
@@ -1009,16 +1086,36 @@ export function App() {
           return;
         }
 
-        setEvidenceLedgers((ledgers) => ({
-          ...ledgers,
-          [postId]: null
-        }));
+        // Do not cache the failure as "no evidence": remember it as an error
+        // so the panel can offer a retry.
+        setEvidenceErrors((errors) => {
+          const next = new Set(errors);
+          next.add(postId);
+          return next;
+        });
       });
 
     return () => {
       isStale = true;
     };
-  }, [apiStatus, evidenceLedgers, selectedCard]);
+  }, [apiStatus, evidenceErrors, evidenceLedgers, selectedCard]);
+
+  // Reconnecting invalidates cached evidence failures so they load fresh.
+  useEffect(() => {
+    if (apiStatus === "connected") {
+      setEvidenceErrors((errors) => (errors.size === 0 ? errors : new Set()));
+    }
+  }, [apiStatus]);
+
+  // A reviewed card is tombstoned out of the feed for the session; when the
+  // server says it is due again, lift the tombstone so it can resurface.
+  useEffect(() => {
+    for (const item of reviewDueItems) {
+      if (locallyRemovedIdsRef.current.has(item.postId)) {
+        unmarkLocallyRemoved(item.postId);
+      }
+    }
+  }, [reviewDueItems]);
 
   useEffect(() => {
     if (!conceptDigest || conceptDigest.cardCount === 0 || apiStatus !== "connected") {
@@ -1190,20 +1287,27 @@ export function App() {
       setApiMessage(t("api.refreshing"));
     }
 
+    // Abort the previous poll batch instead of letting hung requests pile up.
+    refreshAbortRef.current?.abort();
+    const abortController = new AbortController();
+    refreshAbortRef.current = abortController;
+
     const now = new Date().toISOString();
+    const signal = abortController.signal;
 
     try {
       const [timeline, snapshot, queuedJobs, reviewDue, dismissed, notificationsResult, weeklyRecapResult, goalsResult] = await Promise.all([
         apiRequest<ApiTimelineResponse>(
-          `/api/timeline?userId=local-user&now=${encodeURIComponent(now)}`
+          `/api/timeline?userId=local-user&now=${encodeURIComponent(now)}`,
+          { signal }
         ),
-        apiRequest<ApiSnapshot>("/api/snapshot"),
-        apiRequest<ApiCurationJobsResponse>("/api/curation/jobs?status=queued"),
-        apiRequest<ApiReviewDueResponse>(`/api/review/due?now=${encodeURIComponent(now)}`),
-        apiRequest<ApiDismissedPostsResponse>(`/api/dismissed?now=${encodeURIComponent(now)}`),
-        apiRequest<ApiNotificationsResponse>("/api/notifications"),
-        apiRequest<ApiWeeklyRecapResponse>(`/api/recap/weekly?now=${encodeURIComponent(now)}`),
-        apiRequest<ApiGoalsResponse>(`/api/goals?userId=local-user&now=${encodeURIComponent(now)}`)
+        apiRequest<ApiSnapshot>("/api/snapshot", { signal }),
+        apiRequest<ApiCurationJobsResponse>("/api/curation/jobs?status=queued", { signal }),
+        apiRequest<ApiReviewDueResponse>(`/api/review/due?now=${encodeURIComponent(now)}`, { signal }),
+        apiRequest<ApiDismissedPostsResponse>(`/api/dismissed?now=${encodeURIComponent(now)}`, { signal }),
+        apiRequest<ApiNotificationsResponse>("/api/notifications", { signal }),
+        apiRequest<ApiWeeklyRecapResponse>(`/api/recap/weekly?now=${encodeURIComponent(now)}`, { signal }),
+        apiRequest<ApiGoalsResponse>(`/api/goals?userId=local-user&now=${encodeURIComponent(now)}`, { signal })
       ]);
 
       // A newer refresh started while this one was in flight; drop the stale result.
@@ -1237,6 +1341,7 @@ export function App() {
         setPendingCards([]);
       }
 
+      setLibraryPosts(snapshot.posts);
       setSourceImports(timeline.sourceImports);
       setSupplyStatus(timeline.supplyStatus ?? null);
       if (!timeline.supplyStatus?.drought) {
@@ -1267,12 +1372,28 @@ export function App() {
       setApiStatus("connected");
       setApiMessage(t("api.connected"));
     } catch (error) {
-      if (requestId !== refreshSequence.current) {
+      // A superseded poll aborts its own batch; that is not a failure.
+      if (requestId !== refreshSequence.current || isAbortError(error)) {
         return;
       }
 
       setApiStatus("offline");
-      setApiMessage(error instanceof Error ? error.message : t("api.offlineImport"));
+      // Localize the raw transport error ("Failed to fetch") for the status line.
+      setApiMessage(
+        isTransportError(error)
+          ? t("api.transportError")
+          : error instanceof Error
+            ? error.message
+            : t("api.offlineImport")
+      );
+    }
+  }
+
+  // Business-action failures only flip the global status when the transport
+  // itself failed; a 4xx/5xx response proves the server is reachable.
+  function markOfflineIfTransport(error: unknown) {
+    if (isTransportError(error)) {
+      setApiStatus("offline");
     }
   }
 
@@ -1462,7 +1583,7 @@ export function App() {
       setApiStatus("connected");
       setApiMessage(t("api.connected"));
     } catch (error) {
-      setApiStatus("offline");
+      markOfflineIfTransport(error);
       setCandidateMessage(error instanceof Error ? error.message : t("candidate.unable"));
     } finally {
       setIsSavingCandidate(false);
@@ -1476,6 +1597,19 @@ export function App() {
 
     if (!trimmedUrl) {
       setSubscriptionMessage(t("subscription.emptyUrl"));
+      return;
+    }
+
+    // Validate the URL shape locally before hitting the API.
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(trimmedUrl);
+    } catch {
+      setSubscriptionMessage(t("subscription.invalidUrl"));
+      return;
+    }
+    if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+      setSubscriptionMessage(t("subscription.invalidUrl"));
       return;
     }
 
@@ -1496,7 +1630,7 @@ export function App() {
       setApiStatus("connected");
       setApiMessage(t("api.connected"));
     } catch (error) {
-      setApiStatus("offline");
+      markOfflineIfTransport(error);
       setSubscriptionMessage(error instanceof Error ? error.message : t("subscription.error"));
     } finally {
       setIsSavingSubscription(false);
@@ -1517,7 +1651,7 @@ export function App() {
       setApiStatus("connected");
       setApiMessage(t("api.connected"));
     } catch (error) {
-      setApiStatus("offline");
+      markOfflineIfTransport(error);
       setSubscriptionMessage(error instanceof Error ? error.message : t("subscription.error"));
     } finally {
       setUpdatingSubscriptionIds((ids) => ids.filter((value) => value !== id));
@@ -1537,7 +1671,7 @@ export function App() {
       setApiStatus("connected");
       setApiMessage(t("api.connected"));
     } catch (error) {
-      setApiStatus("offline");
+      markOfflineIfTransport(error);
       setSubscriptionMessage(error instanceof Error ? error.message : t("subscription.error"));
     } finally {
       setDeletingSubscriptionIds((ids) => ids.filter((value) => value !== id));
@@ -1571,7 +1705,7 @@ export function App() {
       setApiStatus("connected");
       setApiMessage(t("api.connected"));
     } catch (error) {
-      setApiStatus("offline");
+      markOfflineIfTransport(error);
       setLearningGoalMessage(error instanceof Error ? error.message : t("goals.error.create"));
     } finally {
       setIsSavingLearningGoal(false);
@@ -1590,7 +1724,7 @@ export function App() {
       setApiStatus("connected");
       setApiMessage(t("api.connected"));
     } catch (error) {
-      setApiStatus("offline");
+      markOfflineIfTransport(error);
       setLearningGoalMessage(error instanceof Error ? error.message : t("goals.error.archive"));
     }
   }
@@ -1699,9 +1833,13 @@ export function App() {
       );
       await refreshFromApi({ silent: true, mode: "buffer" });
     } catch (error) {
-      setApiStatus("offline");
-      setApiMessage(error instanceof Error ? error.message : t("api.unavailable"));
-      setCurationMessage(t("curation.failed"));
+      markOfflineIfTransport(error);
+      // Surface the actual failure reason instead of a bare "cannot run".
+      setCurationMessage(
+        error instanceof Error && error.message
+          ? t("curation.failedWithReason", { reason: error.message })
+          : t("curation.failed")
+      );
     } finally {
       curationRunInFlight.current = false;
       setIsRunningCuration(false);
@@ -1740,7 +1878,7 @@ export function App() {
       setApiMessage(t("api.connected"));
       await refreshFromApi({ silent: true, mode: "buffer" });
     } catch (error) {
-      setApiStatus("offline");
+      markOfflineIfTransport(error);
       setSupplyRefillState({
         status: "error",
         message: error instanceof Error ? error.message : t("api.unavailable")
@@ -1751,13 +1889,15 @@ export function App() {
   async function handleAskAi(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!selectedCard || !aiPrompt.trim()) {
+    const draft = selectedCard ? aiPromptByCard[selectedCard.id] ?? "" : "";
+
+    if (!selectedCard || !draft.trim()) {
       return;
     }
 
     const card = selectedCard;
     const chunks = selectedChunks;
-    const question = aiPrompt.trim();
+    const question = draft.trim();
     const askedAt = new Date().toISOString();
     const userMessage: AiMessage = {
       id: `${card.id}-user-${askedAt}`,
@@ -1765,12 +1905,21 @@ export function App() {
       content: question,
       createdAt: askedAt
     };
+    // Reserve the answer slot right under its question so two in-flight
+    // questions on the same card can never interleave their answers.
+    const assistantId = `${card.id}-assistant-${askedAt}`;
+    const placeholderMessage: AiMessage = {
+      id: assistantId,
+      role: "assistant",
+      content: t("agent.answerPending"),
+      createdAt: askedAt
+    };
 
     setAiThreads((threads) => ({
       ...threads,
-      [card.id]: [...(threads[card.id] ?? []), userMessage]
+      [card.id]: [...(threads[card.id] ?? []), userMessage, placeholderMessage]
     }));
-    setAiPrompt("");
+    setAiPromptByCard((drafts) => ({ ...drafts, [card.id]: "" }));
     recordInteraction(card, { askedQuestion: true, openedThread: true, dwellTimeMs: 12000 });
     void syncMemoryForCard(card, "ask", question);
 
@@ -1788,21 +1937,25 @@ export function App() {
     }
 
     const answeredAt = new Date().toISOString();
-    const assistantMessage: AiMessage = {
-      id: `${card.id}-assistant-${answeredAt}`,
-      role: "assistant",
-      content: answerContent,
-      createdAt: answeredAt
-    };
 
     setAiThreads((threads) => ({
       ...threads,
-      [card.id]: [...(threads[card.id] ?? []), assistantMessage]
+      [card.id]: (threads[card.id] ?? []).map((message) =>
+        message.id === assistantId
+          ? { ...message, content: answerContent, createdAt: answeredAt }
+          : message
+      )
     }));
   }
 
   function handleAskThreadBlock(text: string) {
-    setAiPrompt(text.replace(/^\[(?:超出来源|beyond source)\]\s*/i, ""));
+    if (selectedCardId) {
+      const cardId = selectedCardId;
+      setAiPromptByCard((drafts) => ({
+        ...drafts,
+        [cardId]: text.replace(/^\[(?:超出来源|beyond source)\]\s*/i, "")
+      }));
+    }
     requestAnimationFrame(() =>
       document.querySelector<HTMLInputElement>(".x-detail-ask input")?.focus()
     );
@@ -1839,6 +1992,32 @@ export function App() {
 
     setSelectedCardId(null);
     requestAnimationFrame(() => window.scrollTo({ top: returnY, behavior: "auto" }));
+  }
+
+  function handlePromptChange(value: string) {
+    if (!selectedCardId) {
+      return;
+    }
+
+    const cardId = selectedCardId;
+    setAiPromptByCard((drafts) => ({ ...drafts, [cardId]: value }));
+  }
+
+  function handleRetryEvidence() {
+    if (!selectedCardId) {
+      return;
+    }
+
+    const cardId = selectedCardId;
+    setEvidenceErrors((errors) => {
+      if (!errors.has(cardId)) {
+        return errors;
+      }
+
+      const next = new Set(errors);
+      next.delete(cardId);
+      return next;
+    });
   }
 
   function handleOpenConcept(concept: string) {
@@ -2411,19 +2590,24 @@ export function App() {
             cards={allCards}
             chunks={selectedChunks}
             connections={connectionsByCard[selectedCard.id] ?? []}
+            evidenceError={selectedEvidenceFailed}
             evidenceLedger={selectedEvidenceLedger}
             feedback={selectedFeedback}
             graph={linkedGraph}
+            // Remount per card so drafts and in-flight answer UI never leak
+            // from one card into another.
+            key={selectedCard.id}
             messages={selectedThread}
             onAsk={handleAskAi}
             onAskThreadBlock={handleAskThreadBlock}
             onLike={handleLike}
             onOpenCardId={handleOpenCardId}
             onOpenConcept={handleOpenConcept}
-            onPromptChange={setAiPrompt}
+            onPromptChange={handlePromptChange}
             onReply={handleReply}
+            onRetryEvidence={handleRetryEvidence}
             onSave={handleSave}
-            prompt={aiPrompt}
+            prompt={aiPromptByCard[selectedCard.id] ?? ""}
             quoteText={quoteByCard[selectedCard.id]}
             signal={selectedSignal}
             wikilinkCandidates={wikilinkCandidates}
@@ -2544,7 +2728,9 @@ export function App() {
                     ? t("feed.noMatch", { query: searchQuery.trim() })
                     : feedTab === "saved"
                       ? t("feed.savedEmpty")
-                      : t("feed.empty")}
+                      : apiStatus === "offline"
+                        ? t("feed.offline")
+                        : t("feed.empty")}
                 </p>
               ) : (
                 visibleCards.map((card, index) => {
