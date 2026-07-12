@@ -1123,6 +1123,7 @@ export function decodeBackgroundCurationJobRecord(
 
   let originalJobId: string;
   let attempt: number;
+  let materializedAt = record.materializedAt as string | undefined;
   if (version === 2) {
     originalJobId = expectNonEmptyString(record.originalJobId, `${path}.originalJobId`);
     attempt = expectNonNegativeInteger(record.attempt, `${path}.attempt`);
@@ -1144,9 +1145,22 @@ export function decodeBackgroundCurationJobRecord(
         severity: "warning"
       });
     }
+    // v1 history is settled at the migration boundary: the legacy writer applied
+    // terminal results inline (and later cleanups may have pruned their artifacts),
+    // so backfill the marker instead of letting startup replay resurrect them.
+    if (materializedAt === undefined && ["succeeded", "failed", "skipped"].includes(record.status as string)) {
+      materializedAt = (record.completedAt ?? record.updatedAt) as string;
+    }
   }
 
-  return deepClone({ ...record, id, job: { ...job, id: jobId }, originalJobId, attempt } as unknown as BackgroundCurationJobRecord);
+  return deepClone({
+    ...record,
+    id,
+    job: { ...job, id: jobId },
+    originalJobId,
+    attempt,
+    ...(materializedAt !== undefined ? { materializedAt } : {})
+  } as unknown as BackgroundCurationJobRecord);
 }
 
 function parseLegacyRetryLineage(id: string): { originalJobId: string; attempt: number } | undefined {

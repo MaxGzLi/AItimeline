@@ -177,6 +177,17 @@ assert.equal(decodedW4eMainFixture.snapshot.interactionSignals[0].signal.impress
 assert.equal(decodedW4eMainFixture.snapshot.interactionSignals[0].signal.createdAt, decodedW4eMainFixture.snapshot.interactionSignals[0].createdAt, "legacy signal createdAt should inherit owner time");
 assert.equal(decodedW4eMainFixture.snapshot.interactionSignals[0].reviewEventId, "w4e-review-event-1", "W1 idempotency ledger must survive decode");
 assert.equal(decodedW4eQueueFixture.snapshot.records.length, 5, "v1 queue fixture should preserve all supported statuses");
+for (const migratedRecord of decodedW4eQueueFixture.snapshot.records) {
+  if (["succeeded", "failed", "skipped"].includes(migratedRecord.status)) {
+    assert.equal(
+      migratedRecord.materializedAt,
+      migratedRecord.completedAt,
+      `v1 terminal record ${migratedRecord.id} should backfill materializedAt so startup never replays settled history`
+    );
+  } else {
+    assert.equal(migratedRecord.materializedAt, undefined, `v1 active record ${migratedRecord.id} must not be marked materialized`);
+  }
+}
 assert.equal(decodedW4eQueueFixture.snapshot.records.find((record) => record.id === "w4e-root|retry-2")?.originalJobId, "w4e-root", "explicit retry suffix should map to root lineage");
 assert.equal(decodedW4eQueueFixture.snapshot.records.find((record) => record.id === "w4e-root|retry-2")?.attempt, 2, "explicit retry suffix should map attempt");
 assert.ok(decodedW4eQueueFixture.issues.some((issue) => issue.recordId === "deep-read-opaque-fixture-hash" && issue.severity === "warning"), "unproven opaque retry lineage should emit a conservative warning");
