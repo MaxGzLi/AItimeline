@@ -1,6 +1,6 @@
-// 应用数据层:时间线帖子 + 本地互动信号,统一封装 API 调用和 core 复用
-// (createReviewQueue)。时间线、详情、复习三个页面共享这里的状态。
-import { createReviewQueue, type InteractionSignal, type KnowledgeCard, type ReviewItem } from "@aitimeline/core";
+// 应用数据层:时间线帖子 + 本地互动信号,统一封装 API 调用。
+// 时间线、详情、复习三个页面共享这里的状态;复习队列以服务端 /api/review/due 为真源。
+import { type InteractionSignal, type KnowledgeCard } from "@aitimeline/core";
 import {
   createContext,
   useCallback,
@@ -12,10 +12,10 @@ import {
   type ReactNode
 } from "react";
 
-import { checkHealth, fetchTimeline, postNote, postReply, postSignal } from "./api";
-import { createInteractionSignal, toReviewSignals } from "./signals";
+import { checkHealth, fetchReviewDue, fetchTimeline, postNote, postReply, postReviewComplete, postSignal } from "./api";
+import { createInteractionSignal } from "./signals";
 import { useSettings } from "./settings";
-import type { ApiStatus, InteractionSignals } from "./types";
+import type { ApiStatus, InteractionSignals, ReviewDueItem, ReviewGrade } from "./types";
 
 interface StoreValue {
   status: ApiStatus;
@@ -24,13 +24,13 @@ interface StoreValue {
   posts: KnowledgeCard[];
   cardsById: Record<string, KnowledgeCard>;
   signalsByPost: InteractionSignals;
-  reviewQueue: ReviewItem[];
+  reviewDue: ReviewDueItem[];
   refresh: () => Promise<void>;
   toggleLike: (card: KnowledgeCard) => void;
   toggleSave: (card: KnowledgeCard) => void;
   reply: (card: KnowledgeCard, text: string) => Promise<void>;
   addNote: (text: string) => Promise<KnowledgeCard>;
-  markReviewed: (card: KnowledgeCard) => void;
+  completeReview: (postId: string, grade: ReviewGrade) => Promise<void>;
 }
 
 const StoreContext = createContext<StoreValue | null>(null);
@@ -42,8 +42,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [posts, setPosts] = useState<KnowledgeCard[]>([]);
   const [signalsByPost, setSignalsByPost] = useState<InteractionSignals>({});
+  const [reviewDue, setReviewDue] = useState<ReviewDueItem[]>([]);
   const baseUrlRef = useRef(apiBaseUrl);
   baseUrlRef.current = apiBaseUrl;
+  // 与 signalsByPost 同步的镜像:applySignal 需要在 setState 之外同步拿到最新
+  // 信号(React 不保证 updater 何时执行,不能靠 updater 里给外部变量赋值)。
+  const signalsRef = useRef<InteractionSignals>({});
+
+  useEffect(() => {
+    signalsRef.current = signalsByPost;
+  }, [signalsByPost]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -53,6 +61,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     try {
       const timeline = await fetchTimeline(baseUrlRef.current);
       setPosts(timeline.posts);
+
+      try {
+        const due = await fetchReviewDue(baseUrlRef.current);
+        setReviewDue(due.due);
+      } catch {
+        // 复习队列以服务端为真源;拿不到就先空着,时间线不受影响。
+        setReviewDue([]);
+      }
+
       setStatus("connected");
     } catch (err) {
       setStatus("offline");
@@ -70,18 +87,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   // 本地更新一个帖子的信号,再同步给后端;失败时把状态标记为离线但不回滚
   // 本地乐观更新(与 web 端一致:交互先落地,信号异步同步)。
+  // next 在 setState 之外用镜像 ref 同步算出:旧写法在 updater 里给外部变量
+  // 赋值再立即读取,并发渲染下 updater 可能延后执行,信号根本发不出去。
   const applySignal = useCallback((card: KnowledgeCard, patch: Partial<InteractionSignal>) => {
-    let next: InteractionSignal | undefined;
+    const base = signalsRef.current[card.id] ?? createInteractionSignal(card);
+    const next: InteractionSignal = { ...base, ...patch, impression: true, createdAt: new Date().toISOString() };
 
-    setSignalsByPost((current) => {
-      const base = current[card.id] ?? createInteractionSignal(card);
-      next = { ...base, ...patch, impression: true, createdAt: new Date().toISOString() };
-      return { ...current, [card.id]: next };
-    });
-
-    if (next) {
-      postSignal(baseUrlRef.current, next).catch(() => setStatus("offline"));
-    }
+    signalsRef.current = { ...signalsRef.current, [card.id]: next };
+    setSignalsByPost(signalsRef.current);
+    postSignal(baseUrlRef.current, next).catch(() => setStatus("offline"));
   }, []);
 
   const toggleLike = useCallback(
@@ -100,11 +114,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     [applySignal, signalsByPost]
   );
 
-  const markReviewed = useCallback(
-    (card: KnowledgeCard) => {
-      applySignal(card, { reviewed: true, skippedQuickly: false });
+  // 完成一次复习:走服务端三档评分接口推进间隔;失败时抛出让复习页重试,
+  // 不本地假报完成。复习事件以服务端为真源,这里不再另发 reviewed 信号(与 web 一致)。
+  const completeReview = useCallback(
+    async (postId: string, grade: ReviewGrade) => {
+      await postReviewComplete(baseUrlRef.current, postId, grade, `${postId}-${Date.now()}`);
+      setReviewDue((current) => current.filter((item) => item.postId !== postId));
     },
-    [applySignal]
+    []
   );
 
   const upsertPost = useCallback((post: KnowledgeCard) => {
@@ -140,11 +157,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return byId;
   }, [posts]);
 
-  const reviewQueue = useMemo(
-    () => createReviewQueue(posts, toReviewSignals(signalsByPost)),
-    [posts, signalsByPost]
-  );
-
   const value = useMemo<StoreValue>(
     () => ({
       status,
@@ -153,13 +165,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       posts,
       cardsById,
       signalsByPost,
-      reviewQueue,
+      reviewDue,
       refresh,
       toggleLike,
       toggleSave,
       reply,
       addNote,
-      markReviewed
+      completeReview
     }),
     [
       status,
@@ -168,13 +180,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       posts,
       cardsById,
       signalsByPost,
-      reviewQueue,
+      reviewDue,
       refresh,
       toggleLike,
       toggleSave,
       reply,
       addNote,
-      markReviewed
+      completeReview
     ]
   );
 
