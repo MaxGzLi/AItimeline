@@ -2914,6 +2914,405 @@ try {
     }
   }
 
+  const previousBacklogBudget = process.env.AITIMELINE_DAILY_AUTO_JOB_BUDGET;
+  process.env.AITIMELINE_DAILY_AUTO_JOB_BUDGET = "3";
+
+  const backlogDataPath = join(tempDir, "channel-backlog.json");
+  const backlogCurationPath = join(tempDir, "channel-backlog-curation.json");
+  const backlogChannelId = "UCbacklogSmokeChannel0001";
+  const backlogFeedUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${backlogChannelId}`;
+  const backlogUploadsUrl = `https://www.youtube.com/playlist?list=UU${backlogChannelId.slice(2)}`;
+  const backlogLegacyFeedUrl = "https://feeds.local/legacy-empty.xml";
+  const backlogVideoTitles = {
+    vidaaaaaaaa: "Backlog video one",
+    vidbbbbbbbb: "Backlog video two",
+    vidcccccccc: "Backlog video three",
+    viddddddddd: "Backlog video four",
+    videeeeeeee: "Backlog video five"
+  };
+  const backlogNoCaptionsVideoId = "vidaaaaaaaa";
+  const backlogLockup = (videoId) => ({
+    lockupViewModel: {
+      contentId: videoId,
+      contentType: "LOCKUP_CONTENT_TYPE_VIDEO",
+      metadata: { lockupMetadataViewModel: { title: { content: backlogVideoTitles[videoId] } } }
+    }
+  });
+  const backlogContinuationItem = {
+    continuationItemViewModel: {
+      trigger: "CONTINUATION_TRIGGER_ON_ITEM_SHOWN",
+      continuationCommand: {
+        innertubeCommand: {
+          continuationCommand: { token: "backlog-page-2", request: "CONTINUATION_REQUEST_TYPE_BROWSE" }
+        }
+      }
+    }
+  };
+  const buildBacklogUploadsPage = (newestFirstVideoIds) =>
+    `<html><body><script>var ytInitialData = ${JSON.stringify({
+      contents: { items: [...newestFirstVideoIds.map(backlogLockup), backlogContinuationItem] }
+    })};</script><script>ytcfg.set(${JSON.stringify({
+      INNERTUBE_API_KEY: "backlog-innertube-key",
+      INNERTUBE_CONTEXT_CLIENT_VERSION: "2.20260701"
+    })});</script></body></html>`;
+  const backlogUploadsPage2 = {
+    onResponseReceivedActions: [
+      {
+        appendContinuationItemsAction: {
+          continuationItems: [backlogLockup("vidbbbbbbbb"), backlogLockup("vidaaaaaaaa")]
+        }
+      }
+    ]
+  };
+  const backlogTranscriptSentences = [
+    "Options pricing starts from the idea that a fair price removes free lunches from the market.",
+    "A binomial tree models the underlying asset as a sequence of up and down moves with known probabilities.",
+    "With an up factor of 1.1 and a down factor of 0.9, a two step tree already brackets most near term outcomes.",
+    "Risk neutral valuation lets us discount expected payoffs at the risk free rate instead of guessing risk premiums.",
+    "If the risk free rate is 5 percent per year, a payoff of 100 dollars in one year is worth about 95.24 dollars today.",
+    "The Black Scholes formula emerges as the continuous limit of the binomial model when steps shrink to zero.",
+    "Because the hedge is rebalanced continuously, the model treats volatility as the only unknown input.",
+    "Delta measures how the option price responds to small moves in the underlying asset price.",
+    "An at the money call has a delta near 0.5, so hedging 100 calls takes about 50 shares of stock.",
+    "Hedging a short option with delta shares turns the position into a locally risk free portfolio.",
+    "Gamma tells you how fast delta drifts, which is why hedges decay and need rebalancing every day.",
+    "Theta is the rent you pay for gamma, and for short dated options it can consume 2 or 3 percent of value per day.",
+    "Implied volatility inverts the pricing formula to recover the volatility the market is quoting.",
+    "When implied volatility sits at 20 percent but realized volatility prints 12 percent, option sellers collect the spread.",
+    "Volatility smiles show that traders price tail risk beyond what a single lognormal model captures.",
+    "A 25 delta put often trades 4 or 5 volatility points above the at the money strike because crashes cluster.",
+    "The volatility surface therefore maps strike and expiry to a price of risk, not to a forecast of variance.",
+    "Monte Carlo pricing simulates thousands of paths and averages the discounted payoff across each path.",
+    "With 100000 simulated paths the standard error of a vanilla option price falls below one tenth of a percent.",
+    "Variance reduction techniques such as antithetic paths cut the simulation budget roughly in half.",
+    "American options add an early exercise decision, so the tree compares continuation value to intrinsic value at every node.",
+    "Dividends lower the forward price, which is why deep in the money calls get exercised the day before the ex date.",
+    "Put call parity ties calls, puts, and forwards together so any two of the three prices imply the third.",
+    "If parity drifts by more than transaction costs, arbitrage desks trade the basis until the gap closes again."
+  ];
+  const backlogTimedText = JSON.stringify({
+    events: backlogTranscriptSentences.map((sentence, index) => ({
+      tStartMs: index * 6000,
+      dDurationMs: 6000,
+      segs: [{ utf8: sentence }]
+    }))
+  });
+  const backlogFeedFixture = `
+    <feed xmlns="http://www.w3.org/2005/Atom">
+      <title>Backlog Smoke Channel</title>
+      <link rel="alternate" href="https://www.youtube.com/channel/${backlogChannelId}"/>
+      <entry>
+        <title>Backlog video four</title>
+        <link rel="alternate" href="https://www.youtube.com/watch?v=viddddddddd"/>
+        <published>2026-07-10T00:00:00+00:00</published>
+      </entry>
+    </feed>
+  `;
+  const backlogEmptyLegacyFeed = `
+    <rss version="2.0"><channel><title>Legacy feed</title><link>https://feeds.local/</link></channel></rss>
+  `;
+  let backlogFeedShouldFail = false;
+  let backlogUploadsPage1 = buildBacklogUploadsPage(["viddddddddd", "vidcccccccc"]);
+  let backlogUploadsFetchCount = 0;
+  const backlogPlayerResponse = (videoId) => ({
+    videoDetails: {
+      videoId,
+      title: backlogVideoTitles[videoId] ?? `Video ${videoId}`,
+      author: "Backlog Smoke Channel",
+      lengthSeconds: "480"
+    },
+    ...(videoId === backlogNoCaptionsVideoId
+      ? {}
+      : {
+          captions: {
+            playerCaptionsTracklistRenderer: {
+              captionTracks: [
+                { baseUrl: `https://captions.local/${videoId}`, languageCode: "en", kind: "standard" }
+              ]
+            }
+          }
+        })
+  });
+  const backlogFetch = async (input, init) => {
+    const url = getFetchUrl(input);
+
+    if (url === backlogFeedUrl) {
+      if (backlogFeedShouldFail) {
+        return new Response("boom", { status: 500 });
+      }
+      return new Response(backlogFeedFixture, { status: 200, headers: { "content-type": "application/atom+xml" } });
+    }
+
+    if (url === backlogLegacyFeedUrl) {
+      return new Response(backlogEmptyLegacyFeed, { status: 200, headers: { "content-type": "application/rss+xml" } });
+    }
+
+    if (url === backlogUploadsUrl) {
+      backlogUploadsFetchCount += 1;
+      return new Response(backlogUploadsPage1, { status: 200, headers: { "content-type": "text/html" } });
+    }
+
+    if (url.startsWith("https://www.youtube.com/youtubei/v1/browse")) {
+      return Response.json(backlogUploadsPage2);
+    }
+
+    if (url.startsWith("https://www.youtube.com/youtubei/v1/player")) {
+      const requestBody = JSON.parse(init?.body ?? "{}");
+      return Response.json(backlogPlayerResponse(requestBody.videoId));
+    }
+
+    if (url.startsWith("https://captions.local/")) {
+      return new Response(backlogTimedText, { status: 200, headers: { "content-type": "application/json" } });
+    }
+
+    throw new Error(`Unexpected backlog fetch: ${url}`);
+  };
+
+  await writeFile(
+    backlogDataPath,
+    JSON.stringify({
+      version: 1,
+      updatedAt: "2026-07-19T00:00:00.000Z",
+      subscriptions: [
+        {
+          id: "legacy-rss-sub",
+          kind: "rss",
+          feedUrl: backlogLegacyFeedUrl,
+          title: "Legacy feed",
+          filterMode: "relevant",
+          createdAt: "2026-07-01T00:00:00.000Z"
+        }
+      ],
+      sourceCandidates: [
+        {
+          ...makeSourceCandidateRecord({
+            id: "legacy-imported-candidate",
+            url: "https://sources.local/legacy-imported",
+            score: 0.9,
+            status: "imported"
+          }),
+          importedAt: "2026-07-02T00:00:00.000Z"
+        }
+      ],
+      topicStates: [
+        {
+          topicId: "Options Pricing",
+          interestScore: 0.8,
+          fatigueScore: 0.1,
+          comprehensionScore: 0.7,
+          updatedAt: "2026-07-19T00:00:00.000Z"
+        },
+        {
+          topicId: "Volatility",
+          interestScore: 0.75,
+          fatigueScore: 0.1,
+          comprehensionScore: 0.6,
+          updatedAt: "2026-07-19T00:00:00.000Z"
+        }
+      ],
+      userSettings: { contentLanguage: "en" }
+    })
+  );
+
+  const backlogServer = createApiServer({
+    dataPath: backlogDataPath,
+    curationDataPath: backlogCurationPath,
+    mediaRootDir,
+    enableFixtures: true,
+    searchProvider: fakeSearchProvider,
+    feedFetch: backlogFetch,
+    guardedFetch: backlogFetch
+  });
+
+  try {
+    const backlogT0 = "2026-07-20T02:00:00.000Z";
+    const backlogT1 = "2026-07-21T02:00:00.000Z";
+    const backlogT2 = "2026-07-21T09:30:00.000Z";
+
+    const legacyListed = await requestJsonFromServer(backlogServer, "/api/subscriptions");
+
+    assert.equal(
+      legacyListed.records.some((record) => record.id === "legacy-rss-sub" && record.backlog === undefined),
+      true,
+      "pre-backlog subscriptions should load unchanged from legacy snapshots"
+    );
+
+    const legacyCandidates = await requestJsonFromServer(backlogServer, "/api/source-candidates");
+
+    assert.equal(
+      legacyCandidates.records.some((record) => record.id === "legacy-imported-candidate"),
+      true,
+      "legacy source candidates without backlog fields should survive normalization"
+    );
+
+    const createdChannel = await requestJsonFromServer(backlogServer, "/api/subscriptions", {
+      method: "POST",
+      body: { url: backlogFeedUrl }
+    });
+    const channelSubscriptionId = createdChannel.record.id;
+
+    assert.equal(createdChannel.record.kind, "youtube_channel", "channel subscription should normalize to youtube_channel");
+
+    const rejectedCatalog = await dispatchToServer(backlogServer, `${baseUrl}/api/subscriptions/legacy-rss-sub/backlog`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ now: backlogT0 })
+    });
+
+    assert.equal(rejectedCatalog.status, 400, "backlog cataloging should reject non-YouTube subscriptions");
+
+    const cataloged = await requestJsonFromServer(backlogServer, `/api/subscriptions/${channelSubscriptionId}/backlog`, {
+      method: "POST",
+      body: { now: backlogT0 }
+    });
+
+    assert.equal(cataloged.created, 4, "backlog cataloging should store one candidate per uploads video");
+    assert.equal(cataloged.videoCount, 4, "backlog cataloging should count the full uploads playlist");
+    assert.equal(cataloged.record.backlog?.videoCount, 4, "subscription record should keep the backlog state");
+
+    const catalogView = await requestJsonFromServer(backlogServer, `/api/subscriptions/${channelSubscriptionId}/backlog`);
+
+    assert.deepEqual(
+      catalogView.entries.map((entry) => entry.order),
+      [0, 1, 2, 3],
+      "backlog catalog should order videos oldest first"
+    );
+    assert.equal(catalogView.entries[0].title, "Backlog video one", "oldest uploads video should sit at order 0");
+    assert.equal(catalogView.summary.pending, 4, "all cataloged videos should start pending");
+
+    const recataloged = await requestJsonFromServer(backlogServer, `/api/subscriptions/${channelSubscriptionId}/backlog`, {
+      method: "POST",
+      body: { now: backlogT0 }
+    });
+
+    assert.equal(recataloged.created, 0, "re-cataloging the same channel should be idempotent");
+
+    const refillDuringBacklog = await requestJsonFromServer(backlogServer, "/api/supply/refill", {
+      method: "POST",
+      body: { now: backlogT0 }
+    });
+
+    assert.equal(
+      refillDuringBacklog.queued,
+      0,
+      "drought refill must not grab backlog candidates away from their paced digest lane"
+    );
+
+    const prioritizeTarget = catalogView.entries.find((entry) => entry.order === 2);
+
+    await requestJsonFromServer(backlogServer, "/api/source-candidates/prioritize", {
+      method: "POST",
+      body: { id: prioritizeTarget.candidateId }
+    });
+
+    const firstDigest = await requestJsonFromServer(
+      backlogServer,
+      `/api/subscriptions/${channelSubscriptionId}/backlog/digest`,
+      { method: "POST", body: { now: backlogT0 } }
+    );
+
+    assert.equal(firstDigest.queued, 3, "manual digest should queue up to the shared daily budget");
+    assert.equal(firstDigest.skipped, 1, "manual digest should report budget-skipped backlog candidates");
+    assert.equal(firstDigest.budgetRemaining, 0, "manual digest should consume the shared daily auto budget");
+
+    const queuedBacklogJobs = (await requestJsonFromServer(backlogServer, "/api/curation/jobs?status=queued")).jobs
+      .filter((record) => record.job.id.startsWith("subscription-backlog-import-"));
+
+    assert.equal(queuedBacklogJobs.length, 3, "manual digest should enqueue import jobs for accepted candidates");
+    assert.equal(
+      queuedBacklogJobs[0].job.sourceCandidate.source.url.includes("vidcccccccc"),
+      true,
+      "prioritized backlog videos should enter the batch first"
+    );
+
+    const exhaustedDigest = await requestJsonFromServer(
+      backlogServer,
+      `/api/subscriptions/${channelSubscriptionId}/backlog/digest`,
+      { method: "POST", body: { now: backlogT0 } }
+    );
+
+    assert.equal(exhaustedDigest.queued, 0, "digest with an exhausted budget should queue nothing");
+    assert.equal(exhaustedDigest.skipped, 1, "digest with an exhausted budget should report the skipped candidate");
+
+    await requestJsonFromServer(backlogServer, "/api/curation/run", {
+      method: "POST",
+      body: { now: "2026-07-20T02:05:00.000Z", kinds: ["import_source"], limit: 10 }
+    });
+
+    const afterFirstRun = await requestJsonFromServer(backlogServer, `/api/subscriptions/${channelSubscriptionId}/backlog`);
+
+    assert.equal(afterFirstRun.summary.imported, 2, "captioned backlog videos should import into cards");
+    assert.equal(afterFirstRun.summary.skipped, 1, "the captionless backlog video should be marked skipped");
+    assert.equal(afterFirstRun.summary.pending, 1, "budget-deferred backlog video should stay pending");
+
+    const skippedRecords = await requestJsonFromServer(backlogServer, "/api/source-candidates?status=skipped");
+
+    assert.equal(skippedRecords.records.length, 1, "captionless import should downgrade the candidate to skipped");
+    assert.equal(
+      skippedRecords.records[0].rejectionReasons.includes("Source has no usable transcript."),
+      true,
+      "skipped candidates should carry the transcript-unavailable reason"
+    );
+
+    const backlogSnapshot = await requestJsonFromServer(backlogServer, "/api/snapshot");
+    const backlogPosts = backlogSnapshot.posts.filter((post) =>
+      post.sources?.some((source) => source.url?.includes("youtube.com/watch"))
+    );
+
+    assert.equal(backlogPosts.length > 0, true, "backlog imports should materialize timeline cards with YouTube sources");
+
+    const nextDayDigest = await requestJsonFromServer(
+      backlogServer,
+      `/api/subscriptions/${channelSubscriptionId}/backlog/digest`,
+      { method: "POST", body: { now: backlogT1 } }
+    );
+
+    assert.equal(nextDayDigest.queued, 1, "the next day should queue the remaining pending video only");
+
+    await requestJsonFromServer(backlogServer, "/api/curation/run", {
+      method: "POST",
+      body: { now: "2026-07-21T02:05:00.000Z", kinds: ["import_source"], limit: 10 }
+    });
+
+    const afterSecondRun = await requestJsonFromServer(backlogServer, `/api/subscriptions/${channelSubscriptionId}/backlog`);
+
+    assert.equal(afterSecondRun.summary.imported, 3, "the deferred backlog video should import on the next day");
+    assert.equal(afterSecondRun.summary.pending, 0, "no backlog videos should stay pending once digested");
+    assert.equal(afterSecondRun.summary.skipped, 1, "skipped videos must not be retried by later digests");
+
+    backlogFeedShouldFail = true;
+    backlogUploadsPage1 = buildBacklogUploadsPage(["videeeeeeee", "viddddddddd", "vidcccccccc"]);
+    const uploadsFetchesBeforeFallback = backlogUploadsFetchCount;
+
+    await requestJsonFromServer(backlogServer, "/api/curation/run", {
+      method: "POST",
+      body: { now: backlogT2, kinds: [] }
+    });
+
+    const fallbackSnapshot = await requestJsonFromServer(backlogServer, "/api/snapshot");
+    const fallbackSubscription = fallbackSnapshot.subscriptions.find((record) => record.id === channelSubscriptionId);
+    const fallbackCandidate = fallbackSnapshot.sourceCandidates.find((record) =>
+      record.candidate.source.url.includes("videeeeeeee")
+    );
+
+    assert.equal(
+      backlogUploadsFetchCount,
+      uploadsFetchesBeforeFallback + 1,
+      "a failing YouTube feed should fall back to the uploads playlist page"
+    );
+    assert.equal(fallbackSubscription.lastError, undefined, "a successful uploads fallback should clear lastError");
+    assert.equal(fallbackSubscription.lastPolledAt, backlogT2, "the uploads fallback should still advance lastPolledAt");
+    assert.equal(Boolean(fallbackCandidate), true, "new videos found through the uploads fallback should become candidates");
+    assert.equal(fallbackCandidate.status, "pending", "fallback-discovered videos should wait as pending candidates");
+  } finally {
+    await closeServer(backlogServer);
+    if (previousBacklogBudget === undefined) {
+      delete process.env.AITIMELINE_DAILY_AUTO_JOB_BUDGET;
+    } else {
+      process.env.AITIMELINE_DAILY_AUTO_JOB_BUDGET = previousBacklogBudget;
+    }
+  }
+
   const supplyRecoveredDataPath = join(tempDir, "supply-recovered.json");
   const supplyRecoveredCurationPath = join(tempDir, "supply-recovered-curation.json");
   await writeFile(
