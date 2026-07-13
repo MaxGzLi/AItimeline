@@ -807,6 +807,12 @@ export interface DailyAutoJobBudgetRecord {
   updatedAt: string;
 }
 
+export interface SubscriptionBacklogState {
+  catalogedAt: string;
+  videoCount: number;
+  truncated?: boolean;
+}
+
 export interface SubscriptionRecord {
   id: string;
   kind: SubscriptionKind;
@@ -818,6 +824,7 @@ export interface SubscriptionRecord {
   lastPolledAt?: string;
   lastItemPublishedAt?: string;
   lastError?: string;
+  backlog?: SubscriptionBacklogState;
 }
 
 export interface LearningGoalRecord {
