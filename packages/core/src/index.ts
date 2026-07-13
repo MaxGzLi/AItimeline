@@ -45,6 +45,7 @@ export * from "./source/sourceRegistry.js";
 export * from "./storage/persistenceStore.js";
 export * from "./storage/revisionedStorage.js";
 export * from "./storage/runtimeDecoder.js";
+export * from "./subscriptions/channelUploads.js";
 export * from "./subscriptions/feedParser.js";
 export * from "./text/mathDelimiters.js";
 export * from "./time/calendarKeys.js";
