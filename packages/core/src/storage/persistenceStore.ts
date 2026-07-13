@@ -651,7 +651,7 @@ function decodeSnapshotOwnerRecord(
     const intakeKind = record.intakeKind === undefined && version === 1 ? "user_paste" : record.intakeKind;
     expectEnum(
       status,
-      ["pending", "queued", "imported", "dismissed", "rejected_source", "unreachable"],
+      ["pending", "queued", "imported", "dismissed", "rejected_source", "unreachable", "skipped"],
       `${path}.status`
     );
     expectEnum(
@@ -708,9 +708,9 @@ function decodeThreadCitation(value: unknown, path: string): unknown {
   return deepClone(citation);
 }
 
-const dateKeys = new Set(["createdAt", "updatedAt", "startedAt", "completedAt", "runAfter", "releaseAt", "generatedAt", "evaluatedAt", "decidedAt", "dismissedAt", "dueAt", "lastReviewedAt", "readAt", "importedAt", "rejectedAt", "lastQueuedAt", "cooldownUntil", "achievedAt", "publishedAt"]);
+const dateKeys = new Set(["createdAt", "updatedAt", "startedAt", "completedAt", "runAfter", "releaseAt", "generatedAt", "evaluatedAt", "decidedAt", "dismissedAt", "dueAt", "lastReviewedAt", "readAt", "importedAt", "rejectedAt", "lastQueuedAt", "cooldownUntil", "achievedAt", "publishedAt", "prioritizedAt", "catalogedAt"]);
 const finiteNumberKeys = new Set(["priority", "score", "weight", "similarity", "interestScore", "fatigueScore", "comprehensionScore", "signalStrength", "dwellTimeMs", "relevanceScore", "noveltyScore", "qualityScore", "estimatedReadMinutes", "durationSeconds", "overlapScore"]);
-const integerKeys = new Set(["attempts", "attempt", "version", "contentLength", "used", "limit", "discarded", "intervalDays", "dueInDays", "cardCount", "reviewCount"]);
+const integerKeys = new Set(["attempts", "attempt", "version", "contentLength", "used", "limit", "discarded", "intervalDays", "dueInDays", "cardCount", "reviewCount", "backlogOrder", "videoCount"]);
 
 function validateKnownTree(value: unknown, path: string): void {
   if (Array.isArray(value)) {
