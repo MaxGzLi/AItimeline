@@ -66,7 +66,7 @@ import { GraphView } from "./views/GraphView";
 import { NotificationsView } from "./views/NotificationsView";
 import { ReviewView, type ReviewQueueEntry } from "./views/ReviewView";
 import { SettingsView } from "./views/SettingsView";
-import { ApiHttpError, apiBaseUrl, apiRequest, isAbortError, isTransportError, isYouTubeUrl, sampleSourceUrl } from "./lib/api";
+import { ApiHttpError, apiBaseUrl, apiRequest, isAbortError, isTransportError, isYouTubeChannelUrl, isYouTubeUrl, sampleSourceUrl } from "./lib/api";
 import { buildGroundedAnswer, formatAskAnswer, getTopicId, scrollMotion, slugConcept } from "./lib/format";
 import { normalizeLanguage, setI18nLanguage, t, type Language } from "./lib/i18n";
 import { buildCardNeighborhoodGraph } from "./lib/localGraph";
@@ -122,8 +122,10 @@ import type {
   MemoryAction,
   NoteApiResponse,
   ReviewDueItem,
+  ApiBacklogDigestResponse,
   ReviewGrade,
   SourceCandidateRecord,
+  SubscriptionBacklogView,
   SupplyStatus,
   SubscriptionRecord,
   TimelineCard
@@ -332,6 +334,9 @@ export function App() {
   const [isSavingLearningGoal, setIsSavingLearningGoal] = useState(false);
   const [updatingSubscriptionIds, setUpdatingSubscriptionIds] = useState<string[]>([]);
   const [deletingSubscriptionIds, setDeletingSubscriptionIds] = useState<string[]>([]);
+  const [backlogViews, setBacklogViews] = useState<Record<string, SubscriptionBacklogView>>({});
+  const [expandedBacklogIds, setExpandedBacklogIds] = useState<string[]>([]);
+  const [backlogBusyIds, setBacklogBusyIds] = useState<string[]>([]);
   const [isRunningCuration, setIsRunningCuration] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [hasHydrated, setHasHydrated] = useState(false);
@@ -1527,6 +1532,16 @@ export function App() {
       return;
     }
 
+    // A channel link cannot become a single video card; hand it to the
+    // subscription flow instead of letting the import endpoint reject it.
+    if (isYouTubeChannelUrl(trimmedUrl)) {
+      setImportError(t("import.error.channelUrl"));
+      setSubscriptionUrl(trimmedUrl);
+      setSourceUrl("");
+      openAgentSection("subscriptions");
+      return;
+    }
+
     setIsImporting(true);
     setImportError(null);
 
@@ -1629,6 +1644,9 @@ export function App() {
       setSubscriptionMessage(t("subscription.added", { title: result.record.title }));
       setApiStatus("connected");
       setApiMessage(t("api.connected"));
+      // Freshly added feeds should not wait for other queued work to wake
+      // the auto scout; poll them right away.
+      void runCuration("auto");
     } catch (error) {
       markOfflineIfTransport(error);
       setSubscriptionMessage(error instanceof Error ? error.message : t("subscription.error"));
@@ -1675,6 +1693,89 @@ export function App() {
       setSubscriptionMessage(error instanceof Error ? error.message : t("subscription.error"));
     } finally {
       setDeletingSubscriptionIds((ids) => ids.filter((value) => value !== id));
+    }
+  }
+
+  async function refreshBacklogView(id: string) {
+    const view = await apiRequest<SubscriptionBacklogView>(`/api/subscriptions/${encodeURIComponent(id)}/backlog`);
+
+    setBacklogViews((views) => ({ ...views, [id]: view }));
+  }
+
+  function markBacklogBusy(id: string, busy: boolean) {
+    setBacklogBusyIds((ids) => (busy ? Array.from(new Set([...ids, id])) : ids.filter((value) => value !== id)));
+  }
+
+  async function handleCatalogBacklog(id: string) {
+    markBacklogBusy(id, true);
+
+    try {
+      const result = await apiRequest<{ record: SubscriptionRecord; created: number; videoCount: number; truncated: boolean }>(
+        `/api/subscriptions/${encodeURIComponent(id)}/backlog`,
+        { method: "POST", body: {} }
+      );
+
+      setSubscriptions((records) => upsertById(records, [result.record]));
+      setSubscriptionMessage(
+        t("subscription.backlog.cataloged", { count: result.videoCount }) +
+          (result.truncated ? ` ${t("subscription.backlog.truncated")}` : "")
+      );
+      setExpandedBacklogIds((ids) => Array.from(new Set([...ids, id])));
+      await refreshBacklogView(id);
+    } catch (error) {
+      markOfflineIfTransport(error);
+      setSubscriptionMessage(error instanceof Error ? error.message : t("subscription.backlog.error"));
+    } finally {
+      markBacklogBusy(id, false);
+    }
+  }
+
+  async function handleDigestBacklog(id: string) {
+    markBacklogBusy(id, true);
+
+    try {
+      const result = await apiRequest<ApiBacklogDigestResponse>(
+        `/api/subscriptions/${encodeURIComponent(id)}/backlog/digest`,
+        { method: "POST", body: {} }
+      );
+
+      setSubscriptionMessage(
+        result.queued > 0
+          ? t("subscription.backlog.digested", { count: result.queued })
+          : t("subscription.backlog.exhausted")
+      );
+      await refreshBacklogView(id);
+    } catch (error) {
+      markOfflineIfTransport(error);
+      setSubscriptionMessage(error instanceof Error ? error.message : t("subscription.backlog.error"));
+    } finally {
+      markBacklogBusy(id, false);
+    }
+  }
+
+  function handleToggleBacklog(id: string) {
+    const isExpanded = expandedBacklogIds.includes(id);
+
+    setExpandedBacklogIds((ids) => (isExpanded ? ids.filter((value) => value !== id) : [...ids, id]));
+
+    if (!isExpanded && !backlogViews[id]) {
+      refreshBacklogView(id).catch((error) => {
+        markOfflineIfTransport(error);
+        setSubscriptionMessage(error instanceof Error ? error.message : t("subscription.backlog.error"));
+      });
+    }
+  }
+
+  async function handlePrioritizeBacklogEntry(subscriptionId: string, candidateId: string) {
+    try {
+      await apiRequest("/api/source-candidates/prioritize", {
+        method: "POST",
+        body: { id: candidateId }
+      });
+      await refreshBacklogView(subscriptionId);
+    } catch (error) {
+      markOfflineIfTransport(error);
+      setSubscriptionMessage(error instanceof Error ? error.message : t("subscription.backlog.error"));
     }
   }
 
@@ -2879,9 +2980,22 @@ export function App() {
             onAutoScoutChange={setAutoScoutEnabled}
             onCandidateConceptChange={setCandidateConcept}
             onCandidateUrlChange={setCandidateUrl}
+            backlogBusyIds={backlogBusyIds}
+            backlogViews={backlogViews}
+            expandedBacklogIds={expandedBacklogIds}
+            onCatalogBacklog={(id) => {
+              void handleCatalogBacklog(id);
+            }}
             onDeleteSubscription={(id) => {
               void handleDeleteSubscription(id);
             }}
+            onDigestBacklog={(id) => {
+              void handleDigestBacklog(id);
+            }}
+            onPrioritizeBacklogEntry={(subscriptionId, candidateId) => {
+              void handlePrioritizeBacklogEntry(subscriptionId, candidateId);
+            }}
+            onToggleBacklog={handleToggleBacklog}
             onImportSubmit={handleImport}
             onRunCuration={handleRunCuration}
             onSaveCandidate={handleSaveCandidate}

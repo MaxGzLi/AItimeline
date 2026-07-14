@@ -101,8 +101,7 @@ export async function fetchYouTubeTranscript(
   }
 
   const createdAt = options.createdAt ?? new Date().toISOString();
-  const watchHtml = await fetchText(fetchImpl, buildWatchUrl(videoId));
-  const playerResponse = extractPlayerResponse(watchHtml);
+  const playerResponse = await fetchPlayerResponse(fetchImpl, videoId);
   const track = selectCaptionTrack(
     playerResponse.captions?.playerCaptionsTracklistRenderer?.captionTracks ?? [],
     options.languagePreferences ?? defaultLanguagePreferences
@@ -191,6 +190,43 @@ async function fetchText(fetchImpl: typeof fetch, url: string): Promise<string> 
   }
 
   return response.text();
+}
+
+const innertubePlayerUrl = "https://www.youtube.com/youtubei/v1/player?prettyPrint=false";
+const innertubeAndroidClient = {
+  clientName: "ANDROID",
+  clientVersion: "20.10.38",
+  androidSdkVersion: 30,
+  hl: "en"
+};
+const innertubeAndroidUserAgent = "com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip";
+
+// The public watch page now hands out caption URLs that return empty bodies
+// unless a proof-of-trust token is attached; the InnerTube ANDROID client
+// still returns directly fetchable ones, so it goes first and the watch-page
+// scrape stays as the fallback.
+async function fetchPlayerResponse(fetchImpl: typeof fetch, videoId: string): Promise<YouTubePlayerResponse> {
+  try {
+    const response = await fetchImpl(innertubePlayerUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json", "user-agent": innertubeAndroidUserAgent },
+      body: JSON.stringify({ context: { client: innertubeAndroidClient }, videoId })
+    });
+
+    if (response.ok) {
+      const playerResponse = (await response.json()) as YouTubePlayerResponse;
+
+      if (playerResponse && typeof playerResponse === "object") {
+        return playerResponse;
+      }
+    }
+  } catch {
+    // Fall through to the watch-page scrape below.
+  }
+
+  const watchHtml = await fetchText(fetchImpl, buildWatchUrl(videoId));
+
+  return extractPlayerResponse(watchHtml);
 }
 
 function buildWatchUrl(videoId: string): string {

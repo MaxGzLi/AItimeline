@@ -23,6 +23,7 @@ import type {
   MergedSourceRecord,
   ReviewState,
   SubscriptionFilterMode,
+  SubscriptionBacklogState,
   SubscriptionKind,
   SubscriptionRecord,
   SourceImport,
@@ -110,7 +111,8 @@ export type SourceCandidateRecordStatus =
   | "imported"
   | "dismissed"
   | "rejected_source"
-  | "unreachable";
+  | "unreachable"
+  | "skipped";
 
 export type SourceCandidateIntakeKind = "user_paste" | "browser_share" | "agent_discovery" | "manual" | "subscription";
 
@@ -168,6 +170,9 @@ export interface SourceCandidateRecord {
   importedAt?: string;
   dismissedAt?: string;
   rejectedAt?: string;
+  subscriptionId?: string;
+  backlogOrder?: number;
+  prioritizedAt?: string;
 }
 
 export interface AITimelinePersistenceSnapshot {
@@ -646,7 +651,7 @@ function decodeSnapshotOwnerRecord(
     const intakeKind = record.intakeKind === undefined && version === 1 ? "user_paste" : record.intakeKind;
     expectEnum(
       status,
-      ["pending", "queued", "imported", "dismissed", "rejected_source", "unreachable"],
+      ["pending", "queued", "imported", "dismissed", "rejected_source", "unreachable", "skipped"],
       `${path}.status`
     );
     expectEnum(
@@ -703,9 +708,9 @@ function decodeThreadCitation(value: unknown, path: string): unknown {
   return deepClone(citation);
 }
 
-const dateKeys = new Set(["createdAt", "updatedAt", "startedAt", "completedAt", "runAfter", "releaseAt", "generatedAt", "evaluatedAt", "decidedAt", "dismissedAt", "dueAt", "lastReviewedAt", "readAt", "importedAt", "rejectedAt", "lastQueuedAt", "cooldownUntil", "achievedAt", "publishedAt"]);
+const dateKeys = new Set(["createdAt", "updatedAt", "startedAt", "completedAt", "runAfter", "releaseAt", "generatedAt", "evaluatedAt", "decidedAt", "dismissedAt", "dueAt", "lastReviewedAt", "readAt", "importedAt", "rejectedAt", "lastQueuedAt", "cooldownUntil", "achievedAt", "publishedAt", "prioritizedAt", "catalogedAt"]);
 const finiteNumberKeys = new Set(["priority", "score", "weight", "similarity", "interestScore", "fatigueScore", "comprehensionScore", "signalStrength", "dwellTimeMs", "relevanceScore", "noveltyScore", "qualityScore", "estimatedReadMinutes", "durationSeconds", "overlapScore"]);
-const integerKeys = new Set(["attempts", "attempt", "version", "contentLength", "used", "limit", "discarded", "intervalDays", "dueInDays", "cardCount", "reviewCount"]);
+const integerKeys = new Set(["attempts", "attempt", "version", "contentLength", "used", "limit", "discarded", "intervalDays", "dueInDays", "cardCount", "reviewCount", "backlogOrder", "videoCount"]);
 
 function validateKnownTree(value: unknown, path: string): void {
   if (Array.isArray(value)) {
@@ -1236,11 +1241,30 @@ function normalizeSubscriptions(value: unknown): SubscriptionRecord[] {
         typeof record.lastItemPublishedAt === "string" && record.lastItemPublishedAt.trim()
           ? record.lastItemPublishedAt
           : undefined,
-      lastError: typeof record.lastError === "string" && record.lastError.trim() ? record.lastError : undefined
+      lastError: typeof record.lastError === "string" && record.lastError.trim() ? record.lastError : undefined,
+      backlog: normalizeSubscriptionBacklog(record.backlog)
     });
   }
 
   return Array.from(byId.values()).sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+}
+
+function normalizeSubscriptionBacklog(value: unknown): SubscriptionBacklogState | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.catalogedAt !== "string" ||
+    !value.catalogedAt.trim() ||
+    typeof value.videoCount !== "number" ||
+    !Number.isFinite(value.videoCount)
+  ) {
+    return undefined;
+  }
+
+  return {
+    catalogedAt: value.catalogedAt,
+    videoCount: Math.max(0, Math.floor(value.videoCount)),
+    truncated: value.truncated === true ? true : undefined
+  };
 }
 
 function normalizeSubscriptionKind(value: unknown): SubscriptionKind {
@@ -1409,7 +1433,14 @@ function normalizeSourceCandidateRecords(value: unknown): SourceCandidateRecord[
       lastQueuedAt: typeof record.lastQueuedAt === "string" ? record.lastQueuedAt : undefined,
       importedAt: typeof record.importedAt === "string" ? record.importedAt : undefined,
       dismissedAt: typeof record.dismissedAt === "string" ? record.dismissedAt : undefined,
-      rejectedAt: typeof record.rejectedAt === "string" ? record.rejectedAt : undefined
+      rejectedAt: typeof record.rejectedAt === "string" ? record.rejectedAt : undefined,
+      subscriptionId:
+        typeof record.subscriptionId === "string" && record.subscriptionId.trim() ? record.subscriptionId : undefined,
+      backlogOrder:
+        typeof record.backlogOrder === "number" && Number.isFinite(record.backlogOrder)
+          ? record.backlogOrder
+          : undefined,
+      prioritizedAt: typeof record.prioritizedAt === "string" ? record.prioritizedAt : undefined
     });
   }
 
@@ -1421,7 +1452,8 @@ function normalizeSourceCandidateRecordStatus(value: unknown): SourceCandidateRe
     value === "imported" ||
     value === "dismissed" ||
     value === "rejected_source" ||
-    value === "unreachable"
+    value === "unreachable" ||
+    value === "skipped"
     ? value
     : "pending";
 }

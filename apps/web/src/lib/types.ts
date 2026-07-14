@@ -55,7 +55,8 @@ export type SourceCandidateStatus =
   | "imported"
   | "dismissed"
   | "rejected_source"
-  | "unreachable";
+  | "unreachable"
+  | "skipped";
 export type GroundingStatus = "passed" | "warning" | "failed";
 export type DismissedPostMode = "soft" | "hard";
 export type AgentTurnStatus = "answered" | "pending_confirmation" | "researching" | "closed";
@@ -356,6 +357,36 @@ export type ApiSupplyRefillResponse = {
   queued: number;
   skipped: number;
   budgetRemaining: number;
+};
+
+export type SubscriptionBacklogEntry = {
+  candidateId: string;
+  title: string;
+  url: string;
+  order: number;
+  status: SourceCandidateStatus;
+  prioritized: boolean;
+};
+
+export type SubscriptionBacklogView = {
+  subscriptionId: string;
+  backlog?: { catalogedAt: string; videoCount: number; truncated?: boolean };
+  entries: SubscriptionBacklogEntry[];
+  summary: {
+    total: number;
+    imported: number;
+    queued: number;
+    pending: number;
+    skipped: number;
+    failed: number;
+  };
+};
+
+export type ApiBacklogDigestResponse = {
+  queued: number;
+  skipped: number;
+  budgetRemaining: number;
+  dailyRemaining: number;
 };
 
 export type SourceCandidateRecord = {

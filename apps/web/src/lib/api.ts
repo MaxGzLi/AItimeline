@@ -95,6 +95,29 @@ export function isYouTubeUrl(url: string): boolean {
   }
 }
 
+// Channel-shaped YouTube URLs cannot be imported as a single video; the
+// import form redirects them to the subscription flow instead.
+export function isYouTubeChannelUrl(url: string): boolean {
+  try {
+    const parsedUrl = new URL(url);
+    const host = parsedUrl.hostname.toLowerCase();
+
+    if (host !== "youtube.com" && !host.endsWith(".youtube.com")) {
+      return false;
+    }
+
+    if (parsedUrl.pathname === "/feeds/videos.xml") {
+      return parsedUrl.searchParams.has("channel_id");
+    }
+
+    const firstSegment = parsedUrl.pathname.split("/").filter(Boolean)[0] ?? "";
+
+    return firstSegment.startsWith("@") || firstSegment === "channel" || firstSegment === "c" || firstSegment === "user";
+  } catch {
+    return false;
+  }
+}
+
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

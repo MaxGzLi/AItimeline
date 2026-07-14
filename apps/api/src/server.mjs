@@ -77,6 +77,7 @@ import {
   runIdeaObservation,
   shouldRefreshConceptBrief,
   runSourceDiscovery,
+  fetchChannelUploads,
   transformArticleUrl,
   transformUserNote,
   transformYouTubeUrl
@@ -92,6 +93,9 @@ const defaultMediaRoot = resolve(currentDir, "../data/media");
 const supplyDroughtNewCardThreshold = 3;
 const supplyDroughtWindowHours = 48;
 const supplyRefillLimit = 5;
+const backlogAutoBatchLimit = 3;
+const backlogManualBatchLimit = 5;
+const backlogDailyLimit = 8;
 const defaultCorsOrigins = [
   "http://127.0.0.1:5173",
   "http://localhost:5173",
@@ -773,6 +777,90 @@ export function createApiServer(options = {}) {
         return;
       }
 
+      if (request.method === "GET" && /^\/api\/subscriptions\/[^/]+\/backlog$/.test(url.pathname)) {
+        const subscriptionId = decodeURIComponent(
+          url.pathname.replace(/^\/api\/subscriptions\//, "").replace(/\/backlog$/, "")
+        );
+
+        sendJson(response, 200, getSubscriptionBacklogResponse(subscriptionId, persistenceStore));
+        return;
+      }
+
+      if (request.method === "POST" && /^\/api\/subscriptions\/[^/]+\/backlog$/.test(url.pathname)) {
+        const subscriptionId = decodeURIComponent(
+          url.pathname.replace(/^\/api\/subscriptions\//, "").replace(/\/backlog$/, "")
+        );
+        const body = await readJsonBody(request);
+        const now = typeof body.now === "string" ? body.now : new Date().toISOString();
+        const result = await catalogSubscriptionBacklog({
+          subscriptionId,
+          persistenceStore,
+          fetchImpl: feedFetch,
+          now
+        });
+
+        sendJson(response, 200, {
+          ...result,
+          record: sanitizeSubscriptionRecordForResponse(result.record)
+        });
+        return;
+      }
+
+      if (request.method === "POST" && /^\/api\/subscriptions\/[^/]+\/backlog\/digest$/.test(url.pathname)) {
+        const subscriptionId = decodeURIComponent(
+          url.pathname.replace(/^\/api\/subscriptions\//, "").replace(/\/backlog\/digest$/, "")
+        );
+        const body = await readJsonBody(request);
+        const now = typeof body.now === "string" ? body.now : new Date().toISOString();
+        const snapshot = persistenceStore.getSnapshot();
+        const subscription = snapshot.subscriptions.find((record) => record.id === subscriptionId);
+
+        if (!subscription) {
+          sendJson(response, 404, { error: "Subscription not found." });
+          return;
+        }
+
+        const result = digestSubscriptionBacklog({
+          persistenceStore,
+          curationStore,
+          subscription,
+          limit: backlogManualBatchLimit,
+          contentLanguage: resolveContentLanguage(persistenceStore, process.env),
+          now
+        });
+
+        sendJson(response, 200, result);
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/source-candidates/prioritize") {
+        const body = await readJsonBody(request);
+        requireString(body.id, "id");
+        const record = persistenceStore.getSnapshot().sourceCandidates.find((item) => item.id === body.id);
+
+        if (!record) {
+          sendJson(response, 404, { error: "Source candidate not found." });
+          return;
+        }
+
+        const now = new Date().toISOString();
+        const snapshot = persistenceStore.saveSourceCandidateRecords([
+          {
+            ...record,
+            prioritizedAt: now,
+            updatedAt: now
+          }
+        ]);
+
+        sendJson(response, 200, {
+          record: sanitizeSourceCandidateRecordForResponse(
+            snapshot.sourceCandidates.find((item) => item.id === body.id)
+          ),
+          snapshotSummary: summarizeSnapshot(snapshot)
+        });
+        return;
+      }
+
       if (request.method === "POST" && /^\/api\/subscriptions\/[^/]+$/.test(url.pathname)) {
         const subscriptionId = decodeURIComponent(url.pathname.replace(/^\/api\/subscriptions\//, ""));
         const body = await readJsonBody(request);
@@ -1115,6 +1203,15 @@ export function createApiServer(options = {}) {
               now: runNow
             });
         const shouldRefillForDrought = !runKinds || runKinds.includes("import_source");
+        const backlogDigest =
+          deepReadOnlyRun || !shouldRefillForDrought
+            ? { queued: 0, skipped: 0 }
+            : digestDueSubscriptionBacklogs({
+                persistenceStore,
+                curationStore,
+                contentLanguage,
+                now: runNow
+              });
         const supplyStatus = getSupplyStatus(persistenceStore.getSnapshot(), curationStore, runNow);
         const droughtNotification = maybeCreateSupplyDroughtNotification({
           persistenceStore,
@@ -1223,6 +1320,7 @@ export function createApiServer(options = {}) {
         sendJson(response, 200, {
           ...filteredBatch,
           subscriptionPolling,
+          backlogDigest,
           supplyRefill,
           goalProductionGuarantee: omitSnapshotFromProductionResult(goalProductionGuarantee),
           droughtNotification,
@@ -1608,6 +1706,336 @@ async function fetchAndParseSubscriptionFeed(feedUrl, fetchImpl) {
   return parsed;
 }
 
+function getSubscriptionChannelId(subscription) {
+  try {
+    const channelId = new URL(subscription.feedUrl).searchParams.get("channel_id");
+
+    return channelId && /^UC[A-Za-z0-9_-]{20,}$/.test(channelId) ? channelId : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function buildYouTubeWatchUrl(videoId) {
+  const url = new URL("https://www.youtube.com/watch");
+  url.searchParams.set("v", videoId);
+
+  return url.toString();
+}
+
+async function fetchUploadsFallbackFeed(subscription, fetchImpl) {
+  const channelId = subscription.kind === "youtube_channel" ? getSubscriptionChannelId(subscription) : undefined;
+
+  if (!channelId) {
+    return undefined;
+  }
+
+  try {
+    const uploads = await fetchChannelUploads(channelId, { fetch: fetchImpl, maxPages: 1 });
+
+    return {
+      entries: uploads.videos.slice(0, 15).map((video) => ({
+        title: video.title,
+        link: buildYouTubeWatchUrl(video.videoId),
+        publishedAt: undefined,
+        summary: undefined,
+        kind: "youtube"
+      })),
+      kind: "youtube"
+    };
+  } catch (error) {
+    console.error(`[aitimeline] uploads fallback poll failed (${subscription.id}).`, error);
+    return undefined;
+  }
+}
+
+function createBacklogSourceCandidate(subscription, video, now) {
+  let parsedUrl;
+
+  try {
+    parsedUrl = parseHttpUrl(buildYouTubeWatchUrl(video.videoId));
+  } catch {
+    return null;
+  }
+
+  const source = {
+    id: buildSourceId("youtube", parsedUrl),
+    title: video.title,
+    url: parsedUrl.toString(),
+    type: "youtube"
+  };
+
+  return {
+    id: `subscription-${subscription.id}-${hashText(source.url)}`,
+    source,
+    topicId: subscription.title,
+    conceptIds: [subscription.title],
+    relevanceScore: 0.55,
+    noveltyScore: 0.6,
+    qualityScore: 0.7,
+    reason: `Channel backlog of "${subscription.title}": ${video.title}`.slice(0, 220),
+    discoveredAt: now
+  };
+}
+
+async function catalogSubscriptionBacklog({ subscriptionId, persistenceStore, fetchImpl, now }) {
+  const snapshot = persistenceStore.getSnapshot();
+  const subscription = snapshot.subscriptions.find((record) => record.id === subscriptionId);
+
+  if (!subscription) {
+    throw new HttpError(404, "Subscription not found.");
+  }
+
+  const channelId = getSubscriptionChannelId(subscription);
+
+  if (subscription.kind !== "youtube_channel" || !channelId) {
+    throw new HttpError(400, "Backlog cataloging is only available for YouTube channel subscriptions.");
+  }
+
+  if (!fetchImpl) {
+    throw new HttpError(500, "Feed fetch is not available.");
+  }
+
+  let uploads;
+
+  try {
+    uploads = await fetchChannelUploads(channelId, { fetch: fetchImpl });
+  } catch (error) {
+    console.error(`[aitimeline] channel backlog catalog failed (${subscription.id}).`, error);
+    throw new HttpError(400, "Channel uploads could not be fetched.");
+  }
+
+  const nowIso = normalizeIsoDate(now);
+  const existingById = new Map(snapshot.sourceCandidates.map((record) => [record.id, record]));
+  const knownUrlKeys = new Set(collectKnownSourceUrls(snapshot).map(normalizeUrlKey));
+  const records = [];
+  let created = 0;
+  // Uploads arrive newest first; backlogOrder counts from the oldest video so
+  // batches digest the channel in course order.
+  const orderedOldestFirst = [...uploads.videos].reverse();
+
+  orderedOldestFirst.forEach((video, order) => {
+    const candidate = createBacklogSourceCandidate(subscription, video, nowIso);
+
+    if (!candidate) {
+      return;
+    }
+
+    const existing = existingById.get(candidate.id);
+
+    if (existing) {
+      if (existing.subscriptionId !== subscription.id || existing.backlogOrder !== order) {
+        records.push({ ...existing, subscriptionId: subscription.id, backlogOrder: order, updatedAt: nowIso });
+      }
+      return;
+    }
+
+    if (knownUrlKeys.has(normalizeUrlKey(candidate.source.url))) {
+      return;
+    }
+
+    created += 1;
+    records.push({
+      id: candidate.id,
+      candidate,
+      status: "pending",
+      intakeKind: "subscription",
+      createdAt: nowIso,
+      updatedAt: nowIso,
+      notes: subscription.title,
+      subscriptionId: subscription.id,
+      backlogOrder: order
+    });
+  });
+
+  if (records.length) {
+    persistenceStore.saveSourceCandidateRecords(records, nowIso);
+  }
+
+  const nextRecord = {
+    ...subscription,
+    backlog: {
+      catalogedAt: nowIso,
+      videoCount: uploads.videos.length,
+      ...(uploads.truncated ? { truncated: true } : {})
+    }
+  };
+  const nextSnapshot = persistenceStore.saveSubscriptions([nextRecord], nowIso);
+
+  return {
+    record: nextSnapshot.subscriptions.find((record) => record.id === subscription.id) ?? nextRecord,
+    created,
+    videoCount: uploads.videos.length,
+    truncated: Boolean(uploads.truncated),
+    snapshotSummary: summarizeSnapshot(nextSnapshot)
+  };
+}
+
+function getSubscriptionBacklogResponse(subscriptionId, persistenceStore) {
+  const snapshot = persistenceStore.getSnapshot();
+  const subscription = snapshot.subscriptions.find((record) => record.id === subscriptionId);
+
+  if (!subscription) {
+    throw new HttpError(404, "Subscription not found.");
+  }
+
+  const entries = snapshot.sourceCandidates
+    .filter((record) => record.subscriptionId === subscriptionId && typeof record.backlogOrder === "number")
+    .sort((left, right) => left.backlogOrder - right.backlogOrder)
+    .map((record) => ({
+      candidateId: record.id,
+      title: record.candidate.source.title,
+      url: record.candidate.source.url,
+      order: record.backlogOrder,
+      status: record.status,
+      prioritized: Boolean(record.prioritizedAt) && record.status === "pending"
+    }));
+  const summary = { total: entries.length, imported: 0, queued: 0, pending: 0, skipped: 0, failed: 0 };
+
+  for (const entry of entries) {
+    if (entry.status === "imported") summary.imported += 1;
+    else if (entry.status === "queued") summary.queued += 1;
+    else if (entry.status === "pending") summary.pending += 1;
+    else if (entry.status === "skipped") summary.skipped += 1;
+    else summary.failed += 1;
+  }
+
+  return {
+    subscriptionId,
+    backlog: subscription.backlog,
+    entries,
+    summary
+  };
+}
+
+function compareBacklogRecords(left, right) {
+  const leftPrioritized = typeof left.prioritizedAt === "string";
+  const rightPrioritized = typeof right.prioritizedAt === "string";
+
+  if (leftPrioritized !== rightPrioritized) {
+    return leftPrioritized ? -1 : 1;
+  }
+
+  if (leftPrioritized && rightPrioritized && left.prioritizedAt !== right.prioritizedAt) {
+    return left.prioritizedAt.localeCompare(right.prioritizedAt);
+  }
+
+  return left.backlogOrder - right.backlogOrder;
+}
+
+function countBacklogImportJobsForDay(curationStore, nowIso) {
+  const dayKey = getDayKey(nowIso, process.env.AITIMELINE_TIMEZONE);
+
+  return curationStore
+    .list()
+    .filter(
+      (record) =>
+        record.job.kind === "import_source" &&
+        typeof record.job.id === "string" &&
+        record.job.id.startsWith("subscription-backlog-import-") &&
+        getDayKey(record.job.createdAt, process.env.AITIMELINE_TIMEZONE) === dayKey
+    ).length;
+}
+
+function createBacklogImportJob(subscription, candidate, now, contentLanguage) {
+  return {
+    id: `subscription-backlog-import-${hashText(`${subscription.id}|${candidate.id}`)}`,
+    kind: "import_source",
+    topicId: candidate.topicId ?? subscription.title,
+    conceptIds: candidate.conceptIds,
+    priority: 0.6,
+    reason:
+      contentLanguage === "en"
+        ? `You asked to learn the backlog of "${subscription.title}", so this video is being imported: ${candidate.source.title}`
+        : `你要学习订阅「${subscription.title}」的存量视频,正在导入:${candidate.source.title}`,
+    createdAt: now,
+    runAfter: now,
+    sourceCandidate: candidate
+  };
+}
+
+function digestSubscriptionBacklog({ persistenceStore, curationStore, subscription, limit, contentLanguage, now }) {
+  const nowIso = normalizeIsoDate(now);
+  const snapshot = persistenceStore.getSnapshot();
+  const activeCandidateIds = getActiveImportSourceCandidateIds(curationStore);
+  const dailyRemaining = Math.max(0, backlogDailyLimit - countBacklogImportJobsForDay(curationStore, nowIso));
+  const selectedRecords = snapshot.sourceCandidates
+    .filter((record) => record.subscriptionId === subscription.id && typeof record.backlogOrder === "number")
+    .filter((record) => record.status === "pending")
+    .filter((record) => !activeCandidateIds.has(record.candidate.id))
+    .sort(compareBacklogRecords)
+    .slice(0, Math.max(0, Math.min(limit, dailyRemaining)));
+
+  if (!selectedRecords.length) {
+    return {
+      queued: 0,
+      skipped: 0,
+      budgetRemaining: getBudgetRemaining(snapshot, nowIso),
+      dailyRemaining
+    };
+  }
+
+  const rawPlan = createSingleJobPlan(
+    selectedRecords.map((record) => createBacklogImportJob(subscription, record.candidate, nowIso, contentLanguage)),
+    nowIso
+  );
+  const budgetResult = applyDailyAutoJobBudget({
+    plan: rawPlan,
+    budget: getDailyAutoJobBudgetRecord(snapshot, nowIso),
+    limit: getDailyAutoJobBudgetLimit(process.env),
+    now: nowIso
+  });
+  const acceptedIds = new Set(budgetResult.plan.acceptedSourceCandidateIds);
+  const records = curationStore.enqueuePlan(budgetResult.plan, nowIso);
+  let nextSnapshot = persistenceStore.saveDailyAutoJobBudgetRecords([budgetResult.budget], nowIso);
+
+  if (records.length) {
+    nextSnapshot = persistenceStore.saveCurationJobRecords(records, nowIso);
+  }
+
+  const queuedCandidateRecords = selectedRecords
+    .filter((record) => acceptedIds.has(record.candidate.id))
+    .map((record) => ({
+      ...record,
+      status: "queued",
+      updatedAt: nowIso,
+      lastQueuedAt: nowIso
+    }));
+
+  if (queuedCandidateRecords.length) {
+    nextSnapshot = persistenceStore.saveSourceCandidateRecords(queuedCandidateRecords, nowIso);
+  }
+
+  return {
+    queued: queuedCandidateRecords.length,
+    skipped: Math.max(0, selectedRecords.length - queuedCandidateRecords.length),
+    budgetRemaining: getBudgetRemaining(nextSnapshot, nowIso),
+    dailyRemaining: Math.max(0, dailyRemaining - queuedCandidateRecords.length)
+  };
+}
+
+function digestDueSubscriptionBacklogs({ persistenceStore, curationStore, contentLanguage, now }) {
+  const subscriptions = persistenceStore.getSnapshot().subscriptions.filter((record) => record.backlog);
+  let queued = 0;
+  let skipped = 0;
+
+  for (const subscription of subscriptions) {
+    const result = digestSubscriptionBacklog({
+      persistenceStore,
+      curationStore,
+      subscription,
+      limit: backlogAutoBatchLimit,
+      contentLanguage,
+      now
+    });
+
+    queued += result.queued;
+    skipped += result.skipped;
+  }
+
+  return { queued, skipped };
+}
+
 async function pollDueSubscriptions({ persistenceStore, curationStore, fetchImpl, contentLanguage, now }) {
   if (!fetchImpl) {
     return { checked: 0, skipped: 0, queued: 0, pending: 0, errors: ["Feed fetch is not available."] };
@@ -1634,7 +2062,21 @@ async function pollDueSubscriptions({ persistenceStore, curationStore, fetchImpl
 
   for (const subscription of dueSubscriptions) {
     try {
-      const parsedFeed = await fetchAndParseSubscriptionFeed(subscription.feedUrl, fetchImpl);
+      let parsedFeed;
+
+      try {
+        parsedFeed = await fetchAndParseSubscriptionFeed(subscription.feedUrl, fetchImpl);
+      } catch (feedError) {
+        // The YouTube feed endpoint intermittently 404s/500s; the uploads
+        // playlist page carries the same latest videos, so use it as a
+        // fallback poll source before declaring the poll failed.
+        parsedFeed = await fetchUploadsFallbackFeed(subscription, fetchImpl);
+
+        if (!parsedFeed) {
+          throw feedError;
+        }
+      }
+
       const entries = selectNewSubscriptionEntries(parsedFeed.entries, subscription, knownUrlKeys);
       const maxPublishedAt = maxIsoDate([
         subscription.lastItemPublishedAt,
@@ -1796,6 +2238,9 @@ function queueSupplyRefill({ persistenceStore, curationStore, contentLanguage, n
   const activeCandidateIds = getActiveImportSourceCandidateIds(curationStore);
   const selectedRecords = snapshot.sourceCandidates
     .filter((record) => record.status === "pending")
+    // Backlog-cataloged candidates drain through their own paced digest lane
+    // (backlogDailyLimit); letting drought refill grab them would bypass it.
+    .filter((record) => typeof record.backlogOrder !== "number")
     .filter((record) => !activeCandidateIds.has(record.candidate.id))
     .sort((left, right) => scoreCandidateRecord(right) - scoreCandidateRecord(left))
     .slice(0, supplyRefillLimit);
@@ -3904,18 +4349,33 @@ function markSourceCandidateFailed(persistenceStore, snapshot, candidateId, now,
     return snapshot;
   }
 
-  const unreachable = isNetworkFailureMessage(errorMessage);
-  const reason = unreachable ? "Source could not be fetched." : "Source import failed.";
+  const transcriptUnavailable = isTranscriptUnavailableMessage(errorMessage);
+  const unreachable = !transcriptUnavailable && isNetworkFailureMessage(errorMessage);
+  const reason = transcriptUnavailable
+    ? "Source has no usable transcript."
+    : unreachable
+      ? "Source could not be fetched."
+      : "Source import failed.";
 
   return persistenceStore.saveSourceCandidateRecords([
     {
       ...candidateRecord,
-      status: unreachable ? "unreachable" : "rejected_source",
+      status: transcriptUnavailable ? "skipped" : unreachable ? "unreachable" : "rejected_source",
       updatedAt: now,
-      ...(unreachable ? {} : { rejectedAt: now }),
+      ...(transcriptUnavailable || unreachable ? {} : { rejectedAt: now }),
       rejectionReasons: [...(candidateRecord.rejectionReasons ?? []), reason]
     }
   ]);
+}
+
+function isTranscriptUnavailableMessage(message) {
+  if (typeof message !== "string" || !message.trim()) {
+    return false;
+  }
+
+  return /does not expose transcript tracks|did not contain any readable segments|transcript track is missing|no usable transcript/i.test(
+    message
+  );
 }
 
 function isNetworkFailureMessage(message) {
@@ -5659,7 +6119,8 @@ function sanitizeSourceCandidateRecordForResponse(record) {
   const stableReasons = new Set([
     "Source import failed.",
     "Source could not be fetched.",
-    "Source candidate could not be processed."
+    "Source candidate could not be processed.",
+    "Source has no usable transcript."
   ]);
 
   if (record.rejectionReasons.every((reason) => stableReasons.has(reason))) {
@@ -5878,7 +6339,11 @@ async function ingestSourceCandidateForBackground(candidate, ingestSource) {
     console.error("[aitimeline] background source ingestion failed.", error);
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(
-      isNetworkFailureMessage(message) ? "Source could not be fetched." : "Source candidate could not be processed."
+      isTranscriptUnavailableMessage(message)
+        ? "Source has no usable transcript."
+        : isNetworkFailureMessage(message)
+          ? "Source could not be fetched."
+          : "Source candidate could not be processed."
     );
   }
 }
