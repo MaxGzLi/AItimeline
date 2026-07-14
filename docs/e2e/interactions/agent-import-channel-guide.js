@@ -20,7 +20,9 @@
   if (!form) return "no-import-form";
   form.requestSubmit();
   await sleep(900);
-  document.querySelector("#agent-source-import")?.scrollIntoView();
+  // Full-page capture already includes everything; scroll back to top so the
+  // sticky nav rail paints at its real position instead of mid-page.
+  window.scrollTo(0, 0);
   await sleep(300);
   const error = document.querySelector("#agent-source-import .x-import-err")?.textContent ?? "";
   return "guide=" + error.slice(0, 40);

@@ -16,7 +16,9 @@
   if (!catalogBtn) return "no-catalog-btn";
   catalogBtn.click();
   await sleep(1200);
-  document.querySelector("#agent-subscriptions")?.scrollIntoView();
+  // Full-page capture already includes everything; scroll back to top so the
+  // sticky nav rail paints at its real position instead of mid-page.
+  window.scrollTo(0, 0);
   await sleep(400);
   const items = document.querySelectorAll(".x-sub-backlog-item").length;
   return "backlog-items=" + items;
