@@ -1,23 +1,34 @@
 import type { SourceImport, SubscriptionRecord } from "@aitimeline/core";
-import { LoaderCircle, Plus, Rss, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronUp, LoaderCircle, Plus, Rss, Trash2 } from "lucide-react";
 import type { FormEvent } from "react";
 import { ImportRow } from "../components/ImportRow";
 import { SourceCandidatePanel } from "../components/SourceCandidatePanel";
 import { SourceImportPanel } from "../components/SourceImportPanel";
 import { formatShortTime } from "../lib/format";
 import { t } from "../lib/i18n";
-import type { ApiStatus, SourceCandidateRecord } from "../lib/types";
+import type { ApiStatus, SourceCandidateRecord, SubscriptionBacklogView } from "../lib/types";
+
+function backlogStatusKey(status: string): string {
+  if (status === "pending" || status === "queued" || status === "imported" || status === "skipped") {
+    return status;
+  }
+
+  return "failed";
+}
 
 export function AgentView({
   agentTurnCount,
   apiMessage,
   apiStatus,
   autoScoutEnabled,
+  backlogBusyIds,
+  backlogViews,
   candidateConcept,
   candidateMessage,
   candidateUrl,
   cardCount,
   curationMessage,
+  expandedBacklogIds,
   hasQueuedScoutWork,
   importError,
   isImporting,
@@ -29,14 +40,18 @@ export function AgentView({
   onAutoScoutChange,
   onCandidateConceptChange,
   onCandidateUrlChange,
+  onCatalogBacklog,
   onDeleteSubscription,
+  onDigestBacklog,
   onImportSubmit,
+  onPrioritizeBacklogEntry,
   onRunCuration,
   onSaveCandidate,
   onSourceUrlChange,
   onSubscriptionFilterChange,
   onSubscriptionSubmit,
   onSubscriptionUrlChange,
+  onToggleBacklog,
   queuedJobCount,
   sourceCandidates,
   sourceImports,
@@ -51,11 +66,14 @@ export function AgentView({
   apiMessage: string;
   apiStatus: ApiStatus;
   autoScoutEnabled: boolean;
+  backlogBusyIds: string[];
+  backlogViews: Record<string, SubscriptionBacklogView>;
   candidateConcept: string;
   candidateMessage: string;
   candidateUrl: string;
   cardCount: number;
   curationMessage: string;
+  expandedBacklogIds: string[];
   hasQueuedScoutWork: boolean;
   importError: string | null;
   isImporting: boolean;
@@ -67,14 +85,18 @@ export function AgentView({
   onAutoScoutChange: (value: boolean) => void;
   onCandidateConceptChange: (value: string) => void;
   onCandidateUrlChange: (value: string) => void;
+  onCatalogBacklog: (id: string) => void;
   onDeleteSubscription: (id: string) => void;
+  onDigestBacklog: (id: string) => void;
   onImportSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onPrioritizeBacklogEntry: (subscriptionId: string, candidateId: string) => void;
   onRunCuration: () => void;
   onSaveCandidate: (event: FormEvent<HTMLFormElement>) => void;
   onSourceUrlChange: (value: string) => void;
   onSubscriptionFilterChange: (id: string, filterMode: SubscriptionRecord["filterMode"]) => void;
   onSubscriptionSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onSubscriptionUrlChange: (value: string) => void;
+  onToggleBacklog: (id: string) => void;
   queuedJobCount: number;
   sourceCandidates: SourceCandidateRecord[];
   sourceImports: SourceImport[];
@@ -89,6 +111,8 @@ export function AgentView({
   const activeSourceCandidates = sourceCandidates.filter((record) => record.status !== "rejected_source");
   const deletingSubscriptionSet = new Set(deletingSubscriptionIds);
   const updatingSubscriptionSet = new Set(updatingSubscriptionIds);
+  const backlogBusySet = new Set(backlogBusyIds);
+  const expandedBacklogSet = new Set(expandedBacklogIds);
 
   return (
     <>
@@ -177,6 +201,84 @@ export function AgentView({
                       )}
                     </button>
                   </div>
+                  {subscription.kind === "youtube_channel" ? (
+                    <div className="x-sub-backlog">
+                      <div className="x-sub-backlog-head">
+                        {!subscription.backlog ? (
+                          <button
+                            className="x-chip action"
+                            disabled={backlogBusySet.has(subscription.id)}
+                            onClick={() => onCatalogBacklog(subscription.id)}
+                            type="button"
+                          >
+                            {backlogBusySet.has(subscription.id) ? <LoaderCircle className="x-spin" size={12} /> : null}
+                            {backlogBusySet.has(subscription.id)
+                              ? t("subscription.backlog.starting")
+                              : t("subscription.backlog.start")}
+                          </button>
+                        ) : (
+                          <>
+                            <span>
+                              {backlogViews[subscription.id]
+                                ? t("subscription.backlog.progress", {
+                                    imported: backlogViews[subscription.id].summary.imported,
+                                    total: subscription.backlog.videoCount
+                                  })
+                                : t("subscription.backlog.size", { total: subscription.backlog.videoCount })}
+                              {backlogViews[subscription.id]?.summary.skipped
+                                ? ` · ${t("subscription.backlog.skippedCount", {
+                                    count: backlogViews[subscription.id].summary.skipped
+                                  })}`
+                                : ""}
+                            </span>
+                            <button
+                              className="x-chip action"
+                              disabled={backlogBusySet.has(subscription.id)}
+                              onClick={() => onDigestBacklog(subscription.id)}
+                              type="button"
+                            >
+                              {backlogBusySet.has(subscription.id) ? <LoaderCircle className="x-spin" size={12} /> : null}
+                              {t("subscription.backlog.digest")}
+                            </button>
+                            <button className="x-chip action" onClick={() => onToggleBacklog(subscription.id)} type="button">
+                              {expandedBacklogSet.has(subscription.id) ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                              {t("subscription.backlog.catalog")}
+                            </button>
+                          </>
+                        )}
+                      </div>
+                      {subscription.backlog && expandedBacklogSet.has(subscription.id) ? (
+                        backlogViews[subscription.id] ? (
+                          <div className="x-sub-backlog-list">
+                            {backlogViews[subscription.id].entries.map((entry) => (
+                              <div className="x-sub-backlog-item" key={entry.candidateId}>
+                                <span className="title">
+                                  {entry.order + 1}. {entry.title}
+                                </span>
+                                <span className={`x-sub-backlog-status ${backlogStatusKey(entry.status)}`}>
+                                  {t(`subscription.backlog.status.${backlogStatusKey(entry.status)}`)}
+                                </span>
+                                {entry.status === "pending" ? (
+                                  <button
+                                    className="x-chip action"
+                                    disabled={entry.prioritized}
+                                    onClick={() => onPrioritizeBacklogEntry(subscription.id, entry.candidateId)}
+                                    type="button"
+                                  >
+                                    {entry.prioritized
+                                      ? t("subscription.backlog.prioritized")
+                                      : t("subscription.backlog.prioritize")}
+                                  </button>
+                                ) : null}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="x-cand-note">{t("subscription.backlog.loading")}</div>
+                        )
+                      ) : null}
+                    </div>
+                  ) : null}
                 </article>
               ))}
             </div>

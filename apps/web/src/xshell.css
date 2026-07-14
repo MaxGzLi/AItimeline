@@ -2407,11 +2407,40 @@ body:has(.x-frame) {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 12px;
   padding: 10px 0;
   border-top: 1px solid var(--x-line);
 }
 .x-sub-row:first-child { border-top: none; }
+.x-sub-backlog { flex-basis: 100%; display: grid; gap: 6px; }
+.x-sub-backlog-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--x-muted);
+}
+.x-sub-backlog-list {
+  display: grid;
+  max-height: 264px;
+  overflow-y: auto;
+  border-top: 1px solid var(--x-line);
+}
+.x-sub-backlog-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-top: 1px solid var(--x-line);
+  font-size: 13px;
+}
+.x-sub-backlog-item:first-child { border-top: none; }
+.x-sub-backlog-item .title { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.x-sub-backlog-status { flex: none; font-size: 12px; color: var(--x-muted); }
+.x-sub-backlog-status.imported { color: var(--x-repost); }
+.x-sub-backlog-status.queued { color: var(--x-blue); }
 .x-sub-main {
   display: grid;
   gap: 4px;
