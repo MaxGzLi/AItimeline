@@ -108,7 +108,7 @@ export async function normalizeSubscriptionFeedUrl(
       throw new Error("A fetch implementation is required to resolve a YouTube handle.");
     }
 
-    const html = await fetchText(fetchImpl, buildYouTubeHandleUrl(handle));
+    const html = await fetchTextWithRetry(fetchImpl, buildYouTubeHandleUrl(handle), youtubePageRequestInit);
     const channelId = extractYouTubeChannelIdFromHtml(html);
 
     if (!channelId) {
@@ -555,12 +555,34 @@ function isYouTubeHost(hostname: string): boolean {
   return normalized === "youtube.com" || normalized === "m.youtube.com";
 }
 
-async function fetchText(fetchImpl: typeof fetch, url: string): Promise<string> {
-  const response = await fetchImpl(url);
+// YouTube intermittently answers channel pages with 404 for non-browser
+// clients; a desktop identity keeps handle resolution stable.
+const youtubePageRequestInit: RequestInit = {
+  headers: {
+    "user-agent":
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "accept-language": "en-US,en;q=0.9"
+  }
+};
+
+const transientRetryDelayMs = 500;
+
+async function fetchText(fetchImpl: typeof fetch, url: string, init?: RequestInit): Promise<string> {
+  const response = await fetchImpl(url, init);
 
   if (!response.ok) {
     throw new Error(`Feed URL request failed with ${response.status}.`);
   }
 
   return response.text();
+}
+
+async function fetchTextWithRetry(fetchImpl: typeof fetch, url: string, init?: RequestInit): Promise<string> {
+  try {
+    return await fetchText(fetchImpl, url, init);
+  } catch {
+    await new Promise((resolve) => setTimeout(resolve, transientRetryDelayMs));
+
+    return fetchText(fetchImpl, url, init);
+  }
 }

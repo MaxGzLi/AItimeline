@@ -1632,7 +1632,17 @@ async function handleCreateSubscription(body, persistenceStore, fetchImpl) {
   }
 
   const normalized = await normalizeSubscriptionFeedUrl(inputUrl, { fetch: fetchImpl });
-  const parsedFeed = await fetchAndParseSubscriptionFeed(normalized.feedUrl, fetchImpl);
+  let parsedFeed;
+
+  try {
+    parsedFeed = await fetchAndParseSubscriptionFeed(normalized.feedUrl, fetchImpl);
+  } catch {
+    // YouTube's RSS endpoint 404s transiently; ride out one blip before
+    // failing the whole creation.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    parsedFeed = await fetchAndParseSubscriptionFeed(normalized.feedUrl, fetchImpl);
+  }
+
   const now = new Date().toISOString();
   const snapshot = persistenceStore.getSnapshot();
   const existing = snapshot.subscriptions.find(
