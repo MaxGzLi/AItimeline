@@ -60,3 +60,15 @@
 3. MCP smoke(新 `scripts/smoke-mcp.mjs` 或并入 smoke-api):stdio 起服务,list tools 齐全,`capture_source`/`capture_conversation` 调用经 stub API 返回成功,server instructions 非空。
 4. UI 截图:对话卡在流里的徽章与来源行,浅色+深色。
 5. 真实验收(验收人):Claude Code 接入本地 MCP,真实聊一段学习对话,采集的链接卡与对话卡出现在流里,引文可回看。
+
+## 实现偏离记录(2026-07-15)
+
+实现与上文方案的出入,均已验证:
+
+1. **对话成卡改为同步确定性成卡,不入队 job**:与笔记(`transformUserNote`)完全同构——摘录即卡片正文,自证引文,零模型参与。有模型也不改写:agent 的话再被模型改写会叠加幻觉面,摘录原文就是最诚实的卡。spec §2 里「入队 card 生成 job」不再需要。
+2. **来源记录未新增字段**:`agentName` 放 `Source.author`、`capturedAt` 放 `publishedAt`,免 schema 扩展;`intakeKind: "agent_capture"` 在持久层双层校验(decode 枚举 + normalize)都已登记。
+3. **摘录长度**:硬下限 120 字符(不足则报 HTTP 400)、超 4000 截断;工具描述向 agent 建议 200-4000。
+4. **门禁断言的落实方式**:「坏摘录被拒」= 过短 400;URL 采集车道的质量门禁用瘦文章 fixture 断言(导入后 `rejected_source`)。相关性过滤确实不走:空库(无已确认概念)下采集照样入队。
+5. **对话卡即时入流**(与笔记一致),不走 release plan 错峰;经 `capture_source` 采集的 URL 卡走既有导入管线,错峰照旧。
+6. **smoke:mcp 成为第四个冒烟**,并入 `npm test` 与 CI;MCP 服务用内存管道直连断言(list tools / 三工具 / instructions 随握手下发),另有真实 stdio 子进程端到端在验收时人工跑过。
+7. **证据账本表现与笔记同构**:TITLE/RECOMMENDED BECAUSE 两条主张不在摘录原文中会记「失败」(自证类卡的既有表现,非本单引入)。
