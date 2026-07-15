@@ -541,6 +541,16 @@ body:has(.x-frame) {
   line-height: 16px;
 }
 
+/* Conversation captures: agent-said content, labeled instead of check-badged. */
+.x-conversation {
+  font-size: 11px;
+  color: var(--x-muted);
+  border: 1px solid var(--x-border);
+  border-radius: 999px;
+  padding: 0 6px;
+  line-height: 16px;
+}
+
 .x-verified { color: var(--x-blue); flex: none; }
 .x-title {
   font-size: 15px;
