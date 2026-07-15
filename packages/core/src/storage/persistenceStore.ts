@@ -114,7 +114,13 @@ export type SourceCandidateRecordStatus =
   | "unreachable"
   | "skipped";
 
-export type SourceCandidateIntakeKind = "user_paste" | "browser_share" | "agent_discovery" | "manual" | "subscription";
+export type SourceCandidateIntakeKind =
+  | "user_paste"
+  | "browser_share"
+  | "agent_discovery"
+  | "manual"
+  | "subscription"
+  | "agent_capture";
 
 export interface AgentTurnRecord {
   id: string;
@@ -656,7 +662,7 @@ function decodeSnapshotOwnerRecord(
     );
     expectEnum(
       intakeKind,
-      ["user_paste", "browser_share", "agent_discovery", "manual", "subscription"],
+      ["user_paste", "browser_share", "agent_discovery", "manual", "subscription", "agent_capture"],
       `${path}.intakeKind`
     );
     return deepClone({ ...record, status, intakeKind });
@@ -1462,7 +1468,8 @@ function normalizeSourceCandidateIntakeKind(value: unknown): SourceCandidateInta
   return value === "browser_share" ||
     value === "agent_discovery" ||
     value === "manual" ||
-    value === "subscription"
+    value === "subscription" ||
+    value === "agent_capture"
     ? value
     : "user_paste";
 }
