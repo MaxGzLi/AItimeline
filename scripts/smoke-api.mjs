@@ -3313,6 +3313,173 @@ try {
     }
   }
 
+  // Agent learning captures: conversation excerpts become self-grounded cards
+  // (content-addressed, idempotent), URL captures join the candidate pool
+  // without relevance filtering, while the shared daily budget and the source
+  // quality gate still hold the line.
+  const captureDataPath = join(tempDir, "agent-capture.json");
+  const captureCurationPath = join(tempDir, "agent-capture-curation.json");
+  const captureThinUrl = "https://capture-smoke.local/thin-article";
+  const captureSecondUrl = "https://capture-smoke.local/thin-article-2";
+  const captureFetch = async (input) => {
+    const url = getFetchUrl(input);
+
+    if (url.startsWith("https://capture-smoke.local/")) {
+      return new Response(
+        "<html><head><title>Thin capture fixture</title></head><body><p>Too thin to pass the quality gate.</p></body></html>",
+        { status: 200, headers: { "content-type": "text/html" } }
+      );
+    }
+
+    throw new Error(`Unexpected fetch during agent capture smoke: ${url}`);
+  };
+  const previousCaptureBudget = process.env.AITIMELINE_DAILY_AUTO_JOB_BUDGET;
+
+  process.env.AITIMELINE_DAILY_AUTO_JOB_BUDGET = "1";
+
+  const captureServer = createApiServer({
+    dataPath: captureDataPath,
+    curationDataPath: captureCurationPath,
+    mediaRootDir,
+    feedFetch: captureFetch,
+    guardedFetch: captureFetch
+  });
+
+  try {
+    const captureExcerpt = [
+      "User asked: what do the option Greeks actually measure?",
+      "Explanation: delta measures how much the option price moves per unit move in the underlying,",
+      "gamma measures how fast delta itself changes, theta is the time decay of the option value,",
+      "and vega measures sensitivity to implied volatility changes."
+    ].join(" ");
+    const captured = await requestJsonFromServer(captureServer, "/api/captures/conversation", {
+      method: "POST",
+      body: { topic: "Option Greeks", excerpt: captureExcerpt, agentName: "smoke-agent" }
+    });
+
+    assert.equal(captured.alreadyCaptured, false, "a fresh conversation capture should create a new card");
+    assert.equal(captured.post.id.startsWith("conversation-"), true, "conversation captures should mint conversation ids");
+
+    const captureSnapshot = await requestJsonFromServer(captureServer, "/api/snapshot");
+    const conversationPost = captureSnapshot.posts.find((post) => post.id === captured.post.id);
+
+    assert.equal(Boolean(conversationPost), true, "the conversation card should be persisted");
+    assert.equal(conversationPost.sources[0].type, "conversation", "the card source should be a conversation source");
+    assert.equal(conversationPost.sources[0].author, "smoke-agent", "the capturing agent should be recorded as author");
+    assert.equal(conversationPost.citations.length, 1, "the conversation card should cite its own excerpt");
+    assert.equal(
+      captureSnapshot.sourceRegistries.some((record) => record.sourceId === conversationPost.sources[0].id),
+      true,
+      "the excerpt should be registered as a citable source"
+    );
+
+    const captureEvidence = await requestJsonFromServer(captureServer, `/api/evidence/${captured.post.id}`);
+
+    assert.equal(
+      captureEvidence.ledger.summary.citedChunks,
+      1,
+      "the evidence ledger should resolve the conversation excerpt chunk"
+    );
+
+    const recaptured = await requestJsonFromServer(captureServer, "/api/captures/conversation", {
+      method: "POST",
+      body: { topic: "Option Greeks", excerpt: captureExcerpt }
+    });
+
+    assert.equal(recaptured.alreadyCaptured, true, "re-capturing the same excerpt should be idempotent");
+    assert.equal(recaptured.post.id, captured.post.id, "idempotent captures should return the original card");
+
+    const postsAfterRecapture = (await requestJsonFromServer(captureServer, "/api/snapshot")).posts.length;
+
+    assert.equal(postsAfterRecapture, captureSnapshot.posts.length, "idempotent captures must not add cards");
+
+    const tooShortCapture = await dispatchToServer(captureServer, `${baseUrl}/api/captures/conversation`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ topic: "Option Greeks", excerpt: "way too short" })
+    });
+
+    assert.equal(tooShortCapture.status, 400, "a too-short excerpt should be rejected");
+
+    // Fresh library, no confirmed concepts: a subscription-lane candidate
+    // would be relevance-filtered, but captures queue anyway (explicit intent).
+    const firstSourceCapture = await requestJsonFromServer(captureServer, "/api/captures/source", {
+      method: "POST",
+      body: { url: captureThinUrl, topic: "Option Greeks", reason: "Cited in the conversation." }
+    });
+
+    assert.equal(firstSourceCapture.status, "queued", "the first URL capture should queue an import job");
+    assert.equal(firstSourceCapture.queued, 1, "the first URL capture should consume budget");
+    assert.equal(firstSourceCapture.record.intakeKind, "agent_capture", "URL captures should use the agent_capture intake");
+
+    const duplicateSourceCapture = await requestJsonFromServer(captureServer, "/api/captures/source", {
+      method: "POST",
+      body: { url: captureThinUrl }
+    });
+
+    assert.equal(duplicateSourceCapture.alreadyKnown, true, "capturing a known URL should be idempotent");
+    assert.equal(duplicateSourceCapture.queued, 0, "idempotent URL captures must not consume budget");
+
+    const exhaustedSourceCapture = await requestJsonFromServer(captureServer, "/api/captures/source", {
+      method: "POST",
+      body: { url: captureSecondUrl, topic: "Option Greeks" }
+    });
+
+    assert.equal(exhaustedSourceCapture.status, "pending", "beyond the daily budget a capture should stay pending");
+    assert.equal(exhaustedSourceCapture.queued, 0, "budget-exhausted captures must not queue jobs");
+
+    const captureRun = await requestJsonFromServer(captureServer, "/api/curation/run", {
+      method: "POST",
+      body: { now: "2026-07-23T02:00:00.000Z" }
+    });
+
+    assert.equal(
+      captureRun.agentCaptureQueue.queued >= 1,
+      true,
+      "the next curation run should drain pending agent captures within the fresh budget"
+    );
+
+    const drainedSnapshot = await requestJsonFromServer(captureServer, "/api/snapshot");
+    const thinCandidate = drainedSnapshot.sourceCandidates.find(
+      (record) => record.candidate.source.url === captureThinUrl
+    );
+    const drainedCandidate = drainedSnapshot.sourceCandidates.find(
+      (record) => record.candidate.source.url === captureSecondUrl
+    );
+
+    assert.equal(
+      thinCandidate.status,
+      "rejected_source",
+      "the source quality gate should still reject thin sources on the capture lane"
+    );
+    assert.equal(
+      ["queued", "rejected_source"].includes(drainedCandidate.status),
+      true,
+      "the previously pending capture should have been queued (and possibly gate-rejected) by the run"
+    );
+
+    const captureContext = await requestJsonFromServer(captureServer, "/api/captures/context");
+
+    assert.equal(captureContext.cardCount >= 1, true, "the learning context should count existing cards");
+    assert.equal(
+      captureContext.recentCards.some((cardInfo) => cardInfo.title === "Option Greeks"),
+      true,
+      "the learning context should list the captured card title"
+    );
+    assert.equal(
+      captureContext.recentCards.every((cardInfo) => cardInfo.summary === undefined && cardInfo.body === undefined),
+      true,
+      "the learning context must not leak card bodies"
+    );
+  } finally {
+    await closeServer(captureServer);
+    if (previousCaptureBudget === undefined) {
+      delete process.env.AITIMELINE_DAILY_AUTO_JOB_BUDGET;
+    } else {
+      process.env.AITIMELINE_DAILY_AUTO_JOB_BUDGET = previousCaptureBudget;
+    }
+  }
+
   const supplyRecoveredDataPath = join(tempDir, "supply-recovered.json");
   const supplyRecoveredCurationPath = join(tempDir, "supply-recovered-curation.json");
   await writeFile(
