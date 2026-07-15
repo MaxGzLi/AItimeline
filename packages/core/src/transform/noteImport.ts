@@ -132,7 +132,7 @@ function firstSentence(text: string): string {
   return text.split(/(?<=[。！？.!?])\s*/, 1)[0] ?? text;
 }
 
-function matchLibraryConcepts(
+export function matchLibraryConcepts(
   text: string,
   libraryConcepts: string[],
   options: ConceptAliasOptions & { libraryCards?: KnowledgePost[] } = {}

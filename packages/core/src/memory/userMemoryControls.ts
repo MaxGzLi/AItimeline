@@ -48,7 +48,19 @@ export interface UserMemoryEditResult {
   events: UserMemoryEditEvent[];
 }
 
-const sourceTypes = ["youtube", "article", "paper", "blog", "news", "repo", "pdf", "audio", "manual", "user_note"] as const;
+const sourceTypes = [
+  "youtube",
+  "article",
+  "paper",
+  "blog",
+  "news",
+  "repo",
+  "pdf",
+  "audio",
+  "manual",
+  "user_note",
+  "conversation"
+] as const;
 const explanationStyles = ["brief", "example-first", "deep"] as const;
 
 export function createEmptyUserMemory(overrides: Partial<UserMemory> = {}): UserMemory {
