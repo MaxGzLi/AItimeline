@@ -8,7 +8,8 @@ export type SourceType =
   | "pdf"
   | "audio"
   | "manual"
-  | "user_note";
+  | "user_note"
+  | "conversation";
 
 export type TrustState = "emerging" | "supported" | "contested";
 

@@ -79,6 +79,7 @@ import {
   runSourceDiscovery,
   fetchChannelUploads,
   transformArticleUrl,
+  transformConversationCapture,
   transformUserNote,
   transformYouTubeUrl
 } from "../../../packages/core/dist/index.js";
@@ -922,6 +923,34 @@ export function createApiServer(options = {}) {
         return;
       }
 
+      if (request.method === "POST" && url.pathname === "/api/captures/source") {
+        const body = await readJsonBody(request);
+
+        requireString(body.url, "url");
+
+        const contentLanguage = resolveContentLanguage(persistenceStore, process.env);
+
+        sendJson(response, 200, handleCaptureSource(body, persistenceStore, curationStore, contentLanguage));
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/captures/conversation") {
+        const body = await readJsonBody(request);
+
+        requireString(body.topic, "topic");
+        requireString(body.excerpt, "excerpt");
+
+        const contentLanguage = resolveContentLanguage(persistenceStore, process.env);
+
+        sendJson(response, 200, handleCaptureConversation(body, persistenceStore, curationStore, contentLanguage));
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/captures/context") {
+        sendJson(response, 200, getCaptureContextResponse(persistenceStore));
+        return;
+      }
+
       if (request.method === "POST" && url.pathname === "/api/import/article") {
         const body = await readJsonBody(request);
         const contentLanguage = resolveContentLanguage(persistenceStore, process.env);
@@ -1212,6 +1241,15 @@ export function createApiServer(options = {}) {
                 contentLanguage,
                 now: runNow
               });
+        const agentCaptureQueue =
+          deepReadOnlyRun || !shouldRefillForDrought
+            ? { queued: 0 }
+            : queueDueAgentCaptures({
+                persistenceStore,
+                curationStore,
+                contentLanguage,
+                now: runNow
+              });
         const supplyStatus = getSupplyStatus(persistenceStore.getSnapshot(), curationStore, runNow);
         const droughtNotification = maybeCreateSupplyDroughtNotification({
           persistenceStore,
@@ -1321,6 +1359,7 @@ export function createApiServer(options = {}) {
           ...filteredBatch,
           subscriptionPolling,
           backlogDigest,
+          agentCaptureQueue,
           supplyRefill,
           goalProductionGuarantee: omitSnapshotFromProductionResult(goalProductionGuarantee),
           droughtNotification,
@@ -6190,6 +6229,272 @@ function filterDuplicateFollowupSourceImport(sourceImport, knownTitles, warn) {
     validation,
     harnessRun
   };
+}
+
+const agentCaptureRunLimit = 3;
+
+function createAgentCaptureCandidateRecord(body, now) {
+  const candidate = normalizeSourceCandidate(
+    {
+      url: body.url,
+      conceptIds: typeof body.topic === "string" && body.topic.trim() ? [body.topic.trim()] : [],
+      relevanceScore: 0.7,
+      noveltyScore: 0.6,
+      qualityScore: 0.7,
+      reason:
+        typeof body.reason === "string" && body.reason.trim()
+          ? body.reason.trim()
+          : "Captured from a learning conversation."
+    },
+    now
+  );
+  const id = `agent-capture-${hashText(normalizeUrlKey(candidate.source.url))}`;
+
+  return {
+    id,
+    candidate: { ...candidate, id },
+    status: "pending",
+    intakeKind: "agent_capture",
+    createdAt: now,
+    updatedAt: now,
+    notes: typeof body.topic === "string" && body.topic.trim() ? body.topic.trim() : undefined
+  };
+}
+
+function createAgentCaptureImportJob(candidate, now, contentLanguage) {
+  return {
+    id: `agent-capture-import-${hashText(candidate.id)}`,
+    kind: "import_source",
+    topicId: candidate.topicId ?? candidate.conceptIds[0],
+    conceptIds: candidate.conceptIds,
+    priority: 0.66,
+    reason:
+      contentLanguage === "en"
+        ? `Learning conversation capture: ${candidate.reason}`
+        : `学习对话采集的来源:${candidate.reason}`,
+    createdAt: now,
+    runAfter: now,
+    sourceCandidate: candidate
+  };
+}
+
+// Flip pending agent-capture candidates into queued import jobs within the
+// shared daily auto job budget. Relevance filtering is intentionally skipped —
+// a capture is an explicit learning intent — while the source quality gate
+// still runs inside the import job itself.
+function queueAgentCaptureCandidates({ persistenceStore, curationStore, records, now, contentLanguage }) {
+  if (!records.length) {
+    return { queued: 0, budgetRemaining: getBudgetRemaining(persistenceStore.getSnapshot(), now) };
+  }
+
+  const snapshot = persistenceStore.getSnapshot();
+  const rawPlan = createSingleJobPlan(
+    records.map((record) => createAgentCaptureImportJob(record.candidate, now, contentLanguage)),
+    now
+  );
+  const budgetResult = applyDailyAutoJobBudget({
+    plan: rawPlan,
+    budget: getDailyAutoJobBudgetRecord(snapshot, now),
+    limit: getDailyAutoJobBudgetLimit(process.env),
+    now
+  });
+  const acceptedIds = new Set(budgetResult.plan.acceptedSourceCandidateIds);
+  const jobRecords = curationStore.enqueuePlan(budgetResult.plan, now);
+  let nextSnapshot = persistenceStore.saveDailyAutoJobBudgetRecords([budgetResult.budget], now);
+
+  if (jobRecords.length) {
+    nextSnapshot = persistenceStore.saveCurationJobRecords(jobRecords, now);
+  }
+
+  const queuedRecords = records
+    .filter((record) => acceptedIds.has(record.candidate.id))
+    .map((record) => ({ ...record, status: "queued", updatedAt: now, lastQueuedAt: now }));
+
+  if (queuedRecords.length) {
+    nextSnapshot = persistenceStore.saveSourceCandidateRecords(queuedRecords, now);
+  }
+
+  return { queued: queuedRecords.length, budgetRemaining: getBudgetRemaining(nextSnapshot, now) };
+}
+
+// Budget-exhausted captures stay pending; each curation run drains a few of
+// them so a capture never gets stranded.
+function queueDueAgentCaptures({ persistenceStore, curationStore, contentLanguage, now }) {
+  const snapshot = persistenceStore.getSnapshot();
+  const pending = snapshot.sourceCandidates
+    .filter((record) => record.intakeKind === "agent_capture" && record.status === "pending")
+    .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime())
+    .slice(0, agentCaptureRunLimit);
+
+  return queueAgentCaptureCandidates({ persistenceStore, curationStore, records: pending, now, contentLanguage });
+}
+
+function handleCaptureSource(body, persistenceStore, curationStore, contentLanguage) {
+  const now = new Date().toISOString();
+  const snapshot = persistenceStore.getSnapshot();
+  const urlKey = normalizeUrlKey(body.url);
+
+  if (!urlKey) {
+    throw new HttpError(400, "url must be a valid URL.");
+  }
+
+  const importedPost = snapshot.posts.find((post) =>
+    (post.sources ?? []).some((source) => normalizeUrlKey(source.url) === urlKey)
+  );
+
+  if (importedPost) {
+    return {
+      status: "imported",
+      alreadyKnown: true,
+      postId: importedPost.id,
+      queued: 0,
+      snapshotSummary: summarizeSnapshot(snapshot)
+    };
+  }
+
+  const existing = snapshot.sourceCandidates.find(
+    (record) => normalizeUrlKey(record.candidate.source.url) === urlKey
+  );
+
+  if (existing) {
+    return {
+      status: existing.status,
+      alreadyKnown: true,
+      record: sanitizeSourceCandidateRecordForResponse(existing),
+      queued: 0,
+      snapshotSummary: summarizeSnapshot(snapshot)
+    };
+  }
+
+  const record = createAgentCaptureCandidateRecord(body, now);
+
+  persistenceStore.saveSourceCandidateRecords([record]);
+
+  const queueResult = queueAgentCaptureCandidates({
+    persistenceStore,
+    curationStore,
+    records: [record],
+    now,
+    contentLanguage
+  });
+  const nextSnapshot = persistenceStore.getSnapshot();
+  const finalRecord = nextSnapshot.sourceCandidates.find((item) => item.id === record.id);
+
+  return {
+    status: finalRecord?.status ?? record.status,
+    alreadyKnown: false,
+    record: sanitizeSourceCandidateRecordForResponse(finalRecord ?? record),
+    queued: queueResult.queued,
+    budgetRemaining: queueResult.budgetRemaining,
+    snapshotSummary: summarizeSnapshot(nextSnapshot)
+  };
+}
+
+function handleCaptureConversation(body, persistenceStore, curationStore, contentLanguage) {
+  const now = new Date().toISOString();
+  const snapshot = persistenceStore.getSnapshot();
+  const libraryPosts = getKnowledgePosts(snapshot.posts);
+  const libraryConcepts = Array.from(new Set(libraryPosts.flatMap((post) => post.concepts)));
+  let capture;
+
+  try {
+    capture = transformConversationCapture(
+      { topic: body.topic, excerpt: body.excerpt, agentName: body.agentName },
+      {
+        capturedAt: now,
+        libraryConcepts,
+        libraryCards: libraryPosts,
+        conceptAliases: snapshot.conceptAliases,
+        contentLanguage
+      }
+    );
+  } catch (error) {
+    throw new HttpError(400, error instanceof Error ? error.message : "Conversation capture failed.");
+  }
+
+  const existingPost = snapshot.posts.find((post) => post.id === capture.post.id);
+
+  if (existingPost) {
+    return {
+      post: sanitizeCapturePostForResponse(existingPost),
+      alreadyCaptured: true,
+      sources: [],
+      snapshotSummary: summarizeSnapshot(snapshot)
+    };
+  }
+
+  persistenceStore.saveSourceImportResult(
+    {
+      importRecord: capture.importRecord,
+      source: capture.source,
+      assets: [capture.asset],
+      chunks: capture.chunks,
+      sourceRegistry: capture.sourceRegistry,
+      posts: [capture.post]
+    },
+    now
+  );
+
+  const sourceUrls = Array.isArray(body.sourceUrls) ? body.sourceUrls.slice(0, 5) : [];
+  const sources = [];
+
+  for (const sourceUrl of sourceUrls) {
+    if (typeof sourceUrl !== "string" || !sourceUrl.trim()) {
+      continue;
+    }
+
+    try {
+      const result = handleCaptureSource(
+        { url: sourceUrl, topic: body.topic },
+        persistenceStore,
+        curationStore,
+        contentLanguage
+      );
+
+      sources.push({ url: sourceUrl, status: result.status, queued: result.queued });
+    } catch (error) {
+      sources.push({ url: sourceUrl, error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  return {
+    post: sanitizeCapturePostForResponse(capture.post),
+    alreadyCaptured: false,
+    sources,
+    snapshotSummary: summarizeSnapshot(persistenceStore.getSnapshot())
+  };
+}
+
+function sanitizeCapturePostForResponse(post) {
+  return {
+    id: post.id,
+    title: post.title,
+    concepts: post.concepts,
+    createdAt: post.createdAt,
+    keyTakeaway: post.keyTakeaway
+  };
+}
+
+function getCaptureContextResponse(persistenceStore) {
+  const snapshot = persistenceStore.getSnapshot();
+  const topics = [...snapshot.topicStates]
+    .sort((left, right) => (right.interestScore ?? 0) - (left.interestScore ?? 0))
+    .slice(0, 8)
+    .map((state) => ({
+      topicId: state.topicId,
+      interestScore: state.interestScore,
+      comprehensionScore: state.comprehensionScore
+    }));
+  const learningGoals = snapshot.learningGoals
+    .filter((record) => record.status === "active")
+    .slice(0, 8)
+    .map((record) => ({ concept: record.concept, status: record.status }));
+  const recentCards = [...snapshot.posts]
+    .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
+    .slice(0, 5)
+    .map((post) => ({ title: post.title, concepts: post.concepts, createdAt: post.createdAt }));
+
+  return { topics, learningGoals, recentCards, cardCount: snapshot.posts.length };
 }
 
 function createSourceCandidateRecord(body) {

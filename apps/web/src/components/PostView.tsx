@@ -115,12 +115,15 @@ export function PostView({
   const reasonInfo = summarizeRecommendReason(card.recommendedBecause, primaryConcept);
   const source = card.sources[0];
   const isUserNote = source?.type === "user_note";
+  // Conversation captures cite their own excerpt: agent-said content, so they
+  // get the explicit conversation label instead of the source check badge.
+  const isConversation = source?.type === "conversation";
   // Derived content (follow-ups, connection notes) cites synthetic local
   // sources; the check badge is reserved for cards with real external grounding.
   const isDerivedContent =
     card.kind === "connection_note" ||
     Boolean(source && (source.id.startsWith("followup-") || source.url.includes("aitimeline.local")));
-  const isSourceCertified = !isUserNote && !isDerivedContent && (card.citations?.length ?? 0) > 0;
+  const isSourceCertified = !isUserNote && !isConversation && !isDerivedContent && (card.citations?.length ?? 0) > 0;
   const topConnection = connections[0];
   const cardMedia = getCardMedia(card);
   const leadMedia = cardMedia[0];
@@ -424,10 +427,17 @@ export function PostView({
         </span>
         <div className="x-post-main">
           <div className="x-head">
-            <span className="x-name">{isUserNote ? t("post.userNote") : getAgentName(primaryConcept)}</span>
+            <span className="x-name">
+              {isUserNote
+                ? t("post.userNote")
+                : isConversation
+                  ? (source?.author ?? t("post.conversation"))
+                  : getAgentName(primaryConcept)}
+            </span>
             {isSourceCertified ? (
               <BadgeCheck aria-label={t("post.hasSource")} className="x-verified" size={17} />
             ) : null}
+            {isConversation ? <span className="x-conversation">{t("post.conversation")}</span> : null}
             {isDerivedContent ? <span className="x-derived">{t("post.derived")}</span> : null}
             <span className="x-meta">@{isUserNote ? "you" : slugConcept(primaryConcept)}</span>
             <span className="x-meta">·</span>
@@ -469,7 +479,7 @@ export function PostView({
           {quoteText && !isUserNote ? (
             <button className="x-quote" onClick={() => onOpen(card)} type="button">
               <span className="x-qhead">
-                <span className="x-name">{t("post.originalSource")}</span>
+                <span className="x-name">{isConversation ? t("post.conversationExcerpt") : t("post.originalSource")}</span>
                 <span className="x-meta">· {source?.title ?? t("format.unknownSource")}</span>
               </span>
               <div className="x-qtext">“{renderMathInText(quoteText)}”</div>

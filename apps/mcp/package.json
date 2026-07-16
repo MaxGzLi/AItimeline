@@ -1,0 +1,18 @@
+{
+  "name": "@aitimeline/mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "MCP server exposing AITimeline learning-capture tools to external agents.",
+  "main": "src/server.mjs",
+  "bin": {
+    "aitimeline-mcp": "src/server.mjs"
+  },
+  "scripts": {
+    "dev": "node src/server.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3.25.0"
+  }
+}

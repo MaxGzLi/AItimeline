@@ -115,6 +115,7 @@ export function PostDetailView({
   const source = card.sources[0];
   const primaryConcept = card.concepts[0] ?? t("common.concept");
   const isUserNote = source?.type === "user_note";
+  const isConversation = source?.type === "conversation";
   const commentCount =
     card.thread?.filter((block) => block.kind === "user_comment" || block.kind === "agent_reply").length ?? 0;
   const knowledgeBlocks = (card.thread ?? [])
@@ -132,8 +133,17 @@ export function PostDetailView({
         </span>
         <div className="x-detail-main">
           <div className="x-head">
-            <span className="x-name">{isUserNote ? t("post.userNote") : getAgentName(primaryConcept)}</span>
-            {isUserNote ? null : <BadgeCheck aria-label={t("post.hasSource")} className="x-verified" size={17} />}
+            <span className="x-name">
+              {isUserNote
+                ? t("post.userNote")
+                : isConversation
+                  ? (source?.author ?? t("post.conversation"))
+                  : getAgentName(primaryConcept)}
+            </span>
+            {isUserNote || isConversation ? null : (
+              <BadgeCheck aria-label={t("post.hasSource")} className="x-verified" size={17} />
+            )}
+            {isConversation ? <span className="x-conversation">{t("post.conversation")}</span> : null}
             <span className="x-meta">@{isUserNote ? "you" : slugConcept(primaryConcept)}</span>
           </div>
 
@@ -185,7 +195,7 @@ export function PostDetailView({
           <div className="x-detail-quote">
             <div className="x-detail-quote-head">
               <Quote size={17} />
-              <span className="x-name">{t("detail.sourceQuote")}</span>
+              <span className="x-name">{isConversation ? t("detail.conversationQuote") : t("detail.sourceQuote")}</span>
               {isExternalSourceUrl(source?.url) ? (
                 <a
                   className="x-meta x-srclink"
@@ -198,7 +208,10 @@ export function PostDetailView({
                   <ExternalLink size={13} />
                 </a>
               ) : (
-                <span className="x-meta">· {source?.title ?? t("format.unknownSource")}</span>
+                <span className="x-meta">
+                  · {source?.title ?? t("format.unknownSource")}
+                  {isConversation && source?.author ? ` · ${source.author}` : ""}
+                </span>
               )}
             </div>
             {source?.type === "youtube" && citation?.startTimeSeconds !== undefined ? (

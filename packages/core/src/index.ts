@@ -52,6 +52,7 @@ export * from "./time/calendarKeys.js";
 export * from "./transform/arxivHtmlImport.js";
 export * from "./transform/articleImport.js";
 export * from "./transform/mockYoutubeImport.js";
+export * from "./transform/conversationImport.js";
 export * from "./transform/noteImport.js";
 export * from "./transform/transcriptToCards.js";
 export * from "./transform/youtubeImport.js";
