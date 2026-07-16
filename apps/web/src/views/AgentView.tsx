@@ -1,5 +1,5 @@
 import type { SourceImport, SubscriptionRecord } from "@aitimeline/core";
-import { ChevronDown, ChevronUp, LoaderCircle, Plus, Rss, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronUp, LoaderCircle, Plus, Rss, Trash2, XCircle } from "lucide-react";
 import type { FormEvent } from "react";
 import { ImportRow } from "../components/ImportRow";
 import { SourceCandidatePanel } from "../components/SourceCandidatePanel";
@@ -57,6 +57,7 @@ export function AgentView({
   sourceImports,
   sourceUrl,
   subscriptionMessage,
+  subscriptionMessageIsError,
   subscriptions,
   subscriptionUrl,
   deletingSubscriptionIds,
@@ -102,6 +103,7 @@ export function AgentView({
   sourceImports: SourceImport[];
   sourceUrl: string;
   subscriptionMessage: string;
+  subscriptionMessageIsError: boolean;
   subscriptions: SubscriptionRecord[];
   subscriptionUrl: string;
   deletingSubscriptionIds: string[];
@@ -155,7 +157,16 @@ export function AgentView({
               <span>{isSavingSubscription ? t("subscription.adding") : t("subscription.add")}</span>
             </button>
           </form>
-          <div className="x-cand-note">{subscriptionMessage}</div>
+          <div className="x-cand-note">
+            {subscriptionMessageIsError ? (
+              <span className="x-import-err">
+                <XCircle size={16} />
+                {subscriptionMessage}
+              </span>
+            ) : (
+              subscriptionMessage
+            )}
+          </div>
 
           {subscriptions.length === 0 ? (
             <div className="x-cand-empty">{t("subscription.empty")}</div>
