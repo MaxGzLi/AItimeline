@@ -306,6 +306,7 @@ export function App() {
   const [memoryMessage, setMemoryMessage] = useState(() => t("memory.default"));
   const [candidateMessage, setCandidateMessage] = useState(() => t("candidate.message.default"));
   const [subscriptionMessage, setSubscriptionMessage] = useState(() => t("subscription.message.default"));
+  const [subscriptionMessageIsError, setSubscriptionMessageIsError] = useState(false);
   const [learningGoalMessage, setLearningGoalMessage] = useState(() => t("goals.message.default"));
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
   const [conceptView, setConceptView] = useState<string | null>(null);
@@ -1605,13 +1606,20 @@ export function App() {
     }
   }
 
+  // Failures were easy to miss as plain note text; track the tone so the
+  // subscription panel can render errors in the same red style as imports.
+  function showSubscriptionMessage(text: string, isError = false) {
+    setSubscriptionMessage(text);
+    setSubscriptionMessageIsError(isError);
+  }
+
   async function handleAddSubscription(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     const trimmedUrl = subscriptionUrl.trim();
 
     if (!trimmedUrl) {
-      setSubscriptionMessage(t("subscription.emptyUrl"));
+      showSubscriptionMessage(t("subscription.emptyUrl"), true);
       return;
     }
 
@@ -1620,11 +1628,11 @@ export function App() {
     try {
       parsedUrl = new URL(trimmedUrl);
     } catch {
-      setSubscriptionMessage(t("subscription.invalidUrl"));
+      showSubscriptionMessage(t("subscription.invalidUrl"), true);
       return;
     }
     if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
-      setSubscriptionMessage(t("subscription.invalidUrl"));
+      showSubscriptionMessage(t("subscription.invalidUrl"), true);
       return;
     }
 
@@ -1641,7 +1649,7 @@ export function App() {
 
       setSubscriptions((records) => upsertById(records, [result.record]));
       setSubscriptionUrl("");
-      setSubscriptionMessage(t("subscription.added", { title: result.record.title }));
+      showSubscriptionMessage(t("subscription.added", { title: result.record.title }));
       setApiStatus("connected");
       setApiMessage(t("api.connected"));
       // Freshly added feeds should not wait for other queued work to wake
@@ -1649,7 +1657,7 @@ export function App() {
       void runCuration("auto");
     } catch (error) {
       markOfflineIfTransport(error);
-      setSubscriptionMessage(error instanceof Error ? error.message : t("subscription.error"));
+      showSubscriptionMessage(error instanceof Error ? error.message : t("subscription.error"), true);
     } finally {
       setIsSavingSubscription(false);
     }
@@ -1665,12 +1673,12 @@ export function App() {
       });
 
       setSubscriptions((records) => upsertById(records, [result.record]));
-      setSubscriptionMessage(t("subscription.saved"));
+      showSubscriptionMessage(t("subscription.saved"));
       setApiStatus("connected");
       setApiMessage(t("api.connected"));
     } catch (error) {
       markOfflineIfTransport(error);
-      setSubscriptionMessage(error instanceof Error ? error.message : t("subscription.error"));
+      showSubscriptionMessage(error instanceof Error ? error.message : t("subscription.error"), true);
     } finally {
       setUpdatingSubscriptionIds((ids) => ids.filter((value) => value !== id));
     }
@@ -1685,12 +1693,12 @@ export function App() {
       });
 
       setSubscriptions((records) => records.filter((record) => record.id !== id));
-      setSubscriptionMessage(t("subscription.saved"));
+      showSubscriptionMessage(t("subscription.saved"));
       setApiStatus("connected");
       setApiMessage(t("api.connected"));
     } catch (error) {
       markOfflineIfTransport(error);
-      setSubscriptionMessage(error instanceof Error ? error.message : t("subscription.error"));
+      showSubscriptionMessage(error instanceof Error ? error.message : t("subscription.error"), true);
     } finally {
       setDeletingSubscriptionIds((ids) => ids.filter((value) => value !== id));
     }
@@ -1716,7 +1724,7 @@ export function App() {
       );
 
       setSubscriptions((records) => upsertById(records, [result.record]));
-      setSubscriptionMessage(
+      showSubscriptionMessage(
         t("subscription.backlog.cataloged", { count: result.videoCount }) +
           (result.truncated ? ` ${t("subscription.backlog.truncated")}` : "")
       );
@@ -1724,7 +1732,7 @@ export function App() {
       await refreshBacklogView(id);
     } catch (error) {
       markOfflineIfTransport(error);
-      setSubscriptionMessage(error instanceof Error ? error.message : t("subscription.backlog.error"));
+      showSubscriptionMessage(error instanceof Error ? error.message : t("subscription.backlog.error"), true);
     } finally {
       markBacklogBusy(id, false);
     }
@@ -1739,7 +1747,7 @@ export function App() {
         { method: "POST", body: {} }
       );
 
-      setSubscriptionMessage(
+      showSubscriptionMessage(
         result.queued > 0
           ? t("subscription.backlog.digested", { count: result.queued })
           : t("subscription.backlog.exhausted")
@@ -1747,7 +1755,7 @@ export function App() {
       await refreshBacklogView(id);
     } catch (error) {
       markOfflineIfTransport(error);
-      setSubscriptionMessage(error instanceof Error ? error.message : t("subscription.backlog.error"));
+      showSubscriptionMessage(error instanceof Error ? error.message : t("subscription.backlog.error"), true);
     } finally {
       markBacklogBusy(id, false);
     }
@@ -1761,7 +1769,7 @@ export function App() {
     if (!isExpanded && !backlogViews[id]) {
       refreshBacklogView(id).catch((error) => {
         markOfflineIfTransport(error);
-        setSubscriptionMessage(error instanceof Error ? error.message : t("subscription.backlog.error"));
+        showSubscriptionMessage(error instanceof Error ? error.message : t("subscription.backlog.error"), true);
       });
     }
   }
@@ -1775,7 +1783,7 @@ export function App() {
       await refreshBacklogView(subscriptionId);
     } catch (error) {
       markOfflineIfTransport(error);
-      setSubscriptionMessage(error instanceof Error ? error.message : t("subscription.backlog.error"));
+      showSubscriptionMessage(error instanceof Error ? error.message : t("subscription.backlog.error"), true);
     }
   }
 
@@ -3012,6 +3020,7 @@ export function App() {
             sourceImports={sourceImports}
             sourceUrl={sourceUrl}
             subscriptionMessage={subscriptionMessage}
+            subscriptionMessageIsError={subscriptionMessageIsError}
             subscriptions={subscriptions}
             subscriptionUrl={subscriptionUrl}
             updatingSubscriptionIds={updatingSubscriptionIds}

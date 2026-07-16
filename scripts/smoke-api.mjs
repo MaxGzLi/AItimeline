@@ -3480,6 +3480,79 @@ try {
     }
   }
 
+  // YouTube answers the handle page and the RSS feed with transient 404s;
+  // creating a subscription must survive one such blip per request instead of
+  // failing the whole POST (observed live on 2026-07-14).
+  const retryCreateDataPath = join(tempDir, "subscription-create-retry.json");
+  const retryCreateCurationPath = join(tempDir, "subscription-create-retry-curation.json");
+  const retryCreateChannelId = "UCretrySmokeChannel000001";
+  const retryCreateHandleUrl = "https://www.youtube.com/@RetrySmoke";
+  const retryCreateFeedUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${retryCreateChannelId}`;
+  const retryCreateFeedXml = `
+    <feed xmlns="http://www.w3.org/2005/Atom" xmlns:yt="http://www.youtube.com/xml/schemas/2015">
+      <title>Retry Smoke Channel</title>
+      <link rel="alternate" href="https://www.youtube.com/channel/${retryCreateChannelId}" />
+    </feed>
+  `;
+  const retryCreateCounts = { handle: 0, feed: 0 };
+  let retryCreateHandleUserAgent;
+  const retryCreateFetch = async (input, init = {}) => {
+    const url = getFetchUrl(input);
+
+    if (url === retryCreateHandleUrl) {
+      retryCreateCounts.handle += 1;
+      retryCreateHandleUserAgent = new Headers(init.headers ?? {}).get("user-agent") ?? undefined;
+
+      if (retryCreateCounts.handle === 1) {
+        return new Response("not found", { status: 404 });
+      }
+
+      return new Response(`<html>"externalId":"${retryCreateChannelId}"</html>`, {
+        status: 200,
+        headers: { "content-type": "text/html" }
+      });
+    }
+
+    if (url === retryCreateFeedUrl) {
+      retryCreateCounts.feed += 1;
+
+      if (retryCreateCounts.feed === 1) {
+        return new Response("not found", { status: 404 });
+      }
+
+      return new Response(retryCreateFeedXml, { status: 200, headers: { "content-type": "application/xml" } });
+    }
+
+    throw new Error(`Unexpected fetch during subscription create retry smoke: ${url}`);
+  };
+  const retryCreateServer = createApiServer({
+    dataPath: retryCreateDataPath,
+    curationDataPath: retryCreateCurationPath,
+    mediaRootDir,
+    feedFetch: retryCreateFetch,
+    guardedFetch: retryCreateFetch
+  });
+
+  try {
+    const retryCreated = await requestJsonFromServer(retryCreateServer, "/api/subscriptions", {
+      method: "POST",
+      body: { url: retryCreateHandleUrl }
+    });
+
+    assert.equal(retryCreated.record.kind, "youtube_channel", "retried creation should resolve the channel kind");
+    assert.equal(retryCreated.record.feedUrl, retryCreateFeedUrl, "retried creation should resolve the channel feed URL");
+    assert.equal(retryCreated.record.title, "Retry Smoke Channel", "retried creation should read the feed title");
+    assert.equal(retryCreateCounts.handle, 2, "a transient handle page 404 should be retried exactly once");
+    assert.equal(retryCreateCounts.feed, 2, "a transient feed 404 should be retried exactly once");
+    assert.match(
+      retryCreateHandleUserAgent ?? "",
+      /Mozilla/,
+      "the handle page request should send a browser-like user-agent"
+    );
+  } finally {
+    await closeServer(retryCreateServer);
+  }
+
   const supplyRecoveredDataPath = join(tempDir, "supply-recovered.json");
   const supplyRecoveredCurationPath = join(tempDir, "supply-recovered-curation.json");
   await writeFile(
