@@ -30,6 +30,7 @@ export * from "./harness/schema.js";
 export * from "./harness/systemPrompt.js";
 export * from "./interaction/coalesceInteractionSignals.js";
 export * from "./memory/userMemoryControls.js";
+export * from "./model/commandModelClient.js";
 export * from "./model/openaiCompatibleClient.js";
 export * from "./ranking/postReleasePlan.js";
 export * from "./ranking/arrangeTimelineBlocks.js";
