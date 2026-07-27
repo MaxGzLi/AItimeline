@@ -173,6 +173,10 @@ export function createApiServer(options = {}) {
   const deepReadModelClients = createConfiguredDeepReadModelClients(process.env);
   const searchProvider = options.searchProvider ?? createConfiguredSearchProvider(process.env);
   const feedFetch = options.feedFetch ?? guardedFetchImpl;
+  // /api/curation/run executes synchronously and can take minutes, while the
+  // page keeps polling. Without this in-process latch a slow run would be
+  // stacked on by every later poll, re-queueing refills and burning budget.
+  let curationRunInFlightSince = null;
   reconcileAndMaterializeCurationQueue(
     persistenceStore,
     curationStore,
@@ -1222,171 +1226,184 @@ export function createApiServer(options = {}) {
 
       if (request.method === "POST" && url.pathname === "/api/curation/run") {
         const body = await readJsonBody(request);
-        const contentLanguage = resolveContentLanguage(persistenceStore, process.env);
-        const runNow = body.now ?? new Date().toISOString();
-        const runKinds = Array.isArray(body.kinds) ? body.kinds : undefined;
-        const deepReadOnlyRun =
-          Array.isArray(runKinds) && runKinds.length > 0 && runKinds.every((kind) => kind === "deep_read_article");
-        const goalProductionGuarantee = deepReadOnlyRun
-          ? {
-              snapshot: persistenceStore.getSnapshot(),
-              queued: false,
-              records: [],
-              budget: getDailyAutoJobBudgetRecord(persistenceStore.getSnapshot(), runNow),
-              discardedJobIds: [],
-              skippedConcepts: []
-            }
-          : queueDailyLearningGoalProductionGuarantee({
-              persistenceStore,
-              curationStore,
-              userId: typeof body.userId === "string" && body.userId.trim() ? body.userId : "local-user",
-              contentLanguage,
-              now: runNow
-            });
-        const subscriptionPolling = deepReadOnlyRun
-          ? { checked: 0, skipped: 0, queued: 0, pending: 0, errors: [] }
-          : await pollDueSubscriptions({
-              persistenceStore,
-              curationStore,
-              fetchImpl: feedFetch,
-              contentLanguage,
-              now: runNow
-            });
-        const shouldRefillForDrought = !runKinds || runKinds.includes("import_source");
-        const backlogDigest =
-          deepReadOnlyRun || !shouldRefillForDrought
-            ? { queued: 0, skipped: 0 }
-            : digestDueSubscriptionBacklogs({
-                persistenceStore,
-                curationStore,
-                contentLanguage,
-                now: runNow
-              });
-        const agentCaptureQueue =
-          deepReadOnlyRun || !shouldRefillForDrought
-            ? { queued: 0 }
-            : queueDueAgentCaptures({
-                persistenceStore,
-                curationStore,
-                contentLanguage,
-                now: runNow
-              });
-        const supplyStatus = getSupplyStatus(persistenceStore.getSnapshot(), curationStore, runNow);
-        const droughtNotification = maybeCreateSupplyDroughtNotification({
-          persistenceStore,
-          status: supplyStatus,
-          contentLanguage,
-          now: runNow
-        });
-        let supplyRefill = { queued: 0, skipped: 0, budgetRemaining: supplyStatus.budgetRemaining };
 
-        if (shouldRefillForDrought && supplyStatus.drought) {
-          supplyRefill = queueSupplyRefill({
+        if (curationRunInFlightSince) {
+          sendJson(response, 200, { alreadyRunning: true, startedAt: curationRunInFlightSince });
+          return;
+        }
+
+        curationRunInFlightSince = new Date().toISOString();
+
+        try {
+          const contentLanguage = resolveContentLanguage(persistenceStore, process.env);
+          const runNow = body.now ?? new Date().toISOString();
+          const runKinds = Array.isArray(body.kinds) ? body.kinds : undefined;
+          const deepReadOnlyRun =
+            Array.isArray(runKinds) && runKinds.length > 0 && runKinds.every((kind) => kind === "deep_read_article");
+          const goalProductionGuarantee = deepReadOnlyRun
+            ? {
+                snapshot: persistenceStore.getSnapshot(),
+                queued: false,
+                records: [],
+                budget: getDailyAutoJobBudgetRecord(persistenceStore.getSnapshot(), runNow),
+                discardedJobIds: [],
+                skippedConcepts: []
+              }
+            : queueDailyLearningGoalProductionGuarantee({
+                persistenceStore,
+                curationStore,
+                userId: typeof body.userId === "string" && body.userId.trim() ? body.userId : "local-user",
+                contentLanguage,
+                now: runNow
+              });
+          const subscriptionPolling = deepReadOnlyRun
+            ? { checked: 0, skipped: 0, queued: 0, pending: 0, errors: [] }
+            : await pollDueSubscriptions({
+                persistenceStore,
+                curationStore,
+                fetchImpl: feedFetch,
+                contentLanguage,
+                now: runNow
+              });
+          const shouldRefillForDrought = !runKinds || runKinds.includes("import_source");
+          const backlogDigest =
+            deepReadOnlyRun || !shouldRefillForDrought
+              ? { queued: 0, skipped: 0 }
+              : digestDueSubscriptionBacklogs({
+                  persistenceStore,
+                  curationStore,
+                  contentLanguage,
+                  now: runNow
+                });
+          const agentCaptureQueue =
+            deepReadOnlyRun || !shouldRefillForDrought
+              ? { queued: 0 }
+              : queueDueAgentCaptures({
+                  persistenceStore,
+                  curationStore,
+                  contentLanguage,
+                  now: runNow
+                });
+          const supplyStatus = getSupplyStatus(persistenceStore.getSnapshot(), curationStore, runNow);
+          const droughtNotification = maybeCreateSupplyDroughtNotification({
             persistenceStore,
-            curationStore,
+            status: supplyStatus,
             contentLanguage,
             now: runNow
           });
-        }
-        const batch = await runDueBackgroundCurationJobs(
-          curationStore,
-          {
-            contentLanguage,
-            sourceImportWorker,
-            ingestSourceCandidate: (candidate) => ingestSourceCandidateForBackground(candidate, ingestSource),
-            discoverSources: (job) => discoverSourcesForJob(job, searchProvider, persistenceStore, contentLanguage),
-            loadSeedPost: (job) => persistenceStore.getSnapshot().posts.find((post) => post.id === job.postId),
-            loadSourceQualityVerdicts: () => persistenceStore.getSnapshot().sourceQualityVerdicts,
-            loadSourceQualityUserContext: () => buildSourceQualityUserContext(persistenceStore.getSnapshot()),
-            researchQuestion: (job, context) =>
-              runResearchWithStagedPersistence(
-                persistenceStore.getSnapshot(),
-                context.effectAt,
-                (stagedStore) => handleResearchQuestionJob(
+          let supplyRefill = { queued: 0, skipped: 0, budgetRemaining: supplyStatus.budgetRemaining };
+
+          if (shouldRefillForDrought && supplyStatus.drought) {
+            supplyRefill = queueSupplyRefill({
+              persistenceStore,
+              curationStore,
+              contentLanguage,
+              now: runNow
+            });
+          }
+          const batch = await runDueBackgroundCurationJobs(
+            curationStore,
+            {
+              contentLanguage,
+              sourceImportWorker,
+              ingestSourceCandidate: (candidate) => ingestSourceCandidateForBackground(candidate, ingestSource),
+              discoverSources: (job) => discoverSourcesForJob(job, searchProvider, persistenceStore, contentLanguage),
+              loadSeedPost: (job) => persistenceStore.getSnapshot().posts.find((post) => post.id === job.postId),
+              loadSourceQualityVerdicts: () => persistenceStore.getSnapshot().sourceQualityVerdicts,
+              loadSourceQualityUserContext: () => buildSourceQualityUserContext(persistenceStore.getSnapshot()),
+              researchQuestion: (job, context) =>
+                runResearchWithStagedPersistence(
+                  persistenceStore.getSnapshot(),
+                  context.effectAt,
+                  (stagedStore) => handleResearchQuestionJob(
+                    job,
+                    stagedStore,
+                    sourceImportWorker,
+                    searchProvider,
+                    askModelClient,
+                    contentLanguage,
+                    context.effectAt,
+                    ingestSource
+                  )
+                ),
+              researchIdea: (job, context) =>
+                runResearchWithStagedPersistence(
+                  persistenceStore.getSnapshot(),
+                  context.effectAt,
+                  (stagedStore) => handleResearchIdeaJob(
+                    job,
+                    stagedStore,
+                    sourceImportWorker,
+                    searchProvider,
+                    contentLanguage,
+                    context.effectAt,
+                    ingestSource
+                  )
+                ),
+              conceptBrief: (job) =>
+                handleConceptBriefJob(
                   job,
-                  stagedStore,
-                  sourceImportWorker,
-                  searchProvider,
+                  persistenceStore,
                   askModelClient,
                   contentLanguage,
-                  context.effectAt,
-                  ingestSource
-                )
-              ),
-            researchIdea: (job, context) =>
-              runResearchWithStagedPersistence(
-                persistenceStore.getSnapshot(),
-                context.effectAt,
-                (stagedStore) => handleResearchIdeaJob(
+                  runNow
+                ),
+              deepReadArticle: (job) =>
+                handleDeepReadArticleJob(
                   job,
-                  stagedStore,
-                  sourceImportWorker,
-                  searchProvider,
+                  persistenceStore,
+                  deepReadModelClients,
                   contentLanguage,
-                  context.effectAt,
-                  ingestSource
-                )
-              ),
-            conceptBrief: (job) =>
-              handleConceptBriefJob(
-                job,
-                persistenceStore,
-                askModelClient,
-                contentLanguage,
-                runNow
-              ),
-            deepReadArticle: (job) =>
-              handleDeepReadArticleJob(
-                job,
-                persistenceStore,
-                deepReadModelClients,
-                contentLanguage,
-                runNow
-              ),
-            cooldownTopic: (job) => ({
-              kind: job.kind,
-              message: "Topic cooldown recorded by API worker."
-            })
-          },
-          {
-            now: runNow,
-            limit: body.limit,
-            kinds: body.kinds,
-            workerId
-          }
-        );
-        const filteredRecords = filterDuplicateFollowupCurationRecords(
-          batch.records,
-          persistenceStore.getSnapshot().posts
-        );
+                  runNow
+                ),
+              cooldownTopic: (job) => ({
+                kind: job.kind,
+                message: "Topic cooldown recorded by API worker."
+              })
+            },
+            {
+              now: runNow,
+              limit: body.limit,
+              kinds: body.kinds,
+              workerId
+            }
+          );
+          const filteredRecords = filterDuplicateFollowupCurationRecords(
+            batch.records,
+            persistenceStore.getSnapshot().posts
+          );
 
-        filteredRecords.forEach((record, index) => {
-          if (record.result !== batch.records[index]?.result && record.result) {
-            curationStore.updateTerminalResult(record.id, record.result);
-          }
-        });
+          filteredRecords.forEach((record, index) => {
+            if (record.result !== batch.records[index]?.result && record.result) {
+              curationStore.updateTerminalResult(record.id, record.result);
+            }
+          });
 
-        const materializedRecords = materializeCurationJobRecords(
-          persistenceStore,
-          curationStore,
-          filteredRecords,
-          { appliedAt: batch.completedAt, contentLanguage }
-        );
-        const records = materializedRecords.map((record) => sanitizeCurationRecordForResponse(record));
-        const filteredBatch = { ...batch, records };
-        const snapshot = persistenceStore.getSnapshot();
+          const materializedRecords = materializeCurationJobRecords(
+            persistenceStore,
+            curationStore,
+            filteredRecords,
+            { appliedAt: batch.completedAt, contentLanguage }
+          );
+          const records = materializedRecords.map((record) => sanitizeCurationRecordForResponse(record));
+          const filteredBatch = { ...batch, records };
+          const snapshot = persistenceStore.getSnapshot();
 
-        sendJson(response, 200, {
-          ...filteredBatch,
-          subscriptionPolling,
-          backlogDigest,
-          agentCaptureQueue,
-          supplyRefill,
-          goalProductionGuarantee: omitSnapshotFromProductionResult(goalProductionGuarantee),
-          droughtNotification,
-          snapshotSummary: summarizeSnapshot(snapshot)
-        });
-        return;
+          sendJson(response, 200, {
+            ...filteredBatch,
+            alreadyRunning: false,
+            subscriptionPolling,
+            backlogDigest,
+            agentCaptureQueue,
+            supplyRefill,
+            goalProductionGuarantee: omitSnapshotFromProductionResult(goalProductionGuarantee),
+            droughtNotification,
+            snapshotSummary: summarizeSnapshot(snapshot)
+          });
+          return;
+        } finally {
+          curationRunInFlightSince = null;
+        }
       }
 
       if (request.method === "POST" && url.pathname === "/api/agent/ask") {
