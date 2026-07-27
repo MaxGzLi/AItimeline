@@ -1110,6 +1110,136 @@ try {
     await closeServer(failedCandidateServer);
   }
 
+  // A curation run executes synchronously and can outlive the page's patience.
+  // A second run arriving mid-flight must bail out instead of stacking another
+  // pass over the queue.
+  const runGuardCreatedAt = "2026-07-20T00:00:00.000Z";
+  const runGuardDataPath = join(tempDir, "run-guard.json");
+  const runGuardCurationPath = join(tempDir, "run-guard-curation.json");
+  const runGuardCandidates = ["run-guard-a", "run-guard-b"].map((id) =>
+    makeSourceCandidateRecord({
+      id,
+      url: `https://run-guard.local/${id}`,
+      score: 0.9,
+      status: "queued",
+      concept: "Run Guard",
+      createdAt: runGuardCreatedAt
+    })
+  );
+
+  await writeFile(
+    runGuardDataPath,
+    JSON.stringify({
+      version: 1,
+      updatedAt: runGuardCreatedAt,
+      sourceCandidates: runGuardCandidates
+    })
+  );
+  await writeFile(
+    runGuardCurationPath,
+    JSON.stringify({
+      version: 1,
+      records: runGuardCandidates.map((record) => makeQueuedImportJobRecord(record, runGuardCreatedAt))
+    })
+  );
+
+  const runGuardFetchUrls = [];
+  let releaseRunGuardFetch = null;
+  const runGuardServer = createApiServer({
+    dataPath: runGuardDataPath,
+    curationDataPath: runGuardCurationPath,
+    mediaRootDir,
+    guardedFetch: async (input, init) => {
+      const url = getFetchUrl(input);
+
+      if (!url.startsWith("https://run-guard.local/")) {
+        return globalThis.fetch(input, init);
+      }
+
+      runGuardFetchUrls.push(url);
+
+      // Only the first import hangs: a second run that slipped past the guard
+      // then finishes on its own and shows up as an extra fetch plus a moved
+      // job, instead of hanging the smoke.
+      if (runGuardFetchUrls.length === 1) {
+        await new Promise((resolveFetch) => {
+          releaseRunGuardFetch = resolveFetch;
+        });
+      }
+
+      return new Response(
+        `
+          <html>
+            <head><meta property="og:title" content="Run guard fixture" /></head>
+            <body>
+              <article>
+                <p>The observer run guard keeps a second concurrent run from stacking onto the queue.</p>
+              </article>
+            </body>
+          </html>
+        `,
+        { status: 200, headers: { "content-type": "text/html" } }
+      );
+    }
+  });
+
+  async function waitForRunGuardFetch(expectedCount) {
+    for (let attempt = 0; attempt < 400 && runGuardFetchUrls.length < expectedCount; attempt += 1) {
+      await new Promise((resolveTick) => setTimeout(resolveTick, 5));
+    }
+
+    assert.equal(
+      runGuardFetchUrls.length,
+      expectedCount,
+      `curation run should reach blocking source fetch #${expectedCount}`
+    );
+  }
+
+  try {
+    const blockedFirstRun = requestJsonFromServer(runGuardServer, "/api/curation/run", {
+      method: "POST",
+      body: { now: runGuardCreatedAt, limit: 1, kinds: ["import_source"] }
+    });
+
+    await waitForRunGuardFetch(1);
+
+    const jobsBeforeConcurrentRun = await requestJsonFromServer(runGuardServer, "/api/curation/jobs");
+    const concurrentRun = await requestJsonFromServer(runGuardServer, "/api/curation/run", {
+      method: "POST",
+      body: { now: "2026-07-20T00:00:01.000Z", limit: 1, kinds: ["import_source"] }
+    });
+    const jobsAfterConcurrentRun = await requestJsonFromServer(runGuardServer, "/api/curation/jobs");
+
+    assert.equal(concurrentRun.alreadyRunning, true, "a run arriving mid-flight should report alreadyRunning");
+    assert.equal(typeof concurrentRun.startedAt, "string", "the guarded response should say when the run started");
+    assert.equal(concurrentRun.records, undefined, "the guarded run should not report a batch it never ran");
+    assert.equal(runGuardFetchUrls.length, 1, "the guarded run should not start a second import");
+    assert.deepEqual(
+      jobsAfterConcurrentRun.jobs.map((record) => `${record.id}:${record.status}`),
+      jobsBeforeConcurrentRun.jobs.map((record) => `${record.id}:${record.status}`),
+      "the guarded run should leave the queue untouched"
+    );
+
+    releaseRunGuardFetch();
+
+    const firstRunResult = await blockedFirstRun;
+
+    assert.equal(firstRunResult.alreadyRunning, false, "the run holding the guard should report alreadyRunning false");
+    assert.equal(firstRunResult.records.length, 1, "the run holding the guard should still process its job");
+
+    // The guard is released in a finally, so the next run gets to work.
+    const laterRunResult = await requestJsonFromServer(runGuardServer, "/api/curation/run", {
+      method: "POST",
+      body: { now: "2026-07-20T00:01:00.000Z", limit: 1, kinds: ["import_source"] }
+    });
+
+    assert.equal(laterRunResult.alreadyRunning, false, "the guard should release once a run finishes");
+    assert.equal(laterRunResult.records.length, 1, "a run after the guard released should process the next job");
+  } finally {
+    releaseRunGuardFetch?.();
+    await closeServer(runGuardServer);
+  }
+
   const masteryDataPath = join(tempDir, "mastery-promotion.json");
   const masteryCurationPath = join(tempDir, "mastery-promotion-curation.json");
   const masteryConcept = "Mastery Loop";
