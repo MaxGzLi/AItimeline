@@ -117,6 +117,20 @@ export interface DailyAutoJobBudgetResult {
   discardedJobIds: string[];
 }
 
+export type DailyAutoJobSettlementOutcome =
+  | "produced"
+  | "gate_rejected"
+  | "import_failed_refundable"
+  | "import_failed";
+
+export interface SettleDailyAutoJobBudgetInput {
+  budget?: DailyAutoJobBudgetRecord;
+  outcome: DailyAutoJobSettlementOutcome;
+  limit?: number;
+  now?: string | Date;
+  timeZone?: string;
+}
+
 export interface CreateBackgroundCurationPlanInput {
   signals: InteractionSignal[];
   feedback: LearningFeedback[];
@@ -264,11 +278,16 @@ export function applyDailyAutoJobBudget(input: ApplyDailyAutoJobBudgetInput): Da
     }
     return false;
   });
+  const carried = input.budget?.date === date ? input.budget : undefined;
   const budget: DailyAutoJobBudgetRecord = {
     date,
     used,
     limit,
     discarded,
+    produced: carried?.produced ?? 0,
+    gateRejected: carried?.gateRejected ?? 0,
+    importFailed: carried?.importFailed ?? 0,
+    refunded: carried?.refunded ?? 0,
     updatedAt: now.toISOString()
   };
 
@@ -289,6 +308,46 @@ export function applyDailyAutoJobBudget(input: ApplyDailyAutoJobBudgetInput): Da
     },
     budget,
     discardedJobIds
+  };
+}
+
+// Budget is spent when a job is enqueued, so the day's counter alone cannot say
+// whether the spend bought a card. Settling a terminal job records where the
+// slot went, and refunds the slot when the attempt failed before any model call.
+export function settleDailyAutoJobBudget(input: SettleDailyAutoJobBudgetInput): DailyAutoJobBudgetRecord {
+  const now = normalizeDate(input.now ?? new Date());
+  const date = getDayKey(now, input.timeZone);
+  const carried = input.budget?.date === date ? input.budget : undefined;
+  const limit = Math.max(0, Math.floor(input.limit ?? carried?.limit ?? 0));
+  let used = carried?.used ?? 0;
+  let produced = carried?.produced ?? 0;
+  let gateRejected = carried?.gateRejected ?? 0;
+  let importFailed = carried?.importFailed ?? 0;
+  let refunded = carried?.refunded ?? 0;
+
+  if (input.outcome === "produced") {
+    produced += 1;
+  } else if (input.outcome === "gate_rejected") {
+    gateRejected += 1;
+  } else {
+    importFailed += 1;
+
+    if (input.outcome === "import_failed_refundable") {
+      refunded += 1;
+      used = Math.max(0, used - 1);
+    }
+  }
+
+  return {
+    date,
+    used,
+    limit,
+    discarded: carried?.discarded ?? 0,
+    produced,
+    gateRejected,
+    importFailed,
+    refunded,
+    updatedAt: now.toISOString()
   };
 }
 
