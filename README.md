@@ -67,9 +67,25 @@ AITIMELINE_MODEL_API_KEY=your-api-key
 
 Do not call model providers directly from the browser with a user or product API key. Use the adapter from a server, worker, CLI, or self-hosted runtime.
 
+### Command runner (no API key)
+
+If you have no API key but do have a command-line coding agent on the machine, point AITimeline at any command that reads a prompt on stdin and prints the answer on stdout. The command runs through `sh -c`; its stdout (trimmed) is the model answer, and a non-zero exit, a timeout, or empty output fails the run so the deterministic fallback stays in charge.
+
+```bash
+# Any of these; the command is yours to choose.
+AITIMELINE_MODEL_COMMAND='claude --bare -p --model sonnet'
+AITIMELINE_MODEL_COMMAND='codex exec'
+# Optional; defaults to 120000.
+AITIMELINE_MODEL_COMMAND_TIMEOUT_MS=120000
+```
+
+`AITIMELINE_MODEL_COMMAND` takes priority over the OpenAI-compatible variables above. `AITIMELINE_MODEL_DEEPREAD_*` keeps its own meaning: it still overrides deep-read generation, and deep read falls back to the command runner when it is unset.
+
+The runner is vendor-neutral: AITimeline never detects, logs into, or special-cases any particular CLI. You supply the command, and the quota and terms of service of whatever tool it invokes are yours to manage. To use Anthropic models with an API key instead, the existing OpenAI-compatible endpoint works too.
+
 Source discovery is optional and off by default: set `AITIMELINE_SEARCH_API_KEY` (Tavily) to let `discover_sources` jobs and dark-zone agent questions pull real source candidates. Without a key the app stays network-free and discovery proposals are surfaced to the user instead of executed.
 
-The local API auto-selects the import runner from the environment: when `AITIMELINE_MODEL_NAME` (or `OPENAI_MODEL`) is set it imports articles and YouTube transcripts through the model-backed runner; otherwise it falls back to the deterministic template runner, so the default setup stays network-free. Both `transformArticleUrl` and `transformYouTubeUrl` also accept a `runner` option for callers that wire their own model client.
+The local API auto-selects the import runner from the environment: when `AITIMELINE_MODEL_COMMAND` or `AITIMELINE_MODEL_NAME` (or `OPENAI_MODEL`) is set it imports articles and YouTube transcripts through the model-backed runner; otherwise it falls back to the deterministic template runner, so the default setup stays network-free. Both `transformArticleUrl` and `transformYouTubeUrl` also accept a `runner` option for callers that wire their own model client.
 
 ## Verification
 
@@ -85,7 +101,7 @@ npm run smoke:model
 
 `smoke:api` starts the local API on a temporary port and checks article import, timeline reads, memory edits, interaction signals, queued curation jobs, background source import persistence, grounded card Q&A (`POST /api/ask`), background source discovery through an injected search provider, and the agent entry (`POST /api/agent/ask`: grounded turns, dark-zone discovery proposals and turn metering).
 
-`smoke:model` injects a fake model client and checks that the article and YouTube transforms run the model-backed runner when given one (the model output reaches the card and passes schema + grounding), that grounded card Q&A (`askGrounded`) answers from the post's cited source chunks, and that all paths fall back to deterministic behavior when no model is configured. `npm test` runs the core, API and model smokes together.
+`smoke:model` injects a fake model client and checks that the article and YouTube transforms run the model-backed runner when given one (the model output reaches the card and passes schema + grounding), that grounded card Q&A (`askGrounded`) answers from the post's cited source chunks, that a stub CLI driven through the command runner reaches the card and fails closed on a non-zero exit, and that all paths fall back to deterministic behavior when no model is configured. `npm test` runs the core, API and model smokes together.
 
 ## Current MVP
 
