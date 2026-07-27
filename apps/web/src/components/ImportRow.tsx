@@ -1,15 +1,25 @@
 import type { SourceImport, TransformationStatus } from "@aitimeline/core";
 import { CheckCircle2, Clock, LoaderCircle, XCircle } from "lucide-react";
-import { formatStatus } from "../lib/format";
+import { formatRelativeTime, formatStatus } from "../lib/format";
+import { t } from "../lib/i18n";
 
-export function ImportRow({ item }: { item: SourceImport }) {
+export function ImportRow({ item, count = 1 }: { item: SourceImport; count?: number }) {
+  const meta = [formatStatus(item.status), formatRelativeTime(item.createdAt)].filter(Boolean).join(" · ");
+
   return (
     <div className="x-import-row">
       <div>
         <span>{item.source.title}</span>
-        <small>{formatStatus(item.status)}</small>
+        <small>{meta}</small>
       </div>
-      <StatusIcon status={item.status} />
+      <div className="x-import-row-end">
+        {count > 1 ? (
+          <span className="x-chip x-import-count" title={t("mr.imports.groupCount", { count })}>
+            ×{count}
+          </span>
+        ) : null}
+        <StatusIcon status={item.status} />
+      </div>
     </div>
   );
 }

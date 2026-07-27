@@ -8,6 +8,38 @@ import { formatShortTime } from "../lib/format";
 import { t } from "../lib/i18n";
 import type { ApiStatus, SourceCandidateRecord, SubscriptionBacklogView } from "../lib/types";
 
+const IMPORT_GROUP_LIMIT = 20;
+
+interface ImportGroup {
+  latest: SourceImport;
+  count: number;
+}
+
+// The import history repeats the same source title dozens of times (follow-up
+// batches, re-imports). Collapse by title so one line stands for one source.
+function groupImportsByTitle(imports: SourceImport[]): ImportGroup[] {
+  const groups = new Map<string, ImportGroup>();
+
+  for (const item of imports) {
+    const group = groups.get(item.source.title);
+
+    if (!group) {
+      groups.set(item.source.title, { latest: item, count: 1 });
+      continue;
+    }
+
+    group.count += 1;
+
+    if (Date.parse(item.createdAt) > Date.parse(group.latest.createdAt)) {
+      group.latest = item;
+    }
+  }
+
+  return Array.from(groups.values()).sort(
+    (left, right) => Date.parse(right.latest.createdAt) - Date.parse(left.latest.createdAt)
+  );
+}
+
 function backlogStatusKey(status: string): string {
   if (status === "pending" || status === "queued" || status === "imported" || status === "skipped") {
     return status;
@@ -117,6 +149,8 @@ export function AgentView({
   const updatingSubscriptionSet = new Set(updatingSubscriptionIds);
   const backlogBusySet = new Set(backlogBusyIds);
   const expandedBacklogSet = new Set(expandedBacklogIds);
+  const importGroups = groupImportsByTitle(sourceImports);
+  const hiddenImportGroupCount = Math.max(importGroups.length - IMPORT_GROUP_LIMIT, 0);
 
   return (
     <>
@@ -353,9 +387,12 @@ export function AgentView({
           <p className="x-mrnote">{t("mr.imports.empty")}</p>
         ) : (
           <div style={{ padding: "0 16px" }}>
-            {sourceImports.map((sourceImport) => (
-              <ImportRow item={sourceImport} key={sourceImport.id} />
+            {importGroups.slice(0, IMPORT_GROUP_LIMIT).map((group) => (
+              <ImportRow count={group.count} item={group.latest} key={group.latest.id} />
             ))}
+            {hiddenImportGroupCount > 0 ? (
+              <p className="x-import-more">{t("mr.imports.more", { count: hiddenImportGroupCount })}</p>
+            ) : null}
           </div>
         )}
       </section>
