@@ -1010,10 +1010,20 @@ function normalizeDailyAutoJobBudgetRecords(value: unknown): DailyAutoJobBudgetR
         used: normalizeNonNegativeInteger(record.used),
         limit: normalizeNonNegativeInteger(record.limit),
         discarded: normalizeNonNegativeInteger(record.discarded),
+        ...normalizeOptionalCount("produced", record.produced),
+        ...normalizeOptionalCount("gateRejected", record.gateRejected),
+        ...normalizeOptionalCount("importFailed", record.importFailed),
+        ...normalizeOptionalCount("refunded", record.refunded),
         updatedAt: record.updatedAt
       }
     ];
   });
+}
+
+// Ledger counters were added after the first budget records were written, so an
+// absent field stays absent instead of decoding into a fabricated 0.
+function normalizeOptionalCount(key: string, value: unknown): Record<string, number> {
+  return value === undefined ? {} : { [key]: normalizeNonNegativeInteger(value) };
 }
 
 function normalizeConceptBriefs(value: unknown): ConceptBrief[] {

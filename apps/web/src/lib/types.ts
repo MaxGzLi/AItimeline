@@ -207,6 +207,15 @@ export type ApiTimelineBlock = {
   dwellBoost: number;
 };
 
+export type DailyAutoJobLedger = {
+  limit: number;
+  used: number;
+  produced: number;
+  gateRejected: number;
+  importFailed: number;
+  refunded: number;
+};
+
 export type SupplyStatus = {
   newCards48h: number;
   pendingCandidates: number;
@@ -214,6 +223,7 @@ export type SupplyStatus = {
   activeSubscriptions: number;
   queuedImports: number;
   budgetRemaining: number;
+  todayLedger?: DailyAutoJobLedger;
   reviewDueCount: number;
   drought: boolean;
 };

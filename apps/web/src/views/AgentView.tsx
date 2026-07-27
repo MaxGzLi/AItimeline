@@ -60,6 +60,7 @@ export function AgentView({
   subscriptionMessageIsError,
   subscriptions,
   subscriptionUrl,
+  todayLedgerLine,
   deletingSubscriptionIds,
   updatingSubscriptionIds
 }: {
@@ -106,6 +107,7 @@ export function AgentView({
   subscriptionMessageIsError: boolean;
   subscriptions: SubscriptionRecord[];
   subscriptionUrl: string;
+  todayLedgerLine: string;
   deletingSubscriptionIds: string[];
   updatingSubscriptionIds: string[];
 }) {
@@ -302,6 +304,7 @@ export function AgentView({
           <span className="x-pulse" aria-hidden="true" />
           {t("mr.observer")}
         </h2>
+        <p className="x-mrnote">{todayLedgerLine}</p>
         <SourceCandidatePanel
           autoScoutEnabled={autoScoutEnabled}
           candidateConcept={candidateConcept}

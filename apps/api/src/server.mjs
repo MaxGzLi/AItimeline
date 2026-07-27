@@ -33,6 +33,7 @@ import {
   createAITimelinePersistenceStore,
   createMemoryRevisionedStorageAdapter,
   applyDailyAutoJobBudget,
+  settleDailyAutoJobBudget,
   createBackgroundCurationPlan,
   createDeterministicConceptBrief,
   DISCOVERY_AGGREGATE_DOMAINS,
@@ -96,6 +97,24 @@ const defaultMediaRoot = resolve(currentDir, "../data/media");
 const supplyDroughtNewCardThreshold = 3;
 const supplyDroughtWindowHours = 48;
 const supplyRefillLimit = 5;
+// Pending candidates that nobody picked up in two weeks are noise; they are
+// retired (never deleted) so the refill ranking stops re-reading them.
+const staleSourceCandidateDays = 14;
+// Per-hostname failure history that a refill candidate inherits: heavy score
+// penalty first, hard exclusion once the host has proven itself repeatedly bad.
+const candidateHostFailurePenaltyThreshold = 3;
+const candidateHostFailureExclusionThreshold = 5;
+const candidateHostFailurePenalty = 0.5;
+// Terminal failure messages are matched, not just displayed. Keep them here so
+// classification and redaction never drift apart.
+export const sourceCandidateFailureMessages = {
+  unreachable: "Source could not be fetched.",
+  transcriptUnavailable: "Source has no usable transcript.",
+  importFailed: "Source import failed.",
+  unprocessable: "Source candidate could not be processed.",
+  fallbackSource: "Candidate did not produce a qualified source; same-source fallback was used.",
+  stale: "stale_candidate"
+};
 const backlogAutoBatchLimit = 3;
 const backlogManualBatchLimit = 5;
 const backlogDailyLimit = 8;
@@ -2281,8 +2300,22 @@ function getSupplyStatus(snapshot, curationStore, nowValue) {
     activeSubscriptions: snapshot.subscriptions.length,
     queuedImports: curationStore.list("queued").filter((record) => record.job.kind === "import_source").length,
     budgetRemaining: getBudgetRemaining(snapshot, now),
+    todayLedger: getTodayAutoJobLedger(snapshot, now),
     reviewDueCount,
     drought: newCards48h < supplyDroughtNewCardThreshold
+  };
+}
+
+function getTodayAutoJobLedger(snapshot, nowValue) {
+  const budget = getDailyAutoJobBudgetRecord(snapshot, nowValue);
+
+  return {
+    limit: getDailyAutoJobBudgetLimit(process.env),
+    used: budget?.used ?? 0,
+    produced: budget?.produced ?? 0,
+    gateRejected: budget?.gateRejected ?? 0,
+    importFailed: budget?.importFailed ?? 0,
+    refunded: budget?.refunded ?? 0
   };
 }
 
@@ -2296,15 +2329,24 @@ function getBudgetRemaining(snapshot, nowValue) {
 
 function queueSupplyRefill({ persistenceStore, curationStore, contentLanguage, now }) {
   const nowIso = normalizeIsoDate(now);
+  // Refill is the only regular sweep over the whole candidate pool, so it also
+  // does the housekeeping: unstick zombies, retire stale entries, then select.
+  repairZombieQueuedCandidates(persistenceStore, curationStore, nowIso);
+  expireStaleSourceCandidates(persistenceStore, nowIso);
   const snapshot = persistenceStore.getSnapshot();
   const activeCandidateIds = getActiveImportSourceCandidateIds(curationStore);
+  const hostFailureCounts = countCandidateHostFailures(snapshot.sourceCandidates);
   const selectedRecords = snapshot.sourceCandidates
     .filter((record) => record.status === "pending")
     // Backlog-cataloged candidates drain through their own paced digest lane
     // (backlogDailyLimit); letting drought refill grab them would bypass it.
     .filter((record) => typeof record.backlogOrder !== "number")
     .filter((record) => !activeCandidateIds.has(record.candidate.id))
-    .sort((left, right) => scoreCandidateRecord(right) - scoreCandidateRecord(left))
+    .filter((record) => !isExcludedCandidateHost(record, hostFailureCounts))
+    .sort(
+      (left, right) =>
+        scoreCandidateRecord(right, hostFailureCounts) - scoreCandidateRecord(left, hostFailureCounts)
+    )
     .slice(0, supplyRefillLimit);
 
   if (!selectedRecords.length) {
@@ -2361,6 +2403,138 @@ function getActiveImportSourceCandidateIds(curationStore) {
       .filter((record) => record.job.kind === "import_source")
       .flatMap((record) => record.job.sourceCandidate?.id ?? [])
   );
+}
+
+// A candidate left in `queued` with no live job can never be re-selected. Map it
+// back from its terminal job when one exists, otherwise return it to `pending`.
+function repairZombieQueuedCandidates(persistenceStore, curationStore, now) {
+  const snapshot = persistenceStore.getSnapshot();
+  const activeCandidateIds = getActiveImportSourceCandidateIds(curationStore);
+  const zombies = snapshot.sourceCandidates.filter(
+    (record) => record.status === "queued" && !activeCandidateIds.has(record.candidate.id)
+  );
+
+  if (!zombies.length) {
+    return snapshot;
+  }
+
+  const terminalJobsByCandidateId = collectTerminalImportJobsByCandidateId(curationStore);
+  const repaired = zombies.map((record) => {
+    const terminalJob = terminalJobsByCandidateId.get(record.candidate.id);
+
+    if (!terminalJob) {
+      return { ...record, status: "pending", updatedAt: now };
+    }
+
+    return applySourceCandidateOutcome(
+      record,
+      classifyTerminalImportSource({
+        record: terminalJob,
+        sourceImport: getTerminalSourceImport(terminalJob),
+        candidateRecord: record
+      }),
+      now
+    );
+  });
+
+  return persistenceStore.saveSourceCandidateRecords(repaired, now);
+}
+
+function collectTerminalImportJobsByCandidateId(curationStore) {
+  const byCandidateId = new Map();
+
+  for (const jobRecord of curationStore.list()) {
+    const candidateId = jobRecord.job.sourceCandidate?.id;
+
+    if (
+      jobRecord.job.kind !== "import_source" ||
+      !candidateId ||
+      !["succeeded", "failed", "skipped"].includes(jobRecord.status)
+    ) {
+      continue;
+    }
+
+    const previous = byCandidateId.get(candidateId);
+    const at = jobRecord.completedAt ?? jobRecord.updatedAt ?? "";
+
+    if (!previous || at >= (previous.completedAt ?? previous.updatedAt ?? "")) {
+      byCandidateId.set(candidateId, jobRecord);
+    }
+  }
+
+  return byCandidateId;
+}
+
+function getTerminalSourceImport(jobRecord) {
+  return (
+    jobRecord.result?.materializationPlan?.sourceImports?.[0] ??
+    jobRecord.result?.sourceImports?.[0] ??
+    jobRecord.result?.sourceImport
+  );
+}
+
+// Pending candidates nobody selected in two weeks keep re-entering the ranking
+// forever. Retire them so the pool stops growing without bound.
+function expireStaleSourceCandidates(persistenceStore, now) {
+  const cutoffMs = new Date(now).getTime() - staleSourceCandidateDays * 24 * 60 * 60 * 1000;
+  const snapshot = persistenceStore.getSnapshot();
+  const stale = snapshot.sourceCandidates
+    .filter((record) => record.status === "pending")
+    // Backlog entries drain through their own paced lane and are allowed to sit.
+    .filter((record) => typeof record.backlogOrder !== "number")
+    .filter((record) => {
+      const createdAtMs = new Date(record.createdAt).getTime();
+
+      return Number.isFinite(createdAtMs) && createdAtMs < cutoffMs;
+    })
+    .map((record) => ({
+      ...record,
+      status: "skipped",
+      updatedAt: now,
+      rejectionReasons: mergeCandidateRejectionReasons(record.rejectionReasons, [
+        sourceCandidateFailureMessages.stale
+      ])
+    }));
+
+  return stale.length ? persistenceStore.saveSourceCandidateRecords(stale, now) : snapshot;
+}
+
+// Domain prior: hosts that keep failing the gate or the fetch stop earning
+// refill slots. Records are never deleted, so the history keeps accumulating.
+function countCandidateHostFailures(records) {
+  const counts = new Map();
+
+  for (const record of records) {
+    if (record.status !== "rejected_source" && record.status !== "unreachable") {
+      continue;
+    }
+
+    const hostname = getCandidateHostname(record);
+
+    if (hostname) {
+      counts.set(hostname, (counts.get(hostname) ?? 0) + 1);
+    }
+  }
+
+  return counts;
+}
+
+function getCandidateHostname(record) {
+  try {
+    return new URL(record.candidate.source.url).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function getCandidateHostFailures(record, hostFailureCounts) {
+  const hostname = getCandidateHostname(record);
+
+  return hostname ? (hostFailureCounts.get(hostname) ?? 0) : 0;
+}
+
+function isExcludedCandidateHost(record, hostFailureCounts) {
+  return getCandidateHostFailures(record, hostFailureCounts) >= candidateHostFailureExclusionThreshold;
 }
 
 function createSupplyRefillImportJob(candidate, now, contentLanguage) {
@@ -4384,68 +4558,119 @@ function persistDiscoveredCandidates(persistenceStore, candidates, now) {
   return newRecords.length ? persistenceStore.saveSourceCandidateRecords(newRecords, now) : snapshot;
 }
 
-function updateSourceCandidateAfterImport(persistenceStore, snapshot, candidateId, sourceImport, now) {
-  const candidateRecord = snapshot.sourceCandidates.find((item) => item.candidate.id === candidateId);
+// One classification for a terminal import_source job drives both halves of the
+// bookkeeping: which budget slot the attempt consumed, and where the candidate
+// lands in the pool. Splitting them is how candidates used to rot in `queued`.
+export function classifyTerminalImportSource({ record, sourceImport, candidateRecord }) {
+  if (record.status === "succeeded") {
+    const producedCards = sourceImport?.posts?.length ?? 0;
+    const gateRejected = sourceImport?.qualityGate?.verdict === "reject";
+    const importedDifferentSource = Boolean(
+      sourceImport &&
+        candidateRecord &&
+        sourceImport.source.id !== candidateRecord.candidate.source.id &&
+        sourceImport.source.url !== candidateRecord.candidate.source.url
+    );
+    // A gate-rejected job that still produced a card took the same-source
+    // fallback lane: the candidate is retired, but the slot did buy a card.
+    // A zero-card success is a dedupe/merge into an existing card, not a loss.
+    const settlement = gateRejected && producedCards === 0 ? "gate_rejected" : "produced";
 
-  if (!candidateRecord) {
-    return snapshot;
-  }
-
-  const importedDifferentSource =
-    sourceImport.source.id !== candidateRecord.candidate.source.id &&
-    sourceImport.source.url !== candidateRecord.candidate.source.url;
-
-  if (sourceImport.qualityGate?.verdict === "reject" || importedDifferentSource) {
-    const rejectionReasons =
-      sourceImport.qualityGate?.reasons ??
-      (importedDifferentSource ? ["Candidate did not produce a qualified source; same-source fallback was used."] : []);
-
-    return persistenceStore.saveSourceCandidateRecords([
-      {
-        ...candidateRecord,
-        status: "rejected_source",
-        updatedAt: now,
-        rejectedAt: now,
-        qualityGate: sourceImport.qualityGate,
-        rejectionReasons
-      }
-    ]);
-  }
-
-  return persistenceStore.saveSourceCandidateRecords([
-    {
-      ...candidateRecord,
-      status: "imported",
-      updatedAt: now,
-      importedAt: now
+    if (gateRejected || importedDifferentSource) {
+      return {
+        settlement,
+        candidateStatus: "rejected_source",
+        qualityGate: sourceImport?.qualityGate,
+        rejectionReasons:
+          sourceImport?.qualityGate?.reasons ??
+          (importedDifferentSource ? [sourceCandidateFailureMessages.fallbackSource] : [])
+      };
     }
-  ]);
+
+    return { settlement, candidateStatus: "imported", rejectionReasons: [] };
+  }
+
+  if (isTranscriptUnavailableMessage(record.lastError)) {
+    return {
+      settlement: "import_failed",
+      candidateStatus: "skipped",
+      rejectionReasons: [sourceCandidateFailureMessages.transcriptUnavailable]
+    };
+  }
+
+  if (isNetworkFailureMessage(record.lastError)) {
+    // Nothing was fetched, so no model was called: give the slot back.
+    return {
+      settlement: "import_failed_refundable",
+      candidateStatus: "unreachable",
+      rejectionReasons: [sourceCandidateFailureMessages.unreachable]
+    };
+  }
+
+  return {
+    settlement: "import_failed",
+    candidateStatus: "skipped",
+    rejectionReasons: [sourceCandidateFailureMessages.importFailed]
+  };
 }
 
-function markSourceCandidateFailed(persistenceStore, snapshot, candidateId, now, errorMessage) {
-  const candidateRecord = snapshot.sourceCandidates.find((item) => item.candidate.id === candidateId);
+function applySourceCandidateOutcome(candidateRecord, outcome, now) {
+  return {
+    ...candidateRecord,
+    status: outcome.candidateStatus,
+    updatedAt: now,
+    ...(outcome.candidateStatus === "imported" ? { importedAt: now } : {}),
+    ...(outcome.candidateStatus === "rejected_source" ? { rejectedAt: now } : {}),
+    ...(outcome.qualityGate ? { qualityGate: outcome.qualityGate } : {}),
+    ...(outcome.rejectionReasons?.length
+      ? {
+          rejectionReasons: mergeCandidateRejectionReasons(
+            candidateRecord.rejectionReasons,
+            outcome.rejectionReasons
+          )
+        }
+      : {})
+  };
+}
 
-  if (!candidateRecord) {
-    return snapshot;
+function mergeCandidateRejectionReasons(previous, next) {
+  const merged = [...(previous ?? [])];
+
+  for (const reason of next) {
+    if (!merged.includes(reason)) {
+      merged.push(reason);
+    }
   }
 
-  const transcriptUnavailable = isTranscriptUnavailableMessage(errorMessage);
-  const unreachable = !transcriptUnavailable && isNetworkFailureMessage(errorMessage);
-  const reason = transcriptUnavailable
-    ? "Source has no usable transcript."
-    : unreachable
-      ? "Source could not be fetched."
-      : "Source import failed.";
+  return merged;
+}
 
-  return persistenceStore.saveSourceCandidateRecords([
-    {
-      ...candidateRecord,
-      status: transcriptUnavailable ? "skipped" : unreachable ? "unreachable" : "rejected_source",
-      updatedAt: now,
-      ...(transcriptUnavailable || unreachable ? {} : { rejectedAt: now }),
-      rejectionReasons: [...(candidateRecord.rejectionReasons ?? []), reason]
-    }
-  ]);
+// Terminal write-back for import_source jobs; every lane funnels through here.
+function settleTerminalImportSource(persistenceStore, record, sourceImport, now) {
+  const candidateId = record.job.sourceCandidate?.id;
+  const snapshot = persistenceStore.getSnapshot();
+  const candidateRecord = candidateId
+    ? snapshot.sourceCandidates.find((item) => item.candidate.id === candidateId)
+    : undefined;
+  const outcome = classifyTerminalImportSource({ record, sourceImport, candidateRecord });
+
+  if (candidateRecord) {
+    persistenceStore.saveSourceCandidateRecords([applySourceCandidateOutcome(candidateRecord, outcome, now)], now);
+  }
+
+  persistenceStore.saveDailyAutoJobBudgetRecords(
+    [
+      settleDailyAutoJobBudget({
+        budget: getDailyAutoJobBudgetRecord(persistenceStore.getSnapshot(), now),
+        outcome: outcome.settlement,
+        limit: getDailyAutoJobBudgetLimit(process.env),
+        now
+      })
+    ],
+    now
+  );
+
+  return outcome;
 }
 
 function isTranscriptUnavailableMessage(message) {
@@ -5999,23 +6224,8 @@ export function materializeCurationJobRecords(
     for (const sourceImport of plan.sourceImports ?? []) {
       persistenceStore.saveSourceImportResult(sourceImport, effectAt);
     }
-    if (record.job.sourceCandidate && plan.sourceImports?.[0]) {
-      updateSourceCandidateAfterImport(
-        persistenceStore,
-        persistenceStore.getSnapshot(),
-        record.job.sourceCandidate.id,
-        plan.sourceImports[0],
-        effectAt
-      );
-    }
-    if (record.status === "failed" && record.job.kind === "import_source" && record.job.sourceCandidate) {
-      markSourceCandidateFailed(
-        persistenceStore,
-        persistenceStore.getSnapshot(),
-        record.job.sourceCandidate.id,
-        effectAt,
-        record.lastError
-      );
+    if (record.job.kind === "import_source") {
+      settleTerminalImportSource(persistenceStore, record, plan.sourceImports?.[0], effectAt);
     }
     for (const releasePlan of plan.releasePlans ?? []) persistenceStore.saveReleasePlan(releasePlan, effectAt);
     if (plan.conceptBriefs?.length) persistenceStore.saveConceptBriefs(plan.conceptBriefs, effectAt);
@@ -6119,8 +6329,8 @@ function sanitizeFailedCurationRecord(record, logCause = true) {
   const lastError =
     record.job.kind === "import_source"
       ? isNetworkFailureMessage(record.lastError)
-        ? "Source could not be fetched."
-        : "Source import failed."
+        ? sourceCandidateFailureMessages.unreachable
+        : sourceCandidateFailureMessages.importFailed
       : "Background job failed.";
 
   return { ...record, lastError };
@@ -6196,12 +6406,7 @@ function sanitizeSourceCandidateRecordForResponse(record) {
     return record;
   }
 
-  const stableReasons = new Set([
-    "Source import failed.",
-    "Source could not be fetched.",
-    "Source candidate could not be processed.",
-    "Source has no usable transcript."
-  ]);
+  const stableReasons = new Set(Object.values(sourceCandidateFailureMessages));
 
   if (record.rejectionReasons.every((reason) => stableReasons.has(reason))) {
     return record;
@@ -6210,7 +6415,9 @@ function sanitizeSourceCandidateRecordForResponse(record) {
   return {
     ...record,
     rejectionReasons: [
-      record.status === "unreachable" ? "Source could not be fetched." : "Source candidate could not be processed."
+      record.status === "unreachable"
+        ? sourceCandidateFailureMessages.unreachable
+        : sourceCandidateFailureMessages.unprocessable
     ]
   };
 }
@@ -6622,12 +6829,19 @@ function dedupeSourceCandidates(candidates) {
   return Array.from(byId.values());
 }
 
-function scoreCandidateRecord(record) {
-  return (
+function scoreCandidateRecord(record, hostFailureCounts) {
+  const base =
     record.candidate.relevanceScore * 0.45 +
     record.candidate.qualityScore * 0.35 +
-    record.candidate.noveltyScore * 0.2
-  );
+    record.candidate.noveltyScore * 0.2;
+
+  if (!hostFailureCounts) {
+    return base;
+  }
+
+  return getCandidateHostFailures(record, hostFailureCounts) >= candidateHostFailurePenaltyThreshold
+    ? base - candidateHostFailurePenalty
+    : base;
 }
 
 async function ingestSourceCandidate(candidate, fetchImpl) {
@@ -6686,10 +6900,10 @@ async function ingestSourceCandidateForBackground(candidate, ingestSource) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(
       isTranscriptUnavailableMessage(message)
-        ? "Source has no usable transcript."
+        ? sourceCandidateFailureMessages.transcriptUnavailable
         : isNetworkFailureMessage(message)
-          ? "Source could not be fetched."
-          : "Source candidate could not be processed."
+          ? sourceCandidateFailureMessages.unreachable
+          : sourceCandidateFailureMessages.unprocessable
     );
   }
 }

@@ -806,6 +806,12 @@ export interface DailyAutoJobBudgetRecord {
   limit: number;
   discarded: number;
   updatedAt: string;
+  // Settlement ledger: where the day's spent budget actually went. Optional so
+  // snapshots written before the ledger existed still decode.
+  produced?: number;
+  gateRejected?: number;
+  importFailed?: number;
+  refunded?: number;
 }
 
 export interface SubscriptionBacklogState {

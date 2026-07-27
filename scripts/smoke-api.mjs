@@ -36,6 +36,18 @@ await writeFile(join(mediaRootDir, "smoke-source", "1.png"), new Uint8Array([137
 
 let discoveryBaseUrl = "";
 const baseUrl = "http://aitimeline-smoke.local";
+const seoWaterFixtureHtml = `
+  <html>
+    <head><meta property="og:title" content="Grok Advanced Guide: Unlock AI Success" /></head>
+    <body>
+      <article>
+        <p>Welcome to the ultimate guide for Grok success. In today's fast-moving world, businesses need innovative AI solutions to transform productivity and unlock growth.</p>
+        <p>This comprehensive advanced guide helps teams leverage cutting-edge technology, boost workflows, empower stakeholders, and revolutionize domain knowledge with seamless intelligence.</p>
+        <p>Whether you are a beginner or expert, mastering AI will skyrocket outcomes. Start your journey, embrace the future, and discover game-changing strategies for every industry.</p>
+      </article>
+    </body>
+  </html>
+`;
 const observedSearchQueries = [];
 const deepReadFallbackModelEndpoint = "https://deepread-fallback.local/v1/chat/completions";
 const observedDeepReadFallbackRequests = [];
@@ -87,6 +99,15 @@ globalThis.fetch = async (input, init = {}) => {
 
   if (url.startsWith("https://network-fail.local/")) {
     throw new TypeError("fetch failed");
+  }
+
+  // SEO water: the deterministic source quality gate rejects this without a
+  // model, so the ledger's gate_rejected path stays testable offline.
+  if (url.startsWith("https://gate-reject.local/")) {
+    return new Response(seoWaterFixtureHtml, {
+      status: 200,
+      headers: { "content-type": "text/html" }
+    });
   }
 
   if (url.startsWith("https://fallback-leak.local/")) {
@@ -1077,7 +1098,7 @@ try {
     assert.equal(terminalJob?.lastError, "Source import failed.", "failed job responses should redact internal causes");
     assert.equal(
       terminalCandidate?.status,
-      "rejected_source",
+      "skipped",
       "non-network terminal import failures should move candidates out of queued"
     );
     assert.deepEqual(
@@ -2911,6 +2932,230 @@ try {
       delete process.env.AITIMELINE_DAILY_AUTO_JOB_BUDGET;
     } else {
       process.env.AITIMELINE_DAILY_AUTO_JOB_BUDGET = previousSupplyBudget;
+    }
+  }
+
+  // Supply budget ledger + candidate pool hygiene.
+  // Every timestamp here is relative to the real clock: a scenario that pins
+  // "today" to a literal date drifts the moment the suite runs on another day.
+  const previousLedgerBudget = process.env.AITIMELINE_DAILY_AUTO_JOB_BUDGET;
+  process.env.AITIMELINE_DAILY_AUTO_JOB_BUDGET = "2";
+
+  const ledgerNowMs = Date.now();
+  const ledgerNow = new Date(ledgerNowMs).toISOString();
+  const ledgerRecentAt = new Date(ledgerNowMs - 60 * 60 * 1000).toISOString();
+  const ledgerStaleAt = new Date(ledgerNowMs - 20 * 24 * 60 * 60 * 1000).toISOString();
+  const ledgerDayKey = ledgerNow.slice(0, 10);
+  const ledgerDataPath = join(tempDir, "supply-ledger.json");
+  const ledgerCurationPath = join(tempDir, "supply-ledger-curation.json");
+  const ledgerBadHostHistory = ["rejected_source", "rejected_source", "rejected_source", "unreachable", "unreachable"].map(
+    (status, index) =>
+      makeSourceCandidateRecord({
+        id: `ledger-bad-host-${index + 1}`,
+        url: `https://bad-domain.local/history-${index + 1}`,
+        score: 0.4,
+        status,
+        createdAt: ledgerRecentAt
+      })
+  );
+  const ledgerCandidates = [
+    makeSourceCandidateRecord({
+      id: "ledger-gate-reject",
+      url: "https://gate-reject.local/grok-advanced-guide",
+      score: 0.99,
+      createdAt: ledgerRecentAt
+    }),
+    makeSourceCandidateRecord({
+      id: "ledger-network-fail",
+      url: "https://network-fail.local/ledger",
+      score: 0.98,
+      createdAt: ledgerRecentAt
+    }),
+    makeSourceCandidateRecord({
+      id: "ledger-bad-host-pending",
+      // Scored high enough that the score penalty alone would not keep it out:
+      // only the hard exclusion can stop it winning the refunded slot.
+      url: "https://bad-domain.local/next-candidate",
+      score: 1,
+      createdAt: ledgerRecentAt
+    }),
+    makeSourceCandidateRecord({
+      id: "ledger-stale",
+      url: `${baseUrl}/fixtures/article-background?query=ledger-stale`,
+      score: 0.96,
+      createdAt: ledgerStaleAt
+    }),
+    makeSourceCandidateRecord({
+      id: "ledger-good",
+      url: `${baseUrl}/fixtures/article-background?query=ledger-good`,
+      score: 0.4,
+      createdAt: ledgerRecentAt
+    }),
+    // Zombies: left in `queued` with no live job. One has a terminal job to map
+    // back from, the other has nothing and must fall back to `pending`.
+    makeSourceCandidateRecord({
+      id: "ledger-zombie-terminal",
+      url: "https://zombie-terminal.local/article",
+      score: 0.1,
+      status: "queued",
+      createdAt: ledgerRecentAt
+    }),
+    makeSourceCandidateRecord({
+      id: "ledger-zombie-orphan",
+      url: "https://zombie-orphan.local/article",
+      score: 0.1,
+      status: "queued",
+      createdAt: ledgerRecentAt
+    }),
+    ...ledgerBadHostHistory
+  ];
+  const ledgerZombieTerminalJob = {
+    ...makeQueuedImportJobRecord(
+      ledgerCandidates.find((record) => record.id === "ledger-zombie-terminal"),
+      ledgerRecentAt
+    ),
+    status: "failed",
+    attempts: 1,
+    completedAt: ledgerRecentAt,
+    materializedAt: ledgerRecentAt,
+    lastError: "fetch failed"
+  };
+
+  await writeFile(
+    ledgerDataPath,
+    JSON.stringify({
+      version: 1,
+      updatedAt: ledgerNow,
+      posts: [],
+      sourceCandidates: ledgerCandidates
+    })
+  );
+  await writeFile(ledgerCurationPath, JSON.stringify({ version: 1, records: [ledgerZombieTerminalJob] }));
+
+  const ledgerServer = createApiServer({
+    dataPath: ledgerDataPath,
+    curationDataPath: ledgerCurationPath,
+    mediaRootDir,
+    enableFixtures: true,
+    searchProvider: fakeSearchProvider
+  });
+
+  try {
+    const firstLedgerRefill = await requestJsonFromServer(ledgerServer, "/api/supply/refill", {
+      method: "POST",
+      body: { now: ledgerNow }
+    });
+    const afterRefillSnapshot = await requestJsonFromServer(ledgerServer, "/api/snapshot");
+    const findLedgerCandidate = (snapshot, id) => snapshot.sourceCandidates.find((record) => record.id === id);
+
+    assert.equal(firstLedgerRefill.queued, 2, "refill should queue up to the daily budget");
+    assert.equal(firstLedgerRefill.budgetRemaining, 0, "queueing two jobs should exhaust a budget of two");
+
+    // (c) stale pending candidates are retired before selection.
+    assert.equal(
+      findLedgerCandidate(afterRefillSnapshot, "ledger-stale")?.status,
+      "skipped",
+      "pending candidates older than 14 days should be retired as skipped"
+    );
+    assert.equal(
+      findLedgerCandidate(afterRefillSnapshot, "ledger-stale")?.rejectionReasons?.includes("stale_candidate"),
+      true,
+      "retired stale candidates should record the stale_candidate reason"
+    );
+
+    // Zombie repair: `queued` candidates with no live job get unstuck.
+    assert.equal(
+      findLedgerCandidate(afterRefillSnapshot, "ledger-zombie-terminal")?.status,
+      "unreachable",
+      "a zombie candidate with a terminal failed job should inherit that job's outcome"
+    );
+    assert.equal(
+      findLedgerCandidate(afterRefillSnapshot, "ledger-zombie-orphan")?.status,
+      "pending",
+      "a zombie candidate with no job at all should fall back to pending"
+    );
+
+    // (d) a host with five recorded failures never wins a refill slot.
+    const firstLedgerJobs = await requestJsonFromServer(ledgerServer, "/api/curation/jobs?status=queued");
+
+    assert.deepEqual(
+      firstLedgerJobs.jobs.map((record) => record.job.sourceCandidate.id).sort(),
+      ["ledger-gate-reject", "ledger-network-fail"],
+      "candidates on a five-times-failed host should be excluded from refill selection"
+    );
+    assert.equal(
+      findLedgerCandidate(afterRefillSnapshot, "ledger-bad-host-pending")?.status,
+      "pending",
+      "excluded bad-host candidates should stay pending rather than being deleted"
+    );
+
+    await requestJsonFromServer(ledgerServer, "/api/curation/run", {
+      method: "POST",
+      body: { now: ledgerNow, kinds: ["import_source"] }
+    });
+    const afterRunSnapshot = await requestJsonFromServer(ledgerServer, "/api/snapshot");
+    const ledgerBudget = afterRunSnapshot.autoJobBudget.find((record) => record.date === ledgerDayKey);
+
+    // (a) gate rejection is counted and never refunded.
+    assert.equal(ledgerBudget?.gateRejected, 1, "a gate-rejected import should count against the ledger");
+    assert.equal(
+      findLedgerCandidate(afterRunSnapshot, "ledger-gate-reject")?.status,
+      "rejected_source",
+      "gate-rejected candidates should be written back as rejected_source"
+    );
+
+    // (b) a fetch failure is counted and refunds its slot.
+    assert.equal(ledgerBudget?.importFailed, 1, "a failed import should count against the ledger");
+    assert.equal(ledgerBudget?.refunded, 1, "an unreachable source should refund its budget slot");
+    assert.equal(ledgerBudget?.used, 1, "refunding a slot should lower today's used count");
+    assert.equal(
+      findLedgerCandidate(afterRunSnapshot, "ledger-network-fail")?.status,
+      "unreachable",
+      "fetch-failed candidates should be written back as unreachable"
+    );
+
+    const refundedLedgerRefill = await requestJsonFromServer(ledgerServer, "/api/supply/refill", {
+      method: "POST",
+      body: { now: ledgerNow }
+    });
+    const afterRefundRefillJobs = await requestJsonFromServer(ledgerServer, "/api/curation/jobs?status=queued");
+
+    assert.equal(refundedLedgerRefill.queued, 1, "a refunded slot should let the same day queue another candidate");
+    // The bad host outranks ledger-good on raw score, so this only holds if the
+    // exclusion actually kept it out of selection.
+    assert.equal(
+      afterRefundRefillJobs.jobs.some((record) => record.job.sourceCandidate.id === "ledger-good"),
+      true,
+      "the refunded slot should go to the next eligible candidate"
+    );
+    assert.equal(
+      afterRefundRefillJobs.jobs.every((record) => record.job.sourceCandidate.id !== "ledger-bad-host-pending"),
+      true,
+      "a five-times-failed host should never win a refill slot"
+    );
+
+    // (e) the timeline response reports the same ledger the snapshot stores.
+    const ledgerTimeline = await requestJsonFromServer(
+      ledgerServer,
+      `/api/timeline?now=${encodeURIComponent(ledgerNow)}`
+    );
+
+    assert.deepEqual(
+      ledgerTimeline.supplyStatus.todayLedger,
+      { limit: 2, used: 2, produced: 0, gateRejected: 1, importFailed: 1, refunded: 1 },
+      "supplyStatus.todayLedger should report today's settled budget"
+    );
+    assert.equal(
+      ledgerTimeline.supplyStatus.budgetRemaining,
+      0,
+      "budgetRemaining should agree with the ledger's used count"
+    );
+  } finally {
+    await closeServer(ledgerServer);
+    if (previousLedgerBudget === undefined) {
+      delete process.env.AITIMELINE_DAILY_AUTO_JOB_BUDGET;
+    } else {
+      process.env.AITIMELINE_DAILY_AUTO_JOB_BUDGET = previousLedgerBudget;
     }
   }
 

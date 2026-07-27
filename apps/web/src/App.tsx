@@ -36,6 +36,7 @@ import {
   Bot,
   Brain,
   CheckCircle2,
+  ChevronDown,
   Compass,
   GitBranch,
   Home,
@@ -302,6 +303,7 @@ export function App() {
   const [lastScoutAt, setLastScoutAt] = useState<string | null>(null);
   const [queuedJobCount, setQueuedJobCount] = useState(0);
   const [autoJobBudget, setAutoJobBudget] = useState<DailyAutoJobBudgetRecord | null>(null);
+  const [scoutLedgerOpen, setScoutLedgerOpen] = useState(false);
   const [agentTurnCount, setAgentTurnCount] = useState(0);
   const [memoryMessage, setMemoryMessage] = useState(() => t("memory.default"));
   const [candidateMessage, setCandidateMessage] = useState(() => t("candidate.message.default"));
@@ -2545,6 +2547,17 @@ export function App() {
     }));
   }
 
+  // One line that says where today's auto-production budget actually went.
+  // supplyStatus carries the API's settled ledger; the snapshot budget record is
+  // the fallback for views loaded before the first timeline fetch lands.
+  const todayLedgerLine = t("scout.ledger", {
+    used: supplyStatus?.todayLedger?.used ?? autoJobBudget?.used ?? 0,
+    limit: supplyStatus?.todayLedger?.limit ?? autoJobBudget?.limit ?? 20,
+    produced: supplyStatus?.todayLedger?.produced ?? autoJobBudget?.produced ?? 0,
+    gateRejected: supplyStatus?.todayLedger?.gateRejected ?? autoJobBudget?.gateRejected ?? 0,
+    importFailed: supplyStatus?.todayLedger?.importFailed ?? autoJobBudget?.importFailed ?? 0,
+    refunded: supplyStatus?.todayLedger?.refunded ?? autoJobBudget?.refunded ?? 0
+  });
   const activeTitleKeys = viewTitleKeys[activeView];
   const activeTitle = {
     title: t(activeTitleKeys.title),
@@ -2689,7 +2702,23 @@ export function App() {
             {queuedJobCount > 0 ? <em>{t("scout.queued", { count: queuedJobCount })}</em> : null}
             <em>{t("scout.budget", { used: autoJobBudget?.used ?? 0, limit: autoJobBudget?.limit ?? 20 })}</em>
           </button>
+          <button
+            aria-expanded={scoutLedgerOpen}
+            aria-label={t("scout.ledgerToggle")}
+            className={`x-scout-ledger-toggle${scoutLedgerOpen ? " open" : ""}`}
+            onClick={() => setScoutLedgerOpen((value) => !value)}
+            title={t("scout.ledgerToggle")}
+            type="button"
+          >
+            <ChevronDown size={14} />
+          </button>
         </header>
+
+        {scoutLedgerOpen ? (
+          <p className="x-scout-ledger" role="status">
+            {todayLedgerLine}
+          </p>
+        ) : null}
 
         {activeView === "timeline" && selectedCard ? (
           <PostDetailView
@@ -3023,6 +3052,7 @@ export function App() {
             subscriptionMessageIsError={subscriptionMessageIsError}
             subscriptions={subscriptions}
             subscriptionUrl={subscriptionUrl}
+            todayLedgerLine={todayLedgerLine}
             updatingSubscriptionIds={updatingSubscriptionIds}
           />
         ) : null}
