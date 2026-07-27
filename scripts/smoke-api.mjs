@@ -1077,7 +1077,7 @@ try {
     assert.equal(terminalJob?.lastError, "Source import failed.", "failed job responses should redact internal causes");
     assert.equal(
       terminalCandidate?.status,
-      "rejected_source",
+      "skipped",
       "non-network terminal import failures should move candidates out of queued"
     );
     assert.deepEqual(
