@@ -27,6 +27,23 @@ export function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
 }
 
+/**
+ * Aborts reach callers in several shapes (DOMException, plain Error with
+ * name "AbortError", or a wrapped message), and none of them are readable
+ * enough to show a user.
+ */
+export function isAbortLikeError(error: unknown): boolean {
+  if (isAbortError(error) || error instanceof DOMException) {
+    return true;
+  }
+
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return error.name === "AbortError" || error.message.toLowerCase().includes("abort");
+}
+
 const defaultTimeoutMs = 20000;
 
 export async function apiRequest<T>(
