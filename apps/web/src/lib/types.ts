@@ -290,6 +290,9 @@ export type ApiCurationRunResponse = {
   }>;
   supplyRefill?: ApiSupplyRefillResponse;
   droughtNotification?: AgentNotification | null;
+  /** True when the server refused a second run because one is still in flight. */
+  alreadyRunning?: boolean;
+  startedAt?: string;
 };
 
 export type ApiCurationJobsResponse = {

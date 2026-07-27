@@ -67,7 +67,7 @@ import { GraphView } from "./views/GraphView";
 import { NotificationsView } from "./views/NotificationsView";
 import { ReviewView, type ReviewQueueEntry } from "./views/ReviewView";
 import { SettingsView } from "./views/SettingsView";
-import { ApiHttpError, apiBaseUrl, apiRequest, isAbortError, isTransportError, isYouTubeChannelUrl, isYouTubeUrl, sampleSourceUrl } from "./lib/api";
+import { ApiHttpError, apiBaseUrl, apiRequest, isAbortError, isAbortLikeError, isTransportError, isYouTubeChannelUrl, isYouTubeUrl, sampleSourceUrl } from "./lib/api";
 import { buildGroundedAnswer, formatAskAnswer, getTopicId, scrollMotion, slugConcept } from "./lib/format";
 import { normalizeLanguage, setI18nLanguage, t, type Language } from "./lib/i18n";
 import { buildCardNeighborhoodGraph } from "./lib/localGraph";
@@ -1869,7 +1869,9 @@ export function App() {
           kinds: ["deep_read_article"]
         }
       });
-      const article = result.records.flatMap((record) => record.result?.deepReadArticle ?? [])[0];
+      // An alreadyRunning response has no records; the queued deep read will be
+      // picked up by the next observer run, so fall through to the queued state.
+      const article = (result.records ?? []).flatMap((record) => record.result?.deepReadArticle ?? [])[0];
 
       if (article) {
         setDeepReadArticles((records) => upsertById(records, [article]));
@@ -1925,8 +1927,21 @@ export function App() {
             "schedule_review",
             "cooldown_topic"
           ]
-        }
+        },
+        // The run executes synchronously on the server and can take minutes;
+        // the default 20s timeout would cut it off and stack another run.
+        timeoutMs: 600000
       });
+
+      if (result.alreadyRunning) {
+        // Another run is still working on the server: not a failure, and the
+        // next auto refresh picks up whatever it produces.
+        setApiStatus("connected");
+        setApiMessage(t("api.connected"));
+        setCurationMessage(t("curation.alreadyRunning"));
+        return;
+      }
+
       const importedCount = result.records.filter((record) => record.result?.sourceImport).length;
       const checkedAt = new Date().toISOString();
 
@@ -1945,6 +1960,13 @@ export function App() {
       await refreshFromApi({ silent: true, mode: "buffer" });
     } catch (error) {
       markOfflineIfTransport(error);
+
+      if (isAbortLikeError(error)) {
+        // "signal is aborted without reason" means nothing to a reader, and the
+        // server usually keeps working after the page gives up.
+        setCurationMessage(t("curation.timedOut"));
+        return;
+      }
       // Surface the actual failure reason instead of a bare "cannot run".
       setCurationMessage(
         error instanceof Error && error.message
