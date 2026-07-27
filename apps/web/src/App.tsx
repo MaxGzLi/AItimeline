@@ -1869,7 +1869,9 @@ export function App() {
           kinds: ["deep_read_article"]
         }
       });
-      const article = result.records.flatMap((record) => record.result?.deepReadArticle ?? [])[0];
+      // An alreadyRunning response has no records; the queued deep read will be
+      // picked up by the next observer run, so fall through to the queued state.
+      const article = (result.records ?? []).flatMap((record) => record.result?.deepReadArticle ?? [])[0];
 
       if (article) {
         setDeepReadArticles((records) => upsertById(records, [article]));
