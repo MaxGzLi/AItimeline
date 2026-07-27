@@ -1,4 +1,8 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 process.env.AITIMELINE_TIMEZONE = "UTC";
 
@@ -6,6 +10,7 @@ const { transformArticleUrl } = await import("../packages/core/dist/transform/ar
 const { transformYouTubeUrl } = await import("../packages/core/dist/transform/youtubeImport.js");
 const { agentHarnessSystemPrompt } = await import("../packages/core/dist/harness/systemPrompt.js");
 const { createModelKnowledgePostRunner } = await import("../packages/core/dist/harness/modelRunner.js");
+const { createCommandModelClient } = await import("../packages/core/dist/model/commandModelClient.js");
 const { createAgentHarnessConfig, deterministicKnowledgePostRunner } = await import("../packages/core/dist/harness/runner.js");
 const { calculateCjkRatio } = await import("../packages/core/dist/harness/contentLanguage.js");
 const { askGrounded, askSystemPrompt } = await import("../packages/core/dist/harness/askGrounded.js");
@@ -752,6 +757,80 @@ const askDeterministic = await askGrounded({
 assert.equal(askDeterministic.runnerKind, "deterministic", "askGrounded without a client should use the deterministic path");
 assert.ok(askDeterministic.answer.length > 0, "deterministic ask should produce an answer");
 assert.ok(askDeterministic.citations.length >= 1, "deterministic ask should cite the source chunk");
+
+// 8) Command model client: a stub CLI reads the prompt on stdin, and its stdout becomes the card.
+//    The stub exits non-zero on an empty prompt, so a ready import also proves stdin was wired.
+const commandSentinel = "[beyond source] Command-runner hook proves the CLI stdout reached the card";
+const commandModelPost = { ...deterministic.cards[0], hook: commandSentinel };
+const commandFixtureDir = mkdtempSync(join(tmpdir(), "aitimeline-command-model-"));
+const commandResponsePath = join(commandFixtureDir, "response.json");
+
+writeFileSync(commandResponsePath, JSON.stringify({ posts: [commandModelPost] }), "utf8");
+
+const fakeModelCliPath = fileURLToPath(new URL("./fixtures/fake-model-cli.mjs", import.meta.url));
+const commandRunner = createModelKnowledgePostRunner({
+  maxRepairAttempts: 0,
+  client: createCommandModelClient({
+    command: `node ${JSON.stringify(fakeModelCliPath)} ${JSON.stringify(commandResponsePath)}`,
+    timeoutMs: 30000
+  })
+});
+const commandModel = await transformArticleUrl(articleUrl, {
+  fetch: fetchArticleHtml,
+  createdAt,
+  runner: commandRunner
+});
+
+assert.equal(commandModel.harnessRun?.runnerKind, "model", "a command runner should run the model path");
+assert.equal(commandModel.importRecord.status, "ready", "command output should pass schema + grounding and be ready");
+assert.equal(commandModel.cards.length, 1, "command import should accept the single grounded post");
+assert.equal(commandModel.cards[0].hook, commandSentinel, "the card hook should come from the command stdout");
+assert.ok(
+  commandModel.validation.every((result) => result.valid),
+  "command output should pass validation with no errors"
+);
+
+const failingCommandRunner = createModelKnowledgePostRunner({
+  maxRepairAttempts: 0,
+  client: createCommandModelClient({
+    command: `node ${JSON.stringify(fakeModelCliPath)} --fail`,
+    timeoutMs: 30000
+  })
+});
+const commandFailure = await transformArticleUrl(articleUrl, {
+  fetch: fetchArticleHtml,
+  createdAt,
+  runner: failingCommandRunner
+});
+
+assert.equal(commandFailure.importRecord.status, "failed", "a non-zero command exit should fail the import closed");
+assert.equal(commandFailure.cards.length, 0, "a failed command should publish no cards");
+assert.match(
+  commandFailure.importRecord.errorMessage ?? "",
+  /model command exited with code 1/,
+  "the import error should name the command exit code"
+);
+assert.match(
+  commandFailure.importRecord.errorMessage ?? "",
+  /refused this prompt on purpose/,
+  "the import error should carry the command stderr excerpt"
+);
+
+const commandFailureFallback = await transformArticleUrl(articleUrl, { fetch: fetchArticleHtml, createdAt });
+
+assert.equal(
+  commandFailureFallback.importRecord.status,
+  "ready",
+  "a broken command must not break the deterministic fallback path"
+);
+assert.ok(commandFailureFallback.cards.length > 0, "the deterministic fallback should still produce cards");
+assert.notEqual(
+  commandFailureFallback.cards[0].hook,
+  commandSentinel,
+  "the deterministic fallback should keep the template hook, not the command sentinel"
+);
+
+rmSync(commandFixtureDir, { recursive: true, force: true });
 
 console.log("Model import smoke passed");
 

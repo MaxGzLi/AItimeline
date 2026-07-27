@@ -36,11 +36,13 @@ import {
   createBackgroundCurationPlan,
   createDeterministicConceptBrief,
   DISCOVERY_AGGREGATE_DOMAINS,
+  createCommandModelClientFromEnv,
   createConceptMergeSuggestion,
   createConnectionNoteForImport,
   createDeepReadArticle,
   createEmptyUserMemory,
   createInitialReviewState,
+  createModelSourceImportWorker,
   createOpenAICompatibleModelClientFromEnv,
   createOpenAICompatibleSourceImportWorker,
   createPersistentBackgroundCurationJobStore,
@@ -1626,6 +1628,17 @@ function createSafeSourceImportWorker(worker) {
 function createConfiguredSourceImportWorker(env) {
   const modelName = env.AITIMELINE_MODEL_NAME ?? env.OPENAI_MODEL;
   const contentLanguage = readConfiguredContentLanguage(env);
+  const commandClient = createConfiguredCommandModelClient(env);
+
+  if (commandClient) {
+    const commandWorker = createModelSourceImportWorker({
+      ...(contentLanguage ? { contentLanguage } : {}),
+      client: commandClient
+    });
+    console.log("[aitimeline] source import using command model runner.");
+
+    return commandWorker;
+  }
 
   if (!modelName) {
     return createSourceImportWorker(contentLanguage ? { contentLanguage } : {});
@@ -2707,7 +2720,21 @@ function parseOptionalDate(value) {
   return Number.isFinite(date.getTime()) ? date : new Date();
 }
 
+// A user-provided CLI command wins over the OpenAI-compatible env: it is the more
+// explicit choice, and it lets people without an API key run a local agent CLI.
+function createConfiguredCommandModelClient(env) {
+  const command = firstNonBlankEnv(env.AITIMELINE_MODEL_COMMAND);
+
+  return command ? createCommandModelClientFromEnv(env, { command }) : undefined;
+}
+
 function createConfiguredAskModelClient(env) {
+  const commandClient = createConfiguredCommandModelClient(env);
+
+  if (commandClient) {
+    return commandClient;
+  }
+
   const modelName = env.AITIMELINE_MODEL_NAME ?? env.OPENAI_MODEL;
 
   return modelName ? createOpenAICompatibleModelClientFromEnv(env) : undefined;
@@ -2730,7 +2757,9 @@ function createConfiguredDeepReadModelClients(env) {
   // call fail on providers with lower output limits.
   const requestMaxTokens = Number.parseInt(env.AITIMELINE_MODEL_DEEPREAD_MAX_TOKENS ?? "", 10);
   const articleTokenBudget = getDeepReadArticleTokenBudget(env);
-  const defaultClient = defaultModelName ? createOpenAICompatibleModelClientFromEnv(modelEnv) : undefined;
+  const commandClient = createConfiguredCommandModelClient(env);
+  const defaultClient =
+    commandClient ?? (defaultModelName ? createOpenAICompatibleModelClientFromEnv(modelEnv) : undefined);
   const deepReadClient = deepReadModelName
     ? createOpenAICompatibleModelClientFromEnv(modelEnv, {
         model: deepReadModelName,
@@ -2751,7 +2780,9 @@ function createConfiguredDeepReadModelClients(env) {
   if (deepReadClient) {
     console.log(`[aitimeline] deep-read articles using model runner (${deepReadModelName}).`);
   } else if (defaultClient) {
-    console.log(`[aitimeline] deep-read articles falling back to default model runner (${defaultModelName}).`);
+    console.log(
+      `[aitimeline] deep-read articles falling back to default model runner (${commandClient ? "command" : defaultModelName}).`
+    );
   }
 
   return {
