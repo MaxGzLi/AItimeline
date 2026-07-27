@@ -3428,9 +3428,12 @@ try {
     assert.equal(exhaustedSourceCapture.status, "pending", "beyond the daily budget a capture should stay pending");
     assert.equal(exhaustedSourceCapture.queued, 0, "budget-exhausted captures must not queue jobs");
 
+    // Captures above are stamped with the real current time, so the "next day"
+    // run clock must stay relative: +24h is always after the capture moment and
+    // always lands on the next UTC day, refreshing the daily budget.
     const captureRun = await requestJsonFromServer(captureServer, "/api/curation/run", {
       method: "POST",
-      body: { now: "2026-07-23T02:00:00.000Z" }
+      body: { now: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() }
     });
 
     assert.equal(
