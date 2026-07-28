@@ -18,10 +18,12 @@
     "smoke:api": "npm run build -w @aitimeline/core && node scripts/smoke-api.mjs",
     "smoke:model": "npm run build -w @aitimeline/core && node scripts/smoke-model.mjs",
     "smoke:mcp": "node scripts/smoke-mcp.mjs",
-    "test": "npm run build -w @aitimeline/core && node scripts/smoke-core.mjs && node scripts/smoke-api.mjs && node scripts/smoke-model.mjs && node scripts/smoke-mcp.mjs"
+    "test:unit": "vitest run",
+    "test": "npm run build -w @aitimeline/core && vitest run && node scripts/smoke-core.mjs && node scripts/smoke-api.mjs && node scripts/smoke-model.mjs && node scripts/smoke-mcp.mjs"
   },
   "devDependencies": {
-    "typescript": "latest"
+    "typescript": "latest",
+    "vitest": "^4.1.10"
   },
   "overrides": {
     "react": "19.0.0",
