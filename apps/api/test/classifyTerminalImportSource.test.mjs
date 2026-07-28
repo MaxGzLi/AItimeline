@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   classifyTerminalImportSource,
   sourceCandidateFailureMessages
-} from "../src/server.mjs";
+} from "../src/domains/importSettlement.mjs";
 
 describe("terminal source import classification", () => {
   it("refunds an unreachable fetch before any model work and marks the candidate unreachable", () => {
