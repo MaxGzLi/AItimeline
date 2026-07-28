@@ -30,10 +30,11 @@ npm run dev          # web app (Vite), expects API on 127.0.0.1:8787
 npm run dev:api      # local API + worker
 npm run typecheck    # all workspaces
 npm run build        # all workspaces
-npm test             # builds core, runs smoke:core + smoke:api + smoke:model
+npm run test:unit    # Vitest unit tests for pure logic
+npm test             # builds core, runs unit tests + all four smoke scripts
 ```
 
-There is no unit-test framework; verification is `typecheck` + the three smoke scripts. New core behavior must be covered by extending a smoke script.
+Pure logic is covered by Vitest unit tests (`npm run test:unit`); cross-module, persistence, and HTTP behavior is covered by smoke tests. New behavior must use the appropriate layer, or both when needed, and must not ship without test coverage.
 
 ## Rules
 
@@ -49,5 +50,5 @@ There is no unit-test framework; verification is `typecheck` + the three smoke s
 1. Before starting: `npm run typecheck && npm test` should be green on main.
 2. Branch per change; keep diffs small and traceable to the request.
 3. Before pushing: `npm run typecheck`, `npm run build`, `npm test`.
-4. CI (`.github/workflows/ci.yml`) runs typecheck + build + all three smokes on PRs and pushes to main.
+4. CI (`.github/workflows/ci.yml`) runs typecheck + build + unit tests + all four smokes on PRs and pushes to main.
 5. UI changes: capture before/after screenshots with `docs/e2e/` tooling into `docs/e2e/runs/<date>-<slug>/`.
