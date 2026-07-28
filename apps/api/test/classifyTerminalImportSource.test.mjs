@@ -20,6 +20,36 @@ describe("terminal source import classification", () => {
     });
   });
 
+  it("refunds a fetch target that could not be resolved", () => {
+    expect(
+      classifyTerminalImportSource({
+        record: {
+          status: "failed",
+          lastError: "Fetch target could not be resolved."
+        }
+      })
+    ).toEqual({
+      settlement: "import_failed_refundable",
+      candidateStatus: "unreachable",
+      rejectionReasons: [sourceCandidateFailureMessages.unreachable]
+    });
+  });
+
+  it("refunds a fetch target that did not resolve to an IP address", () => {
+    expect(
+      classifyTerminalImportSource({
+        record: {
+          status: "failed",
+          lastError: "Fetch target did not resolve to an IP address."
+        }
+      })
+    ).toEqual({
+      settlement: "import_failed_refundable",
+      candidateStatus: "unreachable",
+      rejectionReasons: [sourceCandidateFailureMessages.unreachable]
+    });
+  });
+
   it("keeps the spent slot when the quality gate rejects a zero-card import", () => {
     const qualityGate = {
       verdict: "reject",

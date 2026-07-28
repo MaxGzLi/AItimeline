@@ -4808,7 +4808,7 @@ function isNetworkFailureMessage(message) {
     return false;
   }
 
-  return /(?:fetch failed|could not be fetched|network|timeout|timed out|abort|aborted|econnrefused|econnreset|enotfound|etimedout|eai_again|und_err_connect_timeout|socket|request failed with \d{3}|http status \d{3})/i.test(
+  return /(?:fetch failed|could not be fetched|could not be resolved|did not resolve|dns|network|timeout|timed out|abort|aborted|econnrefused|econnreset|enotfound|etimedout|eai_again|und_err_connect_timeout|socket|request failed with \d{3}|http status \d{3})/i.test(
     message
   );
 }
