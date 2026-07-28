@@ -1,6 +1,11 @@
 // @ts-check
 
-import { getDayKey } from "../../../../packages/core/dist/index.js";
+import {
+  createAutomaticConceptAliases,
+  createConnectionNoteForImport,
+  createEmptyUserMemory,
+  getDayKey
+} from "../../../../packages/core/dist/index.js";
 
 export function createSingleJobPlan(job, generatedAt) {
   const jobs = Array.isArray(job) ? job : [job];
@@ -171,4 +176,144 @@ export function isSourceCandidateIntakeKind(value) {
     value === "manual" ||
     value === "subscription"
   );
+}
+
+export function getSnapshotUserMemory(snapshot, userId) {
+  return snapshot.userMemories.find((record) => record.userId === userId)?.memory ?? createEmptyUserMemory();
+}
+
+export function buildSourceQualityUserContext(snapshot, userId = "local-user") {
+  const memory =
+    snapshot.userMemories.find((record) => record.userId === userId)?.memory ??
+    snapshot.userMemories[0]?.memory;
+  const confirmedConcepts = new Set();
+
+  for (const record of snapshot.interactionSignals) {
+    const signal = record.signal;
+
+    if (!signal.liked && !signal.saved && !signal.askedQuestion && !signal.reviewed) {
+      continue;
+    }
+
+    for (const concept of [signal.topicId, ...(signal.conceptIds ?? [])]) {
+      if (concept) {
+        confirmedConcepts.add(concept);
+      }
+    }
+  }
+
+  const weakConcepts = new Set(memory?.knowledge.weakConcepts ?? []);
+
+  for (const state of snapshot.topicStates) {
+    if (state.comprehensionScore < 0.5) {
+      weakConcepts.add(state.topicId);
+    }
+  }
+
+  return {
+    memory,
+    knownConcepts: uniqueStrings([
+      ...(memory?.profile.interests ?? []),
+      ...(memory?.knowledge.knownConcepts ?? []),
+      ...confirmedConcepts
+    ]),
+    savedConcepts: uniqueStrings(memory?.knowledge.savedConcepts ?? []),
+    weakConcepts: uniqueStrings(Array.from(weakConcepts)),
+    topicStates: snapshot.topicStates,
+    recentSignals: snapshot.interactionSignals.map((record) => record.signal).slice(-20)
+  };
+}
+
+export function uniqueStrings(values) {
+  return Array.from(new Set(values.map((value) => `${value}`.trim()).filter(Boolean)));
+}
+
+export function toUserSignals(interactionSignalRecords) {
+  return interactionSignalRecords.flatMap((record) => {
+    const signals = [];
+    const push = (type) =>
+      signals.push({
+        id: `${record.id}-${type}`,
+        cardId: record.signal.postId,
+        type,
+        createdAt: record.signal.createdAt
+      });
+
+    if (record.signal.liked) {
+      push("like");
+    }
+
+    if (record.signal.saved) {
+      push("save");
+    }
+
+    if (record.signal.askedQuestion) {
+      push("ask");
+    }
+
+    if (record.signal.reviewed) {
+      push("review");
+    }
+
+    return signals;
+  });
+}
+
+export function persistAutomaticConceptAliases(persistenceStore, snapshot, now) {
+  const automaticAliases = createAutomaticConceptAliases(snapshot.posts, snapshot.conceptAliases, now);
+
+  if (!automaticAliases.length) {
+    return snapshot;
+  }
+
+  return persistenceStore.saveConceptAliases([...snapshot.conceptAliases, ...automaticAliases], now);
+}
+
+export function maybePersistConnectionNote(persistenceStore, options) {
+  const currentSnapshot = persistenceStore.getSnapshot();
+  const note = createConnectionNoteForImport({
+    existingPosts: options.beforeImport.posts,
+    newPosts: options.newPosts,
+    interactionSignals: options.beforeImport.interactionSignals.map((record) => record.signal),
+    dismissedPosts: options.beforeImport.dismissedPosts,
+    conceptAliases: currentSnapshot.conceptAliases,
+    now: options.now,
+    contentLanguage: options.contentLanguage
+  });
+
+  if (!note) {
+    return currentSnapshot;
+  }
+
+  return persistenceStore.savePosts([note], options.now);
+}
+
+export function deriveTopicState(signal) {
+  const positiveSignals = [signal.openedThread, signal.liked, signal.saved, signal.askedQuestion, signal.reviewed].filter(
+    Boolean
+  ).length;
+
+  return {
+    topicId: signal.topicId,
+    interestScore: Math.min(1, positiveSignals / 4),
+    fatigueScore: signal.skippedQuickly ? 0.85 : 0.15,
+    comprehensionScore: signal.askedQuestion ? 0.35 : signal.reviewed || signal.saved ? 0.78 : 0.55
+  };
+}
+
+export function buildInteractionSignalRecordId(signal) {
+  const signature = [
+    signal.postId,
+    signal.topicId,
+    signal.createdAt,
+    signal.dwellTimeMs,
+    signal.openedThread,
+    signal.liked,
+    signal.saved,
+    signal.askedQuestion,
+    signal.reviewed,
+    signal.skippedQuickly
+  ].join("|");
+
+  return `signal-${sanitizeSlug(signal.postId)}-${hashText(signature)}`;
 }

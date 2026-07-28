@@ -24,6 +24,7 @@ import {
   tokenizeText
 } from "./shared.mjs";
 import { collectKnownSourceUrls } from "./importSettlement.mjs";
+import { collectConfirmedDiscoveryConcepts } from "./research.mjs";
 import { getActiveImportSourceCandidateIds, getBudgetRemaining } from "./supply.mjs";
 
 const backlogAutoBatchLimit = 3;
@@ -140,6 +141,11 @@ function buildYouTubeWatchUrl(videoId) {
   return url.toString();
 }
 
+/**
+ * Fallback feeds carry no channel metadata; pollDueSubscriptions reads
+ * `.title`/`.siteUrl` off the union and relies on them being undefined here.
+ * @returns {Promise<{ entries: Array<{ title: string, link: string, publishedAt: any, summary: any, kind: string }>, kind: string, title?: string, siteUrl?: string }>}
+ */
 export async function fetchUploadsFallbackFeed(subscription, fetchImpl) {
   const channelId = subscription.kind === "youtube_channel" ? getSubscriptionChannelId(subscription) : undefined;
 
@@ -643,4 +649,167 @@ export function normalizeUrlKey(value) {
   } catch {
     return typeof value === "string" ? value.trim() : "";
   }
+}
+
+
+export async function pollDueSubscriptions({ persistenceStore, curationStore, fetchImpl, contentLanguage, now }) {
+  if (!fetchImpl) {
+    return { checked: 0, skipped: 0, queued: 0, pending: 0, errors: ["Feed fetch is not available."] };
+  }
+
+  const snapshot = persistenceStore.getSnapshot();
+  const dueSubscriptions = selectDueSubscriptions(snapshot.subscriptions, now, 3);
+
+  if (!dueSubscriptions.length) {
+    return { checked: 0, skipped: snapshot.subscriptions.length, queued: 0, pending: 0, errors: [] };
+  }
+
+  let workingSnapshot = snapshot;
+  const nowIso = normalizeIsoDate(now);
+  const confirmedConcepts = collectConfirmedDiscoveryConcepts(workingSnapshot);
+  const knownUrlKeys = new Set([
+    ...collectKnownSourceUrls(workingSnapshot),
+    ...curationStore.list().flatMap((record) => record.job.sourceCandidate?.source.url ?? [])
+  ].map(normalizeUrlKey));
+  const candidateRecords = [];
+  const importJobs = [];
+  const subscriptionUpdates = [];
+  const errors = [];
+
+  for (const subscription of dueSubscriptions) {
+    try {
+      let parsedFeed;
+
+      try {
+        parsedFeed = await fetchAndParseSubscriptionFeed(subscription.feedUrl, fetchImpl);
+      } catch (feedError) {
+        // The YouTube feed endpoint intermittently 404s/500s; the uploads
+        // playlist page carries the same latest videos, so use it as a
+        // fallback poll source before declaring the poll failed.
+        parsedFeed = await fetchUploadsFallbackFeed(subscription, fetchImpl);
+
+        if (!parsedFeed) {
+          throw feedError;
+        }
+      }
+
+      const entries = selectNewSubscriptionEntries(parsedFeed.entries, subscription, knownUrlKeys);
+      const maxPublishedAt = maxIsoDate([
+        subscription.lastItemPublishedAt,
+        ...parsedFeed.entries.map((entry) => entry.publishedAt)
+      ]);
+      let queuedForSource = 0;
+
+      for (const entry of entries) {
+        const urlKey = normalizeUrlKey(entry.link);
+
+        if (!urlKey || knownUrlKeys.has(urlKey)) {
+          continue;
+        }
+
+        const relevance = scoreSubscriptionEntryRelevance(entry, confirmedConcepts);
+        const wouldQueue =
+          subscription.filterMode === "all" || (subscription.filterMode === "relevant" && relevance.passed);
+        const shouldQueue = wouldQueue && queuedForSource < 3;
+        const candidate = createSubscriptionSourceCandidate({
+          subscription,
+          entry,
+          concepts: relevance.concepts.length ? relevance.concepts : [subscription.title],
+          now: nowIso,
+          relevanceScore: relevance.score
+        });
+
+        if (!candidate) {
+          continue;
+        }
+
+        const record = {
+          id: candidate.id,
+          candidate,
+          status: shouldQueue ? "queued" : "pending",
+          intakeKind: "subscription",
+          createdAt: nowIso,
+          updatedAt: nowIso,
+          notes: subscription.title
+        };
+
+        knownUrlKeys.add(urlKey);
+        candidateRecords.push(record);
+
+        if (shouldQueue) {
+          queuedForSource += 1;
+          importJobs.push(createSubscriptionImportJob(subscription, candidate, nowIso, contentLanguage));
+        }
+      }
+
+      subscriptionUpdates.push({
+        ...subscription,
+        title: parsedFeed.title || subscription.title,
+        siteUrl: subscription.siteUrl ?? parsedFeed.siteUrl,
+        lastPolledAt: nowIso,
+        lastItemPublishedAt: maxPublishedAt,
+        lastError: undefined
+      });
+    } catch (error) {
+      console.error(`[aitimeline] subscription poll failed (${subscription.id}).`, error);
+      const message = "Subscription poll failed.";
+
+      errors.push(`${subscription.title}: ${message}`);
+      subscriptionUpdates.push({
+        ...subscription,
+        lastPolledAt: nowIso,
+        lastError: message
+      });
+    }
+  }
+
+  if (candidateRecords.length) {
+    workingSnapshot = persistenceStore.saveSourceCandidateRecords(candidateRecords, nowIso);
+  }
+
+  let queuedCount = 0;
+  let discardedJobIds = [];
+
+  if (importJobs.length) {
+    const rawPlan = createSingleJobPlan(importJobs, nowIso);
+    const budgetResult = applyDailyAutoJobBudget({
+      plan: rawPlan,
+      budget: getDailyAutoJobBudgetRecord(workingSnapshot, nowIso),
+      limit: getDailyAutoJobBudgetLimit(process.env),
+      now: nowIso
+    });
+    const records = curationStore.enqueuePlan(budgetResult.plan, nowIso);
+    const acceptedIds = new Set(budgetResult.plan.acceptedSourceCandidateIds);
+
+    queuedCount = records.length;
+    discardedJobIds = budgetResult.discardedJobIds;
+    persistenceStore.saveDailyAutoJobBudgetRecords([budgetResult.budget], nowIso);
+    workingSnapshot = persistenceStore.saveCurationJobRecords(records, nowIso);
+
+    const downgradedRecords = candidateRecords
+      .filter((record) => record.status === "queued" && !acceptedIds.has(record.candidate.id))
+      .map((record) => ({
+        ...record,
+        status: "pending",
+        updatedAt: nowIso
+      }));
+
+    if (downgradedRecords.length) {
+      workingSnapshot = persistenceStore.saveSourceCandidateRecords(downgradedRecords, nowIso);
+    }
+  }
+
+  if (subscriptionUpdates.length) {
+    workingSnapshot = persistenceStore.saveSubscriptions(subscriptionUpdates, nowIso);
+  }
+
+  return {
+    checked: dueSubscriptions.length,
+    skipped: Math.max(0, snapshot.subscriptions.length - dueSubscriptions.length),
+    queued: queuedCount,
+    pending: Math.max(0, candidateRecords.length - queuedCount),
+    discardedJobIds,
+    errors,
+    snapshotSummary: summarizeSnapshot(workingSnapshot)
+  };
 }
