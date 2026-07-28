@@ -75,4 +75,14 @@ describe("knowledge post schema validation", () => {
     expect(result.valid).toBe(true);
     expect(result.issues.filter((issue) => issue.severity === "error")).toEqual([]);
   });
+
+  it("accepts a post imported from a conversation source", () => {
+    const post = makeValidPost();
+    post.sources[0]!.type = "conversation";
+
+    const result = validateKnowledgePost(post);
+
+    expect(result.valid).toBe(true);
+    expect(result.issues.filter((issue) => issue.severity === "error")).toEqual([]);
+  });
 });
