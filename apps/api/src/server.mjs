@@ -31,7 +31,6 @@ import {
   removeConceptAlias,
   parseContentLanguage,
   runConversationTurn,
-  runDueBackgroundCurationJobs,
   normalizeConceptKey,
   generateConceptBrief,
   runIdeaObservation,
@@ -44,7 +43,6 @@ import {
   catalogSubscriptionBacklog,
   createSubscriptionImportJob,
   createSubscriptionSourceCandidate,
-  digestDueSubscriptionBacklogs,
   digestSubscriptionBacklog,
   fetchAndParseSubscriptionFeed,
   fetchUploadsFallbackFeed,
@@ -53,7 +51,6 @@ import {
   handleUpdateSubscription,
   maxIsoDate,
   normalizeUrlKey,
-  pollDueSubscriptions,
   scoreSubscriptionEntryRelevance,
   selectDueSubscriptions,
   selectNewSubscriptionEntries
@@ -62,8 +59,6 @@ import {
   createSourceCandidateRecord,
   dedupeSourceCandidates,
   findMatchingSourceCandidateRecords,
-  getSupplyStatus,
-  maybeCreateSupplyDroughtNotification,
   queueSupplyRefill
 } from "./domains/supply.mjs";
 import {
@@ -75,8 +70,7 @@ import {
 import {
   getCaptureContextResponse,
   handleCaptureConversation,
-  handleCaptureSource,
-  queueDueAgentCaptures
+  handleCaptureSource
 } from "./domains/capture.mjs";
 import {
   HttpError,
@@ -87,20 +81,15 @@ import {
   getDailyAutoJobBudgetLimit,
   getDailyAutoJobBudgetRecord,
   hashText,
-  normalizeIsoDate,
   requireString,
   summarizeSnapshot,
   tokenizeText
 } from "./domains/shared.mjs";
 import {
-  discoverSourcesForJob,
   handleAgentAsk,
   handleAgentConfirm,
   handleDiscoveryRun,
-  handleIdeaResearchRequest,
-  handleResearchIdeaJob,
-  handleResearchQuestionJob,
-  runResearchWithStagedPersistence
+  handleIdeaResearchRequest
 } from "./domains/research.mjs";
 import { handlePostReply, handleUserNote } from "./domains/notes.mjs";
 import {
@@ -117,15 +106,11 @@ import {
 import {
   handleArchiveLearningGoal,
   handleCreateLearningGoal,
-  handleListLearningGoals,
-  omitSnapshotFromProductionResult,
-  queueDailyLearningGoalProductionGuarantee
+  handleListLearningGoals
 } from "./domains/learningGoals.mjs";
 import {
   handleAsk,
-  handleConceptBriefJob,
   handleConceptBriefRequest,
-  handleDeepReadArticleJob,
   handleDeepReadRequest
 } from "./domains/briefsDeepRead.mjs";
 import {
@@ -136,15 +121,18 @@ import {
   resolveContentLanguage
 } from "./domains/config.mjs";
 import {
-  filterDuplicateFollowupCurationRecords,
   importArticle,
   importYouTube,
   ingestSourceCandidate,
-  ingestSourceCandidateForBackground,
-  materializeCurationJobRecords,
   persistImportAndReleasePlan,
   reconcileAndMaterializeCurationQueue
 } from "./domains/importPipeline.mjs";
+import {
+  createEmptyCurationPlan,
+  createNeutralExposureFeedback,
+  createSafeSourceImportWorker,
+  executeCurationRun
+} from "./domains/curationRun.mjs";
 import {
   getDismissedPostsResponse,
   getEvidenceLedgerResponse,
@@ -200,6 +188,7 @@ const defaultDataPath = resolve(currentDir, "../data/aitimeline.json");
 const defaultCurationDataPath = resolve(currentDir, "../data/curation-jobs.json");
 const defaultMediaRoot = resolve(currentDir, "../data/media");
 const backlogManualBatchLimit = 5;
+
 export function createApiServer(options = {}) {
   const bindingHost = options.host ?? process.env.AITIMELINE_HOST ?? "127.0.0.1";
   const authToken = options.authToken ?? process.env.AITIMELINE_AUTH_TOKEN;
@@ -1610,267 +1599,10 @@ export function createApiServer(options = {}) {
   return server;
 }
 
-async function executeCurationRun(
-  {
-    persistenceStore,
-    curationStore,
-    feedFetch,
-    sourceImportWorker,
-    ingestSource,
-    searchProvider,
-    askModelClient,
-    deepReadModelClients,
-    workerId,
-    env
-  },
-  options = {}
-) {
-  const contentLanguage = resolveContentLanguage(persistenceStore, env);
-  const runNow = options.now ?? new Date().toISOString();
-  const runKinds = Array.isArray(options.kinds) ? options.kinds : undefined;
-  const deepReadOnlyRun =
-    Array.isArray(runKinds) && runKinds.length > 0 && runKinds.every((kind) => kind === "deep_read_article");
-  const goalProductionGuarantee = deepReadOnlyRun
-    ? {
-        snapshot: persistenceStore.getSnapshot(),
-        queued: false,
-        records: [],
-        budget: getDailyAutoJobBudgetRecord(persistenceStore.getSnapshot(), runNow),
-        discardedJobIds: [],
-        skippedConcepts: []
-      }
-    : queueDailyLearningGoalProductionGuarantee({
-        persistenceStore,
-        curationStore,
-        userId: typeof options.userId === "string" && options.userId.trim() ? options.userId : "local-user",
-        contentLanguage,
-        now: runNow
-      });
-  const subscriptionPolling = deepReadOnlyRun
-    ? { checked: 0, skipped: 0, queued: 0, pending: 0, errors: [] }
-    : await pollDueSubscriptions({
-        persistenceStore,
-        curationStore,
-        fetchImpl: feedFetch,
-        contentLanguage,
-        now: runNow
-      });
-  const shouldRefillForDrought = !runKinds || runKinds.includes("import_source");
-  const backlogDigest =
-    deepReadOnlyRun || !shouldRefillForDrought
-      ? { queued: 0, skipped: 0 }
-      : digestDueSubscriptionBacklogs({
-          persistenceStore,
-          curationStore,
-          contentLanguage,
-          now: runNow
-        });
-  const agentCaptureQueue =
-    deepReadOnlyRun || !shouldRefillForDrought
-      ? { queued: 0 }
-      : queueDueAgentCaptures({
-          persistenceStore,
-          curationStore,
-          contentLanguage,
-          now: runNow
-        });
-  const supplyStatus = getSupplyStatus(persistenceStore.getSnapshot(), curationStore, runNow);
-  const droughtNotification = maybeCreateSupplyDroughtNotification({
-    persistenceStore,
-    status: supplyStatus,
-    contentLanguage,
-    now: runNow
-  });
-  let supplyRefill = { queued: 0, skipped: 0, budgetRemaining: supplyStatus.budgetRemaining };
-
-  if (shouldRefillForDrought && supplyStatus.drought) {
-    supplyRefill = queueSupplyRefill({
-      persistenceStore,
-      curationStore,
-      contentLanguage,
-      now: runNow
-    });
-  }
-  const batch = await runDueBackgroundCurationJobs(
-    curationStore,
-    {
-      contentLanguage,
-      sourceImportWorker,
-      ingestSourceCandidate: (candidate) => ingestSourceCandidateForBackground(candidate, ingestSource),
-      discoverSources: (job) => discoverSourcesForJob(job, searchProvider, persistenceStore, contentLanguage),
-      loadSeedPost: (job) => persistenceStore.getSnapshot().posts.find((post) => post.id === job.postId),
-      loadSourceQualityVerdicts: () => persistenceStore.getSnapshot().sourceQualityVerdicts,
-      loadSourceQualityUserContext: () => buildSourceQualityUserContext(persistenceStore.getSnapshot()),
-      researchQuestion: (job, context) =>
-        runResearchWithStagedPersistence(
-          persistenceStore.getSnapshot(),
-          context.effectAt,
-          (stagedStore) => handleResearchQuestionJob(
-            job,
-            stagedStore,
-            sourceImportWorker,
-            searchProvider,
-            askModelClient,
-            contentLanguage,
-            context.effectAt,
-            ingestSource
-          )
-        ),
-      researchIdea: (job, context) =>
-        runResearchWithStagedPersistence(
-          persistenceStore.getSnapshot(),
-          context.effectAt,
-          (stagedStore) => handleResearchIdeaJob(
-            job,
-            stagedStore,
-            sourceImportWorker,
-            searchProvider,
-            contentLanguage,
-            context.effectAt,
-            ingestSource
-          )
-        ),
-      conceptBrief: (job) =>
-        handleConceptBriefJob(
-          job,
-          persistenceStore,
-          askModelClient,
-          contentLanguage,
-          runNow
-        ),
-      deepReadArticle: (job) =>
-        handleDeepReadArticleJob(
-          job,
-          persistenceStore,
-          deepReadModelClients,
-          contentLanguage,
-          runNow
-        ),
-      cooldownTopic: (job) => ({
-        kind: job.kind,
-        message: "Topic cooldown recorded by API worker."
-      })
-    },
-    {
-      now: runNow,
-      limit: options.limit,
-      kinds: options.kinds,
-      workerId
-    }
-  );
-  const filteredRecords = filterDuplicateFollowupCurationRecords(
-    batch.records,
-    persistenceStore.getSnapshot().posts
-  );
-
-  filteredRecords.forEach((record, index) => {
-    if (record.result !== batch.records[index]?.result && record.result) {
-      curationStore.updateTerminalResult(record.id, record.result);
-    }
-  });
-
-  const materializedRecords = materializeCurationJobRecords(
-    persistenceStore,
-    curationStore,
-    filteredRecords,
-    { appliedAt: batch.completedAt, contentLanguage }
-  );
-  const records = materializedRecords.map((record) => sanitizeCurationRecordForResponse(record));
-  const filteredBatch = { ...batch, records };
-  const snapshot = persistenceStore.getSnapshot();
-
-  return {
-    ...filteredBatch,
-    alreadyRunning: false,
-    subscriptionPolling,
-    backlogDigest,
-    agentCaptureQueue,
-    supplyRefill,
-    goalProductionGuarantee: omitSnapshotFromProductionResult(goalProductionGuarantee),
-    droughtNotification,
-    snapshotSummary: summarizeSnapshot(snapshot)
-  };
-}
-
-function createSafeSourceImportWorker(worker) {
-  return {
-    ...worker,
-    runner: worker.runner,
-    async run(input) {
-      let result;
-
-      try {
-        result = await worker.run(input);
-      } catch (error) {
-        console.error("[aitimeline] source import worker threw before returning a result.", error);
-        throw new Error("Source import failed.");
-      }
-
-      const rawError = result?.errorMessage ?? result?.importRecord?.errorMessage;
-      const failed =
-        result?.importRecord?.status === "failed" ||
-        result?.qualityGate?.verdict === "reject";
-
-      if (!failed && !rawError) {
-        return result;
-      }
-
-      if (rawError) {
-        console.error("[aitimeline] source import worker returned a failed result.", rawError);
-      }
-
-      return {
-        ...result,
-        errorMessage: "Source import failed.",
-        ...(result?.importRecord
-          ? {
-              importRecord: {
-                ...result.importRecord,
-                ...(result.importRecord.status === "failed" || result.importRecord.errorMessage
-                  ? { errorMessage: "Source import failed." }
-                  : {})
-              }
-            }
-          : {})
-      };
-    }
-  };
-}
 
 
 
 
-
-
-function createNeutralExposureFeedback(signal) {
-  return {
-    postId: signal.postId,
-    topicId: signal.topicId,
-    conceptIds: signal.conceptIds,
-    signalStrength: 0,
-    inferredState: "not_relevant",
-    nextAction: "ask_clarifying_question",
-    reason: "Pure impression only; topic state is unchanged."
-  };
-}
-
-function createEmptyCurationPlan(generatedAt) {
-  const normalizedGeneratedAt = normalizeIsoDate(generatedAt);
-
-  return {
-    generatedAt: normalizedGeneratedAt,
-    jobs: [],
-    suppressions: [],
-    acceptedSourceCandidateIds: [],
-    cooledTopicIds: [],
-    expansionPlan: {
-      generatedAt: normalizedGeneratedAt,
-      jobs: [],
-      suppressions: [],
-      cooledTopicIds: []
-    }
-  };
-}
 
 
 
@@ -1931,3 +1663,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 
   console.log(`AITimeline API listening on http://${address.address}:${address.port}`);
 }
+
+// 兼容外部 import:这些符号已搬进域模块,server.mjs 仍按原名对外暴露。
+export {
+  ensureMaterializationPlan,
+  filterDuplicateFollowupCurationRecords,
+  materializeCurationJobRecords,
+  normalizeFollowupDedupeTitle
+} from "./domains/importPipeline.mjs";
+export { createFileStorageAdapter } from "./lib/fileStorage.mjs";
