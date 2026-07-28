@@ -14,6 +14,14 @@ export const sourceCandidateFailureMessages = {
 // One classification for a terminal import_source job drives both halves of the
 // bookkeeping: which budget slot the attempt consumed, and where the candidate
 // lands in the pool. Splitting them is how candidates used to rot in `queued`.
+/**
+ * @returns {{
+ *   settlement: import("../../../../packages/core/dist/index.js").DailyAutoJobSettlementOutcome;
+ *   candidateStatus: "imported" | "rejected_source" | "skipped" | "unreachable";
+ *   qualityGate?: any;
+ *   rejectionReasons: string[];
+ * }}
+ */
 export function classifyTerminalImportSource({ record, sourceImport, candidateRecord }) {
   if (record.status === "succeeded") {
     const producedCards = sourceImport?.posts?.length ?? 0;
