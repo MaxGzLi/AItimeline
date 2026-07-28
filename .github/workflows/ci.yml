@@ -18,6 +18,7 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run build
+      - run: npm run test:unit
       - name: Pack-consumer smoke
         run: |
           pack_dir="$(mktemp -d)"
