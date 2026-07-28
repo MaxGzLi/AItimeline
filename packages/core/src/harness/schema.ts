@@ -26,7 +26,8 @@ const sourceTypes = [
   "pdf",
   "audio",
   "manual",
-  "user_note"
+  "user_note",
+  "conversation"
 ] as const satisfies readonly SourceType[];
 const threadKinds = [
   "explain",

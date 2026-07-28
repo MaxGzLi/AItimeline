@@ -52,9 +52,7 @@ export function getRestingReviewStates(states: ReviewState[], now: string | Date
 }
 
 function addDays(date: Date, days: number): Date {
-  const next = new Date(date);
-  next.setDate(next.getDate() + days);
-  return next;
+  return new Date(date.getTime() + days * 86_400_000);
 }
 
 function normalizeDate(value: string | Date): Date {
