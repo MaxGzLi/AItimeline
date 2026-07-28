@@ -24,7 +24,6 @@ import {
   type RankedKnowledgeCard,
   type SourceAsset,
   type SourceImport,
-  type TimelineBlockTopic,
   type TopicState,
   type UserMemory,
   type WeeklyRecapRecord
@@ -35,7 +34,6 @@ import {
   Bell,
   Bot,
   Brain,
-  CheckCircle2,
   ChevronDown,
   Compass,
   GitBranch,
@@ -46,27 +44,25 @@ import {
   Settings,
   XCircle
 } from "lucide-react";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import {
-  AgentReplyThread,
-  type AgentReplyAction,
-  type DiscoveryRunState
-} from "./components/AgentReplyThread";
-import { AskComposer } from "./components/AskComposer";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import type { AgentReplyAction, DiscoveryRunState } from "./components/AgentReplyThread";
 import { ConceptDigestPanel } from "./components/ConceptDigestPanel";
-import { ContextRail } from "./components/ContextRail";
-import { DeepReadArticleView } from "./components/DeepReadArticleView";
-import { PostDetailView } from "./components/PostDetailView";
-import { PostView } from "./components/PostView";
-import { SupplyDroughtCard, type SupplyRefillState } from "./components/SupplyDroughtCard";
-import { WeeklyRecapCard } from "./components/WeeklyRecapCard";
+import type { SupplyRefillState } from "./components/SupplyDroughtCard";
 import { buildWikilinkAutocompleteCandidates } from "./components/WikilinkAutocomplete";
 import { DiscoverView } from "./views/DiscoverView";
 import { AgentView } from "./views/AgentView";
+import { DeepReadView } from "./views/DeepReadView";
 import { GraphView } from "./views/GraphView";
 import { NotificationsView } from "./views/NotificationsView";
 import { ReviewView, type ReviewQueueEntry } from "./views/ReviewView";
 import { SettingsView } from "./views/SettingsView";
+import {
+  TimelineView,
+  buildTopicFilterOptions,
+  getTimelineCardBlockTopic,
+  otherTopicFilterKey,
+  type TopicFilterKey
+} from "./views/TimelineView";
 import { ApiHttpError, apiBaseUrl, apiRequest, isAbortError, isAbortLikeError, isTransportError, isYouTubeChannelUrl, isYouTubeUrl, sampleSourceUrl } from "./lib/api";
 import {
   buildGroundedAnswer,
@@ -136,12 +132,10 @@ import type {
   SubscriptionBacklogView,
   SupplyStatus,
   SubscriptionRecord,
-  TimelineCard,
   WorkerStatus
 } from "./lib/types";
 
 type ViewKey = "timeline" | "discover" | "graph" | "review" | "notifications" | "agent" | "settings" | "deepread";
-type TopicFilterKey = "all" | "__other__" | string;
 
 const languageStorageKey = "aitl-language";
 
@@ -165,74 +159,6 @@ const viewTitleKeys: Record<ViewKey, { title: string; sub?: string }> = {
   settings: { title: "nav.settings" },
   deepread: { title: "deepread.title", sub: "deepread.subtitle" }
 };
-
-const otherTopicFilterKey = "__other__";
-const maxTopicFilterPillCount = 5;
-
-type TopicFilterOption = {
-  topic: TimelineBlockTopic;
-  count: number;
-  firstIndex: number;
-};
-
-function getTimelineCardBlockTopic(card: RankedKnowledgeCard): TimelineBlockTopic {
-  const timelineCard = card as TimelineCard;
-
-  if (timelineCard.blockTopic) {
-    return timelineCard.blockTopic;
-  }
-
-  const fallbackLabel = card.concepts[0] ?? t("common.concept");
-
-  return {
-    id: getTopicId(card),
-    label: fallbackLabel,
-    source: "card_topic"
-  };
-}
-
-function buildTopicFilterOptions(cards: RankedKnowledgeCard[]): {
-  topics: TopicFilterOption[];
-  otherTopicIds: Set<string>;
-  hasOther: boolean;
-} {
-  const byTopicId = new Map<string, TopicFilterOption>();
-
-  cards.forEach((card, index) => {
-    const topic = getTimelineCardBlockTopic(card);
-    const existing = byTopicId.get(topic.id);
-
-    if (existing) {
-      existing.count += 1;
-      return;
-    }
-
-    byTopicId.set(topic.id, {
-      topic,
-      count: 1,
-      firstIndex: index
-    });
-  });
-
-  const sortedTopics = Array.from(byTopicId.values()).sort(
-    (left, right) =>
-      Number(right.topic.source === "learning_goal") - Number(left.topic.source === "learning_goal") ||
-      left.firstIndex - right.firstIndex ||
-      left.topic.label.localeCompare(right.topic.label)
-  );
-  const topicSlotsWithoutOther = maxTopicFilterPillCount - 1;
-  const topicSlotsWithOther = maxTopicFilterPillCount - 2;
-  const visibleTopicCount =
-    sortedTopics.length > topicSlotsWithoutOther ? topicSlotsWithOther : topicSlotsWithoutOther;
-  const topics = sortedTopics.slice(0, Math.max(0, visibleTopicCount));
-  const otherTopicIds = new Set(sortedTopics.slice(topics.length).map((option) => option.topic.id));
-
-  return {
-    topics,
-    otherTopicIds,
-    hasOther: otherTopicIds.size > 0
-  };
-}
 
 export function App() {
   const [language, setLanguageState] = useState<Language>(() => {
@@ -2627,6 +2553,39 @@ export function App() {
     rankAgentTurnStatus(polledAgentTurnStatus) >= rankAgentTurnStatus(localAgentTurnStatus)
       ? polledAgentTurnStatus
       : localAgentTurnStatus;
+  const headerActions = (
+    <>
+      <button
+        className={`x-scout-toggle${autoScoutEnabled ? "" : " paused"}`}
+        disabled={!workerStatus || isUpdatingWorker}
+        onClick={() => {
+          void handleAutoScoutChange(!autoScoutEnabled);
+        }}
+        title={t("scout.toggleTitle")}
+        type="button"
+      >
+        {autoScoutEnabled ? <Pause size={14} /> : <Play size={14} />}
+        <span>{autoScoutEnabled ? t("scout.on") : t("scout.off")}</span>
+        {queuedJobCount > 0 ? <em>{t("scout.queued", { count: queuedJobCount })}</em> : null}
+        <em>{t("scout.budget", { used: autoJobBudget?.used ?? 0, limit: autoJobBudget?.limit ?? 20 })}</em>
+      </button>
+      <button
+        aria-expanded={scoutLedgerOpen}
+        aria-label={t("scout.ledgerToggle")}
+        className={`x-scout-ledger-toggle${scoutLedgerOpen ? " open" : ""}`}
+        onClick={() => setScoutLedgerOpen((value) => !value)}
+        title={t("scout.ledgerToggle")}
+        type="button"
+      >
+        <ChevronDown size={14} />
+      </button>
+    </>
+  );
+  const scoutLedger = scoutLedgerOpen ? (
+    <p className="x-scout-ledger" role="status">
+      {todayLedgerLine}
+    </p>
+  ) : null;
 
   return (
     <div className="x-frame">
@@ -2688,7 +2647,114 @@ export function App() {
         </button>
       </nav>
 
-      <main className="x-main">
+      {activeView === "timeline" ? (
+        <TimelineView
+          headerActions={headerActions}
+          scoutLedger={scoutLedger}
+          selectedCard={selectedCard}
+          feedTab={feedTab}
+          onCloseDetail={handleCloseDetail}
+          onFeedTabChange={setFeedTab}
+          selectedAsset={selectedAsset}
+          selectedBacklinks={selectedBacklinks}
+          allCards={allCards}
+          selectedChunks={selectedChunks}
+          connectionsByCard={connectionsByCard}
+          selectedEvidenceFailed={selectedEvidenceFailed}
+          selectedEvidenceLedger={selectedEvidenceLedger}
+          selectedFeedback={selectedFeedback}
+          linkedGraph={linkedGraph}
+          selectedThread={selectedThread}
+          onAskAi={handleAskAi}
+          onAskThreadBlock={handleAskThreadBlock}
+          onLike={handleLike}
+          onOpenCardId={handleOpenCardId}
+          onOpenConcept={handleOpenConcept}
+          onPromptChange={handlePromptChange}
+          onReply={handleReply}
+          onRetryEvidence={handleRetryEvidence}
+          onSave={handleSave}
+          selectedPrompt={selectedCard ? aiPromptByCard[selectedCard.id] ?? "" : ""}
+          selectedQuoteText={selectedCard ? quoteByCard[selectedCard.id] : undefined}
+          selectedSignal={selectedSignal}
+          wikilinkCandidates={wikilinkCandidates}
+          topicFilter={topicFilter}
+          topicFilterOptions={topicFilterOptions}
+          onTopicFilterChange={setTopicFilter}
+          composerInputRef={composerInputRef}
+          isAgentAsking={isAgentAsking}
+          composerMode={composerMode}
+          onComposerModeChange={(mode) => {
+            setComposerMode(mode);
+            if (mode === "idea") {
+              setPendingThreadId(null);
+            }
+          }}
+          onAgentQuestionChange={setAgentQuestion}
+          onAgentAsk={handleAgentAsk}
+          agentQuestion={agentQuestion}
+          agentMessage={agentMessage}
+          agentResponse={agentResponse}
+          agentAskedQuestion={agentAskedQuestion}
+          discoveryRun={discoveryRun}
+          onConfirmDiscovery={handleConfirmDiscovery}
+          onDiscoverSources={handleDiscoverSources}
+          onDismissAgentReply={() => {
+            setAgentResponse(null);
+            setAgentAskedQuestion("");
+            setPendingThreadId(null);
+            setDiscoveryRun({ status: "idle" });
+          }}
+          onOpenDiscover={() => setActiveView("discover")}
+          onIdeaProbe={handleIdeaProbe}
+          onResearchIdea={handleResearchIdea}
+          currentAgentTurnStatus={currentAgentTurnStatus}
+          pendingCards={pendingCards}
+          onShowPendingCards={handleShowPendingCards}
+          queuedJobCount={queuedJobCount}
+          autoScoutEnabled={autoScoutEnabled}
+          productionPeak={productionPeakRef.current}
+          supplyStatus={supplyStatus}
+          supplyRefillState={supplyRefillState}
+          onOpenImport={() => openAgentSection("import")}
+          onOpenReview={() => setActiveView("review")}
+          onRefillCandidates={() => {
+            void handleSupplyRefill();
+          }}
+          onOpenSubscriptions={() => openAgentSection("subscriptions")}
+          weeklyRecap={weeklyRecap}
+          onDismissWeeklyRecap={dismissWeeklyRecap}
+          theme={theme}
+          visibleCards={visibleCards}
+          searchQuery={searchQuery}
+          apiStatus={apiStatus}
+          activeDismissedPostIds={activeDismissedPostIds}
+          focusedIndex={focusedIndex}
+          onDwell={handleDwell}
+          onImpression={handleImpression}
+          onOpenCard={handleOpenCard}
+          onRestorePost={restoreDismissedPost}
+          onReviewComplete={handleReviewComplete}
+          onSkip={handleSkip}
+          quoteByCard={quoteByCard}
+          interactionSignals={interactionSignals}
+          boundary={boundary}
+          selectedLocalGraph={selectedLocalGraph}
+          graph={graph}
+          learningGoals={learningGoals}
+          onOpenGraph={() => {
+            setGraphRequestedTab("graph");
+            setActiveView("graph");
+          }}
+          onOpenSkillTree={() => {
+            setGraphRequestedTab("skillTree");
+            setActiveView("graph");
+          }}
+          onSearchChange={setSearchQuery}
+          reviewQueue={reviewQueue}
+        />
+      ) : (
+        <main className="x-main">
         <header className="x-colhead">
           {selectedCard ? (
             <div className="x-detail-head">
@@ -2700,7 +2766,7 @@ export function App() {
                 <p className="x-colsub">{selectedCard.title}</p>
               </div>
             </div>
-          ) : activeView === "timeline" ? null : (
+          ) : (
             <div className="x-coltitle">
               <div>
                 <h1>{activeTitle.title}</h1>
@@ -2708,264 +2774,10 @@ export function App() {
               </div>
             </div>
           )}
-          {activeView === "timeline" && !selectedCard ? (
-            <div className="x-tabs" role="tablist" aria-label={t("feed.views")}>
-              {(
-                [
-                  ["foryou", t("feed.tab.foryou")],
-                  ["latest", t("feed.tab.latest")],
-                  ["saved", t("feed.tab.saved")]
-                ] as const
-              ).map(([tabKey, tabLabel]) => (
-                <button
-                  aria-selected={feedTab === tabKey}
-                  className={`x-tab${feedTab === tabKey ? " active" : ""}`}
-                  key={tabKey}
-                  onClick={() => setFeedTab(tabKey)}
-                  role="tab"
-                  type="button"
-                >
-                  {tabLabel}
-                </button>
-              ))}
-            </div>
-          ) : null}
-          <button
-            className={`x-scout-toggle${autoScoutEnabled ? "" : " paused"}`}
-            disabled={!workerStatus || isUpdatingWorker}
-            onClick={() => {
-              void handleAutoScoutChange(!autoScoutEnabled);
-            }}
-            title={t("scout.toggleTitle")}
-            type="button"
-          >
-            {autoScoutEnabled ? <Pause size={14} /> : <Play size={14} />}
-            <span>{autoScoutEnabled ? t("scout.on") : t("scout.off")}</span>
-            {queuedJobCount > 0 ? <em>{t("scout.queued", { count: queuedJobCount })}</em> : null}
-            <em>{t("scout.budget", { used: autoJobBudget?.used ?? 0, limit: autoJobBudget?.limit ?? 20 })}</em>
-          </button>
-          <button
-            aria-expanded={scoutLedgerOpen}
-            aria-label={t("scout.ledgerToggle")}
-            className={`x-scout-ledger-toggle${scoutLedgerOpen ? " open" : ""}`}
-            onClick={() => setScoutLedgerOpen((value) => !value)}
-            title={t("scout.ledgerToggle")}
-            type="button"
-          >
-            <ChevronDown size={14} />
-          </button>
+          {headerActions}
         </header>
 
-        {scoutLedgerOpen ? (
-          <p className="x-scout-ledger" role="status">
-            {todayLedgerLine}
-          </p>
-        ) : null}
-
-        {activeView === "timeline" && selectedCard ? (
-          <PostDetailView
-            asset={selectedAsset}
-            backlinks={selectedBacklinks}
-            card={selectedCard}
-            cards={allCards}
-            chunks={selectedChunks}
-            connections={connectionsByCard[selectedCard.id] ?? []}
-            evidenceError={selectedEvidenceFailed}
-            evidenceLedger={selectedEvidenceLedger}
-            feedback={selectedFeedback}
-            graph={linkedGraph}
-            // Remount per card so drafts and in-flight answer UI never leak
-            // from one card into another.
-            key={selectedCard.id}
-            messages={selectedThread}
-            onAsk={handleAskAi}
-            onAskThreadBlock={handleAskThreadBlock}
-            onLike={handleLike}
-            onOpenCardId={handleOpenCardId}
-            onOpenConcept={handleOpenConcept}
-            onPromptChange={handlePromptChange}
-            onReply={handleReply}
-            onRetryEvidence={handleRetryEvidence}
-            onSave={handleSave}
-            prompt={aiPromptByCard[selectedCard.id] ?? ""}
-            quoteText={quoteByCard[selectedCard.id]}
-            signal={selectedSignal}
-            wikilinkCandidates={wikilinkCandidates}
-          />
-        ) : null}
-
-        {activeView === "timeline" && !selectedCard ? (
-          <>
-            <div className="x-topic-tabs" role="tablist" aria-label={t("feed.topicFilters")}>
-              <button
-                aria-selected={topicFilter === "all"}
-                className={`x-tab${topicFilter === "all" ? " active" : ""}`}
-                onClick={() => setTopicFilter("all")}
-                role="tab"
-                type="button"
-              >
-                {t("feed.topic.all")}
-              </button>
-              {topicFilterOptions.topics.map((option) => (
-                <button
-                  aria-selected={topicFilter === option.topic.id}
-                  className={`x-tab${topicFilter === option.topic.id ? " active" : ""}`}
-                  key={option.topic.id}
-                  onClick={() => setTopicFilter(option.topic.id)}
-                  role="tab"
-                  title={option.topic.label}
-                  type="button"
-                >
-                  <span>{option.topic.label}</span>
-                  <em>{option.count}</em>
-                </button>
-              ))}
-              {topicFilterOptions.hasOther ? (
-                <button
-                  aria-selected={topicFilter === otherTopicFilterKey}
-                  className={`x-tab${topicFilter === otherTopicFilterKey ? " active" : ""}`}
-                  onClick={() => setTopicFilter(otherTopicFilterKey)}
-                  role="tab"
-                  type="button"
-                >
-                  {t("feed.topic.other")}
-                </button>
-              ) : null}
-            </div>
-
-            <AskComposer
-              isAsking={isAgentAsking}
-              mode={composerMode}
-              onModeChange={(mode) => {
-                setComposerMode(mode);
-                if (mode === "idea") {
-                  setPendingThreadId(null);
-                }
-              }}
-              onQuestionChange={setAgentQuestion}
-              onSubmit={handleAgentAsk}
-              question={agentQuestion}
-              ref={composerInputRef}
-              wikilinkCandidates={wikilinkCandidates}
-            />
-
-            {agentMessage ? <p className="x-empty">{agentMessage}</p> : null}
-            {agentResponse && agentAskedQuestion ? (
-              <AgentReplyThread
-                discovery={discoveryRun}
-                onConfirm={handleConfirmDiscovery}
-                onDiscover={handleDiscoverSources}
-                onDismiss={() => {
-                  setAgentResponse(null);
-                  setAgentAskedQuestion("");
-                  setPendingThreadId(null);
-                  setDiscoveryRun({ status: "idle" });
-                }}
-                onOpenCardId={handleOpenCardId}
-                onOpenDiscover={() => setActiveView("discover")}
-                onProbe={handleIdeaProbe}
-                onResearchIdea={handleResearchIdea}
-                question={agentAskedQuestion}
-                response={agentResponse}
-                turnStatus={currentAgentTurnStatus}
-              />
-            ) : null}
-
-            {pendingCards.length > 0 ? (
-              <button className="x-newpill" onClick={handleShowPendingCards} type="button">
-                {t("feed.newCards", { count: pendingCards.length })}
-              </button>
-            ) : queuedJobCount > 0 ? (
-              <div className="x-prodchip" role="status">
-                {autoScoutEnabled
-                  ? t("feed.production", {
-                      done: Math.max(0, productionPeakRef.current - queuedJobCount),
-                      total: Math.max(productionPeakRef.current, queuedJobCount)
-                    })
-                  : t("feed.productionPaused", { count: queuedJobCount })}
-              </div>
-            ) : null}
-
-            {supplyStatus?.drought ? (
-              <SupplyDroughtCard
-                onImportLink={() => openAgentSection("import")}
-                onOpenReview={() => setActiveView("review")}
-                onRefillCandidates={() => {
-                  void handleSupplyRefill();
-                }}
-                onSubscriptions={() => openAgentSection("subscriptions")}
-                refillState={supplyRefillState}
-                status={supplyStatus}
-              />
-            ) : null}
-
-            {weeklyRecap ? <WeeklyRecapCard onDismiss={dismissWeeklyRecap} recap={weeklyRecap} theme={theme} /> : null}
-
-            <section className="x-feedlist" aria-label={t("feed.label")}>
-              {visibleCards.length === 0 ? (
-                <p className="x-empty">
-                  {searchQuery.trim()
-                    ? t("feed.noMatch", { query: searchQuery.trim() })
-                    : feedTab === "saved"
-                      ? t("feed.savedEmpty")
-                      : apiStatus === "offline"
-                        ? t("feed.offline")
-                        : t("feed.empty")}
-                </p>
-              ) : (
-                visibleCards.map((card, index) => {
-                  const timelineCard = card as TimelineCard;
-                  const previousCard = visibleCards[index - 1] as TimelineCard | undefined;
-                  const showDivider =
-                    feedTab === "foryou" &&
-                    !!timelineCard.timelineBlockId &&
-                    timelineCard.timelineBlockId !== previousCard?.timelineBlockId;
-                  const dividerLabel =
-                    timelineCard.timelineDivider?.topicLabel ?? getTimelineCardBlockTopic(timelineCard).label;
-
-                  return (
-                    <Fragment key={card.id}>
-                      {showDivider ? (
-                        <div className="x-block-divider">
-                          <span>{t("feed.topicDivider", { topic: dividerLabel })}</span>
-                        </div>
-                      ) : null}
-                      <PostView
-                        card={card}
-                        cards={allCards}
-                        connections={connectionsByCard[card.id] ?? []}
-                        dismissedPostIds={activeDismissedPostIds}
-                        graph={linkedGraph}
-                        isFocused={index === focusedIndex}
-                        onDwell={handleDwell}
-                        onImpression={handleImpression}
-                        onLike={handleLike}
-                        onOpen={handleOpenCard}
-                        onOpenCardId={handleOpenCardId}
-                        onOpenConcept={handleOpenConcept}
-                        onReply={handleReply}
-                        onRestorePost={restoreDismissedPost}
-                        onReviewComplete={handleReviewComplete}
-                        onSave={handleSave}
-                        onSkip={handleSkip}
-                        quoteText={quoteByCard[card.id]}
-                        reviewDueAt={timelineCard.reviewDueAt}
-                        signal={interactionSignals[card.id]}
-                        wikilinkCandidates={wikilinkCandidates}
-                      />
-                    </Fragment>
-                  );
-                })
-              )}
-              {visibleCards.length > 0 ? (
-                <p className="x-empty" role="status">
-                  <CheckCircle2 aria-hidden="true" size={16} style={{ verticalAlign: "-3px", marginRight: 6 }} />
-                  {t("feed.end")}
-                </p>
-              ) : null}
-            </section>
-          </>
-        ) : null}
+        {scoutLedger}
 
         {activeView === "discover" ? (
           <DiscoverView
@@ -3003,7 +2815,7 @@ export function App() {
         ) : null}
 
         {activeView === "deepread" ? (
-          <DeepReadArticleView
+          <DeepReadView
             article={selectedDeepReadArticle}
             cards={allCards}
             conceptAliases={conceptAliases}
@@ -3119,31 +2931,8 @@ export function App() {
             theme={theme}
           />
         ) : null}
-      </main>
-
-      {activeView === "timeline" ? (
-        <ContextRail
-          boundary={boundary}
-          detailCard={selectedCard}
-          detailGraph={selectedLocalGraph}
-          graph={graph}
-          learningGoals={learningGoals}
-          onOpenCardId={handleOpenCardId}
-          onOpenConcept={handleOpenConcept}
-          onOpenGraph={() => {
-            setGraphRequestedTab("graph");
-            setActiveView("graph");
-          }}
-          onOpenSkillTree={() => {
-            setGraphRequestedTab("skillTree");
-            setActiveView("graph");
-          }}
-          onOpenReview={() => setActiveView("review")}
-          onSearchChange={setSearchQuery}
-          reviewQueue={reviewQueue}
-          searchQuery={searchQuery}
-        />
-      ) : null}
+        </main>
+      )}
 
       {conceptDigest && conceptDigest.cardCount > 0 ? (
         <ConceptDigestPanel
