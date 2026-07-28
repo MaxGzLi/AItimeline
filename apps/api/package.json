@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "npm run build -w @aitimeline/core && AITIMELINE_ENABLE_FIXTURES=1 node --env-file-if-exists=../../.env src/server.mjs",
-    "start": "npm run build -w @aitimeline/core && node src/server.mjs"
+    "start": "npm run build -w @aitimeline/core && node src/server.mjs",
+    "typecheck": "tsc -p tsconfig.json"
   }
 }
