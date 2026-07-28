@@ -1,4 +1,4 @@
-import { getRegistryChunk, getRegistrySource } from "../source/sourceRegistry.js";
+import { getRegistrySource, resolveCitedChunk } from "../source/sourceRegistry.js";
 import type {
   Citation,
   EvidenceSpan,
@@ -95,10 +95,11 @@ export function validateGrounding(
 ): GroundingCheck {
   const gateOptions = { ...defaultGroundingGateOptions, ...options };
   const citationIssues = validateCitationsAgainstRegistry(post.citations, registry);
+  const threadCitationIssues = validateThreadCitationQuotes(post, registry);
   const claims = createSourceClaims(post);
   const checks = claims.map((claim) => validateClaimGrounding(claim, post, registry, post.citations, gateOptions));
   const checkIssues = checks.flatMap((check) => checkToIssues(check));
-  const issues = [...citationIssues, ...checkIssues];
+  const issues = [...citationIssues, ...threadCitationIssues, ...checkIssues];
 
   return {
     postId: post.id,
@@ -167,7 +168,7 @@ function validateCitationsAgainstRegistry(citations: Citation[] | undefined, reg
 
   citations.forEach((citation, index) => {
     const source = getRegistrySource(registry, citation.sourceId);
-    const chunk = citation.chunkId ? getRegistryChunk(registry, citation.chunkId) : undefined;
+    const chunk = resolveCitedChunk(registry, citation);
 
     if (!source) {
       issues.push({
@@ -199,6 +200,46 @@ function validateCitationsAgainstRegistry(citations: Citation[] | undefined, reg
   });
 
   return issues;
+}
+
+function validateThreadCitationQuotes(
+  post: KnowledgePost,
+  registry: SourceRegistry
+): HarnessValidationIssue[] {
+  const issues: HarnessValidationIssue[] = [];
+
+  post.thread.forEach((block, blockIndex) => {
+    (block.citations ?? []).forEach((citation, citationIndex) => {
+      if (!citation.quote) {
+        return;
+      }
+
+      const chunk = resolveCitedChunk(registry, citation);
+
+      if (!chunk || citationQuoteAppearsInChunk(citation.quote, chunk.content)) {
+        return;
+      }
+
+      issues.push({
+        path: `$.thread[${blockIndex}].citations[${citationIndex}].quote`,
+        message: "citation quote does not appear in its registered source chunk.",
+        severity: "error"
+      });
+    });
+  });
+
+  return issues;
+}
+
+function citationQuoteAppearsInChunk(quote: string, content: string): boolean {
+  const normalizedQuote = normalizeCitationQuote(quote).replace(/(?:\.\.\.|…)$/u, "").trimEnd();
+  const normalizedContent = normalizeCitationQuote(content);
+
+  return normalizedQuote.length > 0 && normalizedContent.includes(normalizedQuote);
+}
+
+function normalizeCitationQuote(value: string): string {
+  return value.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
 function validateClaimGrounding(
@@ -392,7 +433,7 @@ function resolveEvidenceSpans(registry: SourceRegistry, citations: Citation[] | 
 
   return citations.flatMap((citation) => {
     if (citation.chunkId) {
-      const chunk = getRegistryChunk(registry, citation.chunkId);
+      const chunk = resolveCitedChunk(registry, citation);
 
       return chunk && chunk.sourceId === citation.sourceId
         ? [

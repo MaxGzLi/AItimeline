@@ -49,7 +49,7 @@ function makePost(claim: string, concept = "RAG"): KnowledgePost {
 }
 
 describe("grounding validation", () => {
-  it.fails("rejects a thread citation quote that is absent from its registered source chunk", () => {
+  it("rejects a thread citation quote that is absent from its registered source chunk", () => {
     const evidence = "RAG improves retrieval quality.";
     const result = validateGrounding(
       {
@@ -76,6 +76,79 @@ describe("grounding validation", () => {
     );
 
     expect(result.valid).toBe(false);
+    expect(result.issues).toContainEqual({
+      path: "$.thread[0].citations[0].quote",
+      message: "citation quote does not appear in its registered source chunk.",
+      severity: "error"
+    });
+  });
+
+  it("accepts a normalized truncated thread citation quote from its registered source chunk", () => {
+    const evidence = [
+      "RAG improves retrieval quality by preserving source context.",
+      "Grounded answers keep citations attached to the evidence they summarize.",
+      "Readers can inspect the original chunk before trusting a generated claim.",
+      "This traceability makes retrieval workflows easier to audit and correct.",
+      "Repeated verification strengthens confidence in the result."
+    ].join("\n\t");
+    const normalizedEvidence = evidence.replace(/\s+/g, " ").trim();
+    const truncatedQuote = `${normalizedEvidence.slice(0, 277).toUpperCase()}...`;
+    const result = validateGrounding(
+      {
+        ...makePost(evidence),
+        thread: [
+          {
+            id: "thread-1",
+            kind: "user_comment",
+            title: evidence,
+            body: evidence,
+            grounded: true,
+            citations: [
+              {
+                sourceId: source.id,
+                sourceTitle: source.title,
+                chunkId: "chunk-1",
+                quote: truncatedQuote
+              }
+            ]
+          }
+        ]
+      },
+      makeRegistry(evidence)
+    );
+
+    expect(normalizedEvidence.length).toBeGreaterThan(280);
+    expect(result.valid).toBe(true);
+  });
+
+  it("uses a pinned chunk version instead of drifted live content for grounding", () => {
+    const citedEvidence = "RAG improves retrieval quality.";
+    const registry = makeRegistry("Gardening improves soil health.");
+    const chunkVersionId = "chunk-1-version-cited";
+    registry.chunkVersions = [
+      {
+        id: chunkVersionId,
+        chunkId: "chunk-1",
+        sourceId: source.id,
+        version: 1,
+        contentHash: "cited-content-hash",
+        contentLength: citedEvidence.length,
+        createdAt: "2026-07-27T00:00:00.000Z",
+        content: citedEvidence
+      }
+    ];
+
+    const pinnedResult = validateGrounding(
+      {
+        ...makePost(citedEvidence),
+        citations: [{ sourceId: source.id, chunkId: "chunk-1", chunkVersionId }]
+      },
+      registry
+    );
+    const liveResult = validateGrounding(makePost(citedEvidence), registry);
+
+    expect(pinnedResult.valid).toBe(true);
+    expect(liveResult.valid).toBe(false);
   });
 
   it("fails closed when a factual card claim is absent from the cited source text", () => {
