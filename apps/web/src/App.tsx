@@ -68,7 +68,14 @@ import { NotificationsView } from "./views/NotificationsView";
 import { ReviewView, type ReviewQueueEntry } from "./views/ReviewView";
 import { SettingsView } from "./views/SettingsView";
 import { ApiHttpError, apiBaseUrl, apiRequest, isAbortError, isAbortLikeError, isTransportError, isYouTubeChannelUrl, isYouTubeUrl, sampleSourceUrl } from "./lib/api";
-import { buildGroundedAnswer, formatAskAnswer, getTopicId, scrollMotion, slugConcept } from "./lib/format";
+import {
+  buildGroundedAnswer,
+  formatAskAnswer,
+  formatRelativeTime,
+  getTopicId,
+  scrollMotion,
+  slugConcept
+} from "./lib/format";
 import { normalizeLanguage, setI18nLanguage, t, type Language } from "./lib/i18n";
 import { buildCardNeighborhoodGraph } from "./lib/localGraph";
 import {
@@ -129,14 +136,14 @@ import type {
   SubscriptionBacklogView,
   SupplyStatus,
   SubscriptionRecord,
-  TimelineCard
+  TimelineCard,
+  WorkerStatus
 } from "./lib/types";
 
 type ViewKey = "timeline" | "discover" | "graph" | "review" | "notifications" | "agent" | "settings" | "deepread";
 type TopicFilterKey = "all" | "__other__" | string;
 
 const languageStorageKey = "aitl-language";
-const autoScoutStorageKey = "aitl-auto-scout";
 
 const navItems: Array<{ key: ViewKey; labelKey: string; icon: typeof Home }> = [
   { key: "timeline", labelKey: "nav.timeline", icon: Home },
@@ -291,16 +298,10 @@ export function App() {
   const [apiStatus, setApiStatus] = useState<ApiStatus>("checking");
   const [apiMessage, setApiMessage] = useState(() => t("api.connecting"));
   const [curationMessage, setCurationMessage] = useState(() => t("curation.default"));
-  // Remembered across reloads: background production burns model credits, so a
-  // pause must survive until the user explicitly resumes.
-  const [autoScoutEnabled, setAutoScoutEnabled] = useState(() => {
-    try {
-      return window.localStorage.getItem(autoScoutStorageKey) !== "0";
-    } catch {
-      return true;
-    }
-  });
-  const [lastScoutAt, setLastScoutAt] = useState<string | null>(null);
+  const [workerStatus, setWorkerStatus] = useState<WorkerStatus | null>(null);
+  const [workerStatusMessageOverride, setWorkerStatusMessageOverride] = useState<string | null>(null);
+  const [isUpdatingWorker, setIsUpdatingWorker] = useState(false);
+  const autoScoutEnabled = workerStatus?.enabled ?? false;
   const [queuedJobCount, setQueuedJobCount] = useState(0);
   const [autoJobBudget, setAutoJobBudget] = useState<DailyAutoJobBudgetRecord | null>(null);
   const [scoutLedgerOpen, setScoutLedgerOpen] = useState(false);
@@ -383,14 +384,6 @@ export function App() {
       // ignore unavailable storage
     }
   }, [language]);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(autoScoutStorageKey, autoScoutEnabled ? "1" : "0");
-    } catch {
-      // ignore unavailable storage
-    }
-  }, [autoScoutEnabled]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1167,35 +1160,6 @@ export function App() {
     // the digest re-memos on every timeline poll and would re-POST /brief each time.
   }, [apiStatus, conceptDigest?.concept, conceptDigest?.cardCount]);
 
-  useEffect(() => {
-    if (!hasHydrated || !autoScoutEnabled || apiStatus !== "connected") {
-      return;
-    }
-
-    const runIfUseful = () => {
-      if (document.hidden || curationRunInFlight.current || !hasQueuedScoutWork) {
-        return;
-      }
-
-      void runCuration("auto");
-    };
-    const startupTimer = window.setTimeout(runIfUseful, 2500);
-    const interval = window.setInterval(runIfUseful, 45000);
-    const handleVisibilityChange = () => {
-      if (!document.hidden) {
-        runIfUseful();
-      }
-    };
-
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-
-    return () => {
-      window.clearTimeout(startupTimer);
-      window.clearInterval(interval);
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-    };
-  }, [apiStatus, autoScoutEnabled, hasHydrated, hasQueuedScoutWork]);
-
   // Keep visible tabs aligned with server-side timeline removals.
   useEffect(() => {
     if (!hasHydrated) {
@@ -1352,6 +1316,12 @@ export function App() {
       setLibraryPosts(snapshot.posts);
       setSourceImports(timeline.sourceImports);
       setSupplyStatus(timeline.supplyStatus ?? null);
+      // An older API process (before the server-side worker shipped) omits
+      // workerStatus; degrade to a disabled toggle instead of throwing.
+      setWorkerStatus(timeline.workerStatus ?? null);
+      if (!timeline.workerStatus?.running) {
+        setWorkerStatusMessageOverride(null);
+      }
       if (!timeline.supplyStatus?.drought) {
         setSupplyRefillState({ status: "idle" });
       }
@@ -1402,6 +1372,36 @@ export function App() {
   function markOfflineIfTransport(error: unknown) {
     if (isTransportError(error)) {
       setApiStatus("offline");
+    }
+  }
+
+  async function handleAutoScoutChange(enabled: boolean) {
+    if (isUpdatingWorker || workerStatus?.enabled === enabled) {
+      return;
+    }
+
+    setIsUpdatingWorker(true);
+
+    try {
+      const result = await apiRequest<{ workerStatus: WorkerStatus }>("/api/worker", {
+        method: "POST",
+        body: { enabled }
+      });
+
+      setWorkerStatus(result.workerStatus);
+      setWorkerStatusMessageOverride(null);
+      setApiStatus("connected");
+      setApiMessage(t("api.connected"));
+      await refreshFromApi({ silent: true, mode: "buffer" });
+    } catch (error) {
+      markOfflineIfTransport(error);
+      setWorkerStatusMessageOverride(
+        t("curation.workerToggleFailed", {
+          reason: error instanceof Error ? error.message : t("curation.failed")
+        })
+      );
+    } finally {
+      setIsUpdatingWorker(false);
     }
   }
 
@@ -1908,6 +1908,7 @@ export function App() {
 
     curationRunInFlight.current = true;
     setIsRunningCuration(true);
+    setWorkerStatusMessageOverride(null);
     setCurationMessage(trigger === "auto" ? t("curation.autoRunning") : t("curation.manualRunning"));
 
     try {
@@ -1938,19 +1939,19 @@ export function App() {
         // next auto refresh picks up whatever it produces.
         setApiStatus("connected");
         setApiMessage(t("api.connected"));
-        setCurationMessage(t("curation.alreadyRunning"));
+        const message = t("curation.alreadyRunning");
+        setCurationMessage(message);
+        setWorkerStatusMessageOverride(message);
         return;
       }
 
       const importedCount = result.records.filter((record) => record.result?.sourceImport).length;
-      const checkedAt = new Date().toISOString();
 
       if (result.supplyRefill && (result.supplyRefill.queued > 0 || result.supplyRefill.skipped > 0)) {
         setSupplyRefillState({ status: "done", result: result.supplyRefill });
       }
       setApiStatus("connected");
       setApiMessage(t("api.connected"));
-      setLastScoutAt(checkedAt);
       const scoutLabel = trigger === "auto" ? t("curation.autoLabel") : t("curation.manualLabel");
       setCurationMessage(
         result.records.length > 0
@@ -1964,15 +1965,18 @@ export function App() {
       if (isAbortLikeError(error)) {
         // "signal is aborted without reason" means nothing to a reader, and the
         // server usually keeps working after the page gives up.
-        setCurationMessage(t("curation.timedOut"));
+        const message = t("curation.timedOut");
+        setCurationMessage(message);
+        setWorkerStatusMessageOverride(message);
         return;
       }
       // Surface the actual failure reason instead of a bare "cannot run".
-      setCurationMessage(
+      const message =
         error instanceof Error && error.message
           ? t("curation.failedWithReason", { reason: error.message })
-          : t("curation.failed")
-      );
+          : t("curation.failed");
+      setCurationMessage(message);
+      setWorkerStatusMessageOverride(message);
     } finally {
       curationRunInFlight.current = false;
       setIsRunningCuration(false);
@@ -2580,6 +2584,19 @@ export function App() {
     importFailed: supplyStatus?.todayLedger?.importFailed ?? autoJobBudget?.importFailed ?? 0,
     refunded: supplyStatus?.todayLedger?.refunded ?? autoJobBudget?.refunded ?? 0
   });
+  const workerLastRunIsRecent =
+    workerStatus?.lastRunAt !== undefined &&
+    Date.now() - Date.parse(workerStatus.lastRunAt) < 60000;
+  const workerStatusMessage =
+    workerStatusMessageOverride ??
+    (isRunningCuration || workerStatus?.running
+      ? t("curation.workerRunning")
+      : workerStatus?.lastRunAt
+        ? t(workerLastRunIsRecent ? "curation.workerLastRunJustNow" : "curation.workerLastRun", {
+            time: formatRelativeTime(workerStatus.lastRunAt),
+            count: workerStatus.lastRunSummary?.processedJobs ?? 0
+          })
+        : t("curation.workerIdle"));
   const activeTitleKeys = viewTitleKeys[activeView];
   const activeTitle = {
     title: t(activeTitleKeys.title),
@@ -2715,7 +2732,10 @@ export function App() {
           ) : null}
           <button
             className={`x-scout-toggle${autoScoutEnabled ? "" : " paused"}`}
-            onClick={() => setAutoScoutEnabled((value) => !value)}
+            disabled={!workerStatus || isUpdatingWorker}
+            onClick={() => {
+              void handleAutoScoutChange(!autoScoutEnabled);
+            }}
             title={t("scout.toggleTitle")}
             type="button"
           >
@@ -3027,16 +3047,18 @@ export function App() {
             candidateMessage={candidateMessage}
             candidateUrl={candidateUrl}
             cardCount={importedCards.length}
-            curationMessage={curationMessage}
+            curationMessage={workerStatusMessage}
             hasQueuedScoutWork={hasQueuedScoutWork}
             importError={importError}
             isImporting={isImporting}
             isRunningCuration={isRunningCuration}
             isSavingCandidate={isSavingCandidate}
             isSavingSubscription={isSavingSubscription}
-            lastScoutAt={lastScoutAt}
+            lastScoutAt={null}
             memoryMessage={memoryMessage}
-            onAutoScoutChange={setAutoScoutEnabled}
+            onAutoScoutChange={(enabled) => {
+              void handleAutoScoutChange(enabled);
+            }}
             onCandidateConceptChange={setCandidateConcept}
             onCandidateUrlChange={setCandidateUrl}
             backlogBusyIds={backlogBusyIds}
