@@ -228,12 +228,25 @@ export type SupplyStatus = {
   drought: boolean;
 };
 
+export type WorkerStatus = {
+  enabled: boolean;
+  running: boolean;
+  intervalMs: number;
+  lastRunAt?: string;
+  lastRunSummary?: {
+    processedJobs: number;
+    refillQueued: number;
+    subscriptionsChecked: number;
+  };
+};
+
 export type ApiTimelineResponse = {
   posts: TimelineCard[];
   timelineBlocks?: ApiTimelineBlock[];
   sourceImports: SourceImport[];
   topicStates?: TopicState[];
   supplyStatus?: SupplyStatus;
+  workerStatus: WorkerStatus;
   recommendationSummary?: {
     total: number;
     byIntent: Record<string, number>;

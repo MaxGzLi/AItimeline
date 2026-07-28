@@ -6420,6 +6420,336 @@ try {
     "completed reviews should rest out of the timeline entirely until the next dueAt"
   );
 
+  // The API-owned worker must advance due work without a page calling
+  // /api/curation/run, remain paused until explicitly resumed, and expose its
+  // in-memory state through the timeline.
+  const workerSmokeIntervalMs = 200;
+  const workerSmokeTimeoutMs = 8000;
+  const workerSeededAt = new Date(Date.now() - workerSmokeIntervalMs).toISOString();
+  const workerLifecycleDataPath = join(tempDir, "worker-lifecycle.json");
+  const workerLifecycleCurationPath = join(tempDir, "worker-lifecycle-curation.json");
+  const workerInitialCandidate = makeSourceCandidateRecord({
+    id: "worker-lifecycle-initial",
+    url: "https://worker-lifecycle.local/initial",
+    score: 0.99,
+    status: "queued",
+    concept: "Server Worker",
+    createdAt: workerSeededAt
+  });
+  const workerInitialJob = makeQueuedImportJobRecord(workerInitialCandidate, workerSeededAt);
+
+  await writeFile(
+    workerLifecycleDataPath,
+    JSON.stringify({
+      version: 1,
+      updatedAt: workerSeededAt,
+      sourceCandidates: [workerInitialCandidate]
+    })
+  );
+  await writeFile(
+    workerLifecycleCurationPath,
+    JSON.stringify({
+      version: 1,
+      records: [workerInitialJob]
+    })
+  );
+
+  const workerLifecycleFetchUrls = [];
+  const workerLifecycleServer = createApiServer({
+    dataPath: workerLifecycleDataPath,
+    curationDataPath: workerLifecycleCurationPath,
+    mediaRootDir,
+    worker: true,
+    workerIntervalMs: workerSmokeIntervalMs,
+    guardedFetch: async (input) => {
+      const url = getFetchUrl(input);
+
+      if (!url.startsWith("https://worker-lifecycle.local/")) {
+        throw new Error(`Unexpected lifecycle worker fetch: ${url}`);
+      }
+
+      workerLifecycleFetchUrls.push(url);
+      return makeWorkerSmokeFetchResponse("Lifecycle worker fixture");
+    }
+  });
+
+  try {
+    const initialWorkerTimeline = await requestJsonFromServer(workerLifecycleServer, "/api/timeline");
+
+    assert.equal(initialWorkerTimeline.workerStatus.enabled, true, "an explicitly enabled worker should start enabled");
+    assert.equal(
+      typeof initialWorkerTimeline.workerStatus.running,
+      "boolean",
+      "timeline workerStatus.running should be a boolean"
+    );
+    assert.equal(
+      initialWorkerTimeline.workerStatus.intervalMs,
+      workerSmokeIntervalMs,
+      "timeline workerStatus should expose the configured smoke interval"
+    );
+
+    const firstWorkerTerminal = await waitForCurationJob(
+      workerLifecycleServer,
+      workerInitialJob.id,
+      (record) => isTerminalCurationStatus(record?.status),
+      {
+        timeoutMs: workerSmokeTimeoutMs,
+        description: "server worker to finish the initially due job without a manual run"
+      }
+    );
+
+    assert.ok(
+      isTerminalCurationStatus(firstWorkerTerminal.status),
+      "the enabled server worker should move the initially due job to a terminal state"
+    );
+    assert.deepEqual(
+      workerLifecycleFetchUrls,
+      ["https://worker-lifecycle.local/initial"],
+      "the initial due job should be fetched exactly once by the server worker"
+    );
+
+    const idleWorkerStatus = await waitForWorkerStatus(
+      workerLifecycleServer,
+      (status) => status.running === false && typeof status.lastRunAt === "string",
+      {
+        timeoutMs: workerSmokeTimeoutMs,
+        description: "server worker to become idle after its first tick"
+      }
+    );
+
+    assert.deepEqual(
+      Object.fromEntries(
+        Object.entries(idleWorkerStatus.lastRunSummary).map(([key, value]) => [key, typeof value])
+      ),
+      {
+        processedJobs: "number",
+        refillQueued: "number",
+        subscriptionsChecked: "number"
+      },
+      "timeline workerStatus.lastRunSummary should expose the three documented counters"
+    );
+
+    const pausedWorker = await requestJsonFromServer(workerLifecycleServer, "/api/worker", {
+      method: "POST",
+      body: { enabled: false }
+    });
+
+    assert.equal(pausedWorker.workerStatus.enabled, false, "POST /api/worker should pause the server worker");
+
+    const pausedCandidateCreatedAt = new Date(Date.now() - workerSmokeIntervalMs).toISOString();
+    const pausedCandidate = await requestJsonFromServer(workerLifecycleServer, "/api/source-candidates", {
+      method: "POST",
+      body: {
+        id: "worker-lifecycle-paused",
+        url: "https://worker-lifecycle.local/paused",
+        title: "Paused lifecycle worker fixture",
+        intakeKind: "agent_discovery",
+        topicId: "Server Worker",
+        conceptIds: ["Server Worker"],
+        relevanceScore: 0.98,
+        noveltyScore: 0.98,
+        qualityScore: 0.98,
+        reason: "Seed a due job while the API worker is paused.",
+        discoveredAt: pausedCandidateCreatedAt
+      }
+    });
+    const pausedRefill = await requestJsonFromServer(workerLifecycleServer, "/api/supply/refill", {
+      method: "POST",
+      body: { now: pausedCandidateCreatedAt }
+    });
+    const pausedJobs = await requestJsonFromServer(workerLifecycleServer, "/api/curation/jobs");
+    const pausedJob = pausedJobs.jobs.find(
+      (record) => record.job.sourceCandidate?.id === pausedCandidate.record.candidate.id
+    );
+
+    assert.equal(pausedRefill.queued, 1, "the paused-worker fixture should seed one due import job");
+    assert.ok(pausedJob, "the paused-worker fixture should expose its seeded job");
+    assert.equal(pausedJob.status, "queued", "the second worker job should begin queued");
+
+    await delay(workerSmokeIntervalMs * 3 + 100);
+
+    const stillPausedJobs = await requestJsonFromServer(workerLifecycleServer, "/api/curation/jobs");
+    const stillPausedJob = stillPausedJobs.jobs.find((record) => record.id === pausedJob.id);
+    const pausedTimeline = await requestJsonFromServer(workerLifecycleServer, "/api/timeline");
+
+    assert.equal(
+      stillPausedJob?.status,
+      "queued",
+      "a paused worker should leave a due job queued across at least three intervals"
+    );
+    assert.equal(
+      workerLifecycleFetchUrls.includes("https://worker-lifecycle.local/paused"),
+      false,
+      "a paused worker should not fetch the second due job"
+    );
+    assert.equal(pausedTimeline.workerStatus.enabled, false, "timeline should reflect the paused worker state");
+
+    const resumedWorker = await requestJsonFromServer(workerLifecycleServer, "/api/worker", {
+      method: "POST",
+      body: { enabled: true }
+    });
+
+    assert.equal(resumedWorker.workerStatus.enabled, true, "POST /api/worker should resume the server worker");
+
+    const resumedWorkerTerminal = await waitForCurationJob(
+      workerLifecycleServer,
+      pausedJob.id,
+      (record) => isTerminalCurationStatus(record?.status),
+      {
+        timeoutMs: workerSmokeTimeoutMs,
+        description: "resumed server worker to finish the job seeded while paused"
+      }
+    );
+    const resumedTimeline = await requestJsonFromServer(workerLifecycleServer, "/api/timeline");
+
+    assert.ok(
+      isTerminalCurationStatus(resumedWorkerTerminal.status),
+      "the resumed worker should move the paused job to a terminal state"
+    );
+    assert.equal(resumedTimeline.workerStatus.enabled, true, "timeline should reflect the resumed worker state");
+    assert.equal(
+      resumedTimeline.workerStatus.intervalMs,
+      workerSmokeIntervalMs,
+      "workerStatus interval should remain stable across pause and resume"
+    );
+  } finally {
+    await closeServer(workerLifecycleServer);
+  }
+
+  // Hold a manual run inside its first source fetch. Multiple worker intervals
+  // elapse while a second due import remains queued; a worker that does not
+  // share the manual-run guard will fetch that second source.
+  const workerGuardDataPath = join(tempDir, "worker-guard.json");
+  const workerGuardCurationPath = join(tempDir, "worker-guard-curation.json");
+  const workerGuardFetchUrls = [];
+  let releaseWorkerGuardFetch = null;
+  const workerGuardServer = createApiServer({
+    dataPath: workerGuardDataPath,
+    curationDataPath: workerGuardCurationPath,
+    mediaRootDir,
+    worker: true,
+    workerIntervalMs: workerSmokeIntervalMs,
+    guardedFetch: async (input) => {
+      const url = getFetchUrl(input);
+
+      if (!url.startsWith("https://worker-guard.local/")) {
+        throw new Error(`Unexpected guarded worker fetch: ${url}`);
+      }
+
+      workerGuardFetchUrls.push(url);
+
+      if (workerGuardFetchUrls.length === 1) {
+        await new Promise((resolveFetch) => {
+          releaseWorkerGuardFetch = resolveFetch;
+        });
+      }
+
+      return makeWorkerSmokeFetchResponse("Worker mutual exclusion fixture");
+    }
+  });
+
+  try {
+    const initiallyPausedGuardWorker = await requestJsonFromServer(workerGuardServer, "/api/worker", {
+      method: "POST",
+      body: { enabled: false }
+    });
+
+    assert.equal(
+      initiallyPausedGuardWorker.workerStatus.enabled,
+      false,
+      "the worker guard fixture should pause before jobs are seeded"
+    );
+
+    const workerGuardCreatedAt = new Date(Date.now() - workerSmokeIntervalMs).toISOString();
+    const workerGuardCandidateIds = ["worker-guard-a", "worker-guard-b"];
+
+    for (const [index, id] of workerGuardCandidateIds.entries()) {
+      await requestJsonFromServer(workerGuardServer, "/api/source-candidates", {
+        method: "POST",
+        body: {
+          id,
+          url: `https://worker-guard.local/${id}`,
+          title: `Worker guard fixture ${id}`,
+          intakeKind: "agent_discovery",
+          topicId: "Worker Guard",
+          conceptIds: ["Worker Guard"],
+          relevanceScore: 0.99 - index * 0.01,
+          noveltyScore: 0.99 - index * 0.01,
+          qualityScore: 0.99 - index * 0.01,
+          reason: "Keep a second due import available to detect an overlapping worker tick.",
+          discoveredAt: workerGuardCreatedAt
+        }
+      });
+    }
+
+    const workerGuardRefill = await requestJsonFromServer(workerGuardServer, "/api/supply/refill", {
+      method: "POST",
+      body: { now: workerGuardCreatedAt }
+    });
+
+    assert.equal(workerGuardRefill.queued, 2, "the worker guard fixture should seed two due import jobs");
+
+    const blockedManualRun = requestJsonFromServer(workerGuardServer, "/api/curation/run", {
+      method: "POST",
+      body: {
+        now: new Date().toISOString(),
+        limit: 1,
+        kinds: ["import_source"]
+      }
+    });
+
+    await waitForFetchCount(workerGuardFetchUrls, 1, {
+      timeoutMs: workerSmokeTimeoutMs,
+      description: "manual curation run to reach its blocking worker-guard fetch"
+    });
+
+    const enabledGuardWorker = await requestJsonFromServer(workerGuardServer, "/api/worker", {
+      method: "POST",
+      body: { enabled: true }
+    });
+
+    assert.equal(enabledGuardWorker.workerStatus.enabled, true, "the guard fixture worker should resume");
+
+    await delay(workerSmokeIntervalMs * 3 + 100);
+
+    const jobsWhileManualRunBlocked = await requestJsonFromServer(workerGuardServer, "/api/curation/jobs");
+    const guardTimelineWhileBlocked = await requestJsonFromServer(workerGuardServer, "/api/timeline");
+    const workerGuardJobStatuses = jobsWhileManualRunBlocked.jobs
+      .filter((record) => workerGuardCandidateIds.includes(record.job.sourceCandidate?.id))
+      .map((record) => record.status)
+      .sort();
+
+    assert.equal(
+      workerGuardFetchUrls.length,
+      1,
+      "worker ticks crossing multiple intervals must not fetch a second source while a manual run holds the guard"
+    );
+    assert.deepEqual(
+      workerGuardJobStatuses,
+      ["queued", "running"],
+      "worker ticks should leave the second import queued while the manual run is blocked"
+    );
+    assert.equal(
+      guardTimelineWhileBlocked.workerStatus.running,
+      true,
+      "timeline workerStatus.running should reuse the shared manual-run guard"
+    );
+
+    releaseWorkerGuardFetch();
+
+    const completedBlockedManualRun = await blockedManualRun;
+
+    assert.equal(
+      completedBlockedManualRun.alreadyRunning,
+      false,
+      "the manual run holding the shared worker guard should complete normally"
+    );
+    assert.equal(completedBlockedManualRun.records.length, 1, "the blocked manual run should process one job");
+  } finally {
+    releaseWorkerGuardFetch?.();
+    await closeServer(workerGuardServer);
+  }
+
   console.log("API smoke passed");
 } finally {
   globalThis.fetch = originalFetch;
@@ -6750,4 +7080,99 @@ async function requestJson(path, options = {}) {
   assert.equal(response.ok, true, `${options.method ?? "GET"} ${path} failed: ${JSON.stringify(payload)}`);
 
   return payload;
+}
+
+function makeWorkerSmokeFetchResponse(title) {
+  return new Response(
+    `
+      <html>
+        <head><meta property="og:title" content="${title}" /></head>
+        <body>
+          <article>
+            <p>The API-owned observer worker processes due background jobs without relying on a visible browser page.</p>
+          </article>
+        </body>
+      </html>
+    `,
+    { status: 200, headers: { "content-type": "text/html" } }
+  );
+}
+
+function isTerminalCurationStatus(status) {
+  return status === "succeeded" || status === "failed" || status === "skipped";
+}
+
+async function delay(durationMs) {
+  await new Promise((resolveDelay) => setTimeout(resolveDelay, durationMs));
+}
+
+async function waitForCurationJob(
+  targetServer,
+  jobId,
+  predicate,
+  { timeoutMs, description }
+) {
+  const deadline = Date.now() + timeoutMs;
+  let latestRecord;
+  let latestJobs = [];
+
+  while (Date.now() < deadline) {
+    const payload = await requestJsonFromServer(targetServer, "/api/curation/jobs");
+    latestJobs = payload.jobs;
+    latestRecord = latestJobs.find((record) => record.id === jobId);
+
+    if (predicate(latestRecord)) {
+      return latestRecord;
+    }
+
+    await delay(20);
+  }
+
+  assert.fail(
+    `Timed out after ${timeoutMs}ms waiting for ${description}; ` +
+      `latest=${JSON.stringify(latestRecord ?? null)}; ` +
+      `jobs=${JSON.stringify(latestJobs.map((record) => ({ id: record.id, status: record.status })))}`
+  );
+}
+
+async function waitForWorkerStatus(
+  targetServer,
+  predicate,
+  { timeoutMs, description }
+) {
+  const deadline = Date.now() + timeoutMs;
+  let latestStatus;
+
+  while (Date.now() < deadline) {
+    const timeline = await requestJsonFromServer(targetServer, "/api/timeline");
+    latestStatus = timeline.workerStatus;
+
+    if (predicate(latestStatus)) {
+      return latestStatus;
+    }
+
+    await delay(20);
+  }
+
+  assert.fail(
+    `Timed out after ${timeoutMs}ms waiting for ${description}; latest=${JSON.stringify(latestStatus ?? null)}`
+  );
+}
+
+async function waitForFetchCount(
+  fetchUrls,
+  expectedCount,
+  { timeoutMs, description }
+) {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline && fetchUrls.length < expectedCount) {
+    await delay(5);
+  }
+
+  assert.equal(
+    fetchUrls.length,
+    expectedCount,
+    `Timed out after ${timeoutMs}ms waiting for ${description}; fetches=${JSON.stringify(fetchUrls)}`
+  );
 }
