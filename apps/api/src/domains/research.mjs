@@ -1235,6 +1235,12 @@ export async function handleResearchIdeaJob(
   };
 }
 
+/**
+ * citations is optional: several idea-research call sites omit it on purpose
+ * (the notification then carries `citations: undefined`, matching the
+ * pre-split runtime behavior).
+ * @param {{ kind: string, turnId: any, question: any, body: any, postIds: any, citations?: any, createdAt: any }} input
+ */
 function createResearchNotification({ kind, turnId, question, body, postIds, citations, createdAt }) {
   return {
     id: `notification-${hashText(`${kind}|${turnId}|${createdAt}|${body}`)}`,

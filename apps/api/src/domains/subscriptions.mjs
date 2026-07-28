@@ -141,6 +141,11 @@ function buildYouTubeWatchUrl(videoId) {
   return url.toString();
 }
 
+/**
+ * Fallback feeds carry no channel metadata; pollDueSubscriptions reads
+ * `.title`/`.siteUrl` off the union and relies on them being undefined here.
+ * @returns {Promise<{ entries: Array<{ title: string, link: string, publishedAt: any, summary: any, kind: string }>, kind: string, title?: string, siteUrl?: string }>}
+ */
 export async function fetchUploadsFallbackFeed(subscription, fetchImpl) {
   const channelId = subscription.kind === "youtube_channel" ? getSubscriptionChannelId(subscription) : undefined;
 
