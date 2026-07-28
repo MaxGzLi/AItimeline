@@ -1,21 +1,8 @@
 import { createServer } from "node:http";
-import {
-  closeSync,
-  existsSync,
-  fsyncSync,
-  linkSync,
-  lstatSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  renameSync,
-  unlinkSync,
-  writeFileSync,
-  writeSync
-} from "node:fs";
+import { writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
-import { dirname, extname, isAbsolute, relative, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   applyUserMemoryEdits,
@@ -63,7 +50,6 @@ import {
   parseContentLanguage,
   previewSourceImportApplications,
   rankPersonalizedTimeline,
-  readSerializedRevision,
   runConversationTurn,
   runDueBackgroundCurationJobs,
   normalizeConceptKey,
@@ -130,13 +116,10 @@ import {
   getDailyAutoJobBudgetLimit,
   getDailyAutoJobBudgetRecord,
   hashText,
-  isSupportedSourceCandidateType,
   maybePersistConnectionNote,
   normalizeIsoDate,
-  parseHttpUrl,
   persistAutomaticConceptAliases,
   requireString,
-  sanitizeSlug,
   summarizeSnapshot,
   tokenizeText
 } from "./domains/shared.mjs";
@@ -194,6 +177,31 @@ import {
   shouldEnqueueCoalescedProduction,
   updateTopicStateFromCoalescedDelta
 } from "./domains/signals.mjs";
+import { createFileStorageAdapter } from "./lib/fileStorage.mjs";
+import { fixtureArticleHtml, fixtureSubscriptionFeedXml } from "./lib/fixtures.mjs";
+import {
+  createBindingSecurity,
+  getRequestOrigin,
+  hasValidApiToken,
+  readJsonBody,
+  rejectOversizedContentLength,
+  resolveCorsOrigins,
+  safelyDrainRequest,
+  sendHtml,
+  sendJson,
+  sendMediaFile,
+  sendXml
+} from "./lib/http.mjs";
+import {
+  parseOptionalDate,
+  parseOptionalIdempotencyKey,
+  parseOptionalUserId,
+  parseReviewGrade,
+  requireInteractionSignal,
+  requireIsoDate,
+  requireSupportedSourceCandidates,
+  requireTopicState
+} from "./lib/validate.mjs";
 
 const defaultPort = 8787;
 const defaultWorkerIntervalMs = 60000;
@@ -203,13 +211,6 @@ const defaultDataPath = resolve(currentDir, "../data/aitimeline.json");
 const defaultCurationDataPath = resolve(currentDir, "../data/curation-jobs.json");
 const defaultMediaRoot = resolve(currentDir, "../data/media");
 const backlogManualBatchLimit = 5;
-const defaultCorsOrigins = [
-  "http://127.0.0.1:5173",
-  "http://localhost:5173",
-  "http://127.0.0.1:5198",
-  "http://localhost:5198"
-];
-
 export function createApiServer(options = {}) {
   const bindingHost = options.host ?? process.env.AITIMELINE_HOST ?? "127.0.0.1";
   const authToken = options.authToken ?? process.env.AITIMELINE_AUTH_TOKEN;
@@ -1925,16 +1926,6 @@ function markWeeklyRecapSeen(persistenceStore, body) {
   };
 }
 
-function parseOptionalDate(value) {
-  if (typeof value !== "string") {
-    return new Date();
-  }
-
-  const date = new Date(value);
-
-  return Number.isFinite(date.getTime()) ? date : new Date();
-}
-
 
 
 
@@ -2771,616 +2762,8 @@ function summarizeRecommendation(posts) {
 }
 
 
-export function createFileStorageAdapter(filePath, { ownerId, backupCount = 3 }) {
-  if (!ownerId) throw new Error("File storage adapter requires ownerId.");
-  const targetPath = resolve(filePath);
-  const lockPath = `${targetPath}.lock`;
-  const localHostname = hostname();
-  const processStartedAt = new Date(Date.now() - process.uptime() * 1000).toISOString();
-  const lockOwner = {
-    format: 1,
-    targetPath,
-    pid: process.pid,
-    hostname: localHostname,
-    ownerId,
-    processStartedAt,
-    acquiredAt: new Date().toISOString()
-  };
-  let closed = false;
-  let counter = 0;
-  mkdirSync(dirname(targetPath), { recursive: true });
-  acquireWriterLock(lockPath, lockOwner);
 
-  const adapter = {
-    read() {
-      return existsSync(targetPath) ? readFileSync(targetPath, "utf8") : "";
-    },
-    compareAndSwap(expectedRevision, serialized) {
-      if (closed) throw new Error(`Storage adapter is closed: ${targetPath}`);
-      const tempPath = `${targetPath}.tmp-${process.pid}-${ownerId}-${++counter}`;
-      try {
-        writeAndSyncFile(tempPath, `${serialized}\n`);
-        const current = adapter.read();
-        const actualRevision = readSerializedRevision(current);
-        if (actualRevision !== expectedRevision) return false;
-        if (current) createRollingBackup(targetPath, current, backupCount, ownerId, ++counter);
-        renameSync(tempPath, targetPath);
-        fsyncDirectory(dirname(targetPath));
-        return true;
-      } finally {
-        if (existsSync(tempPath)) unlinkSync(tempPath);
-      }
-    },
-    close() {
-      if (closed) return;
-      closed = true;
-      try {
-        const current = JSON.parse(readFileSync(lockPath, "utf8"));
-        if (current.ownerId === ownerId && current.targetPath === targetPath) unlinkSync(lockPath);
-      } catch (error) {
-        if (existsSync(lockPath) && error?.code !== "ENOENT") throw error;
-      }
-    }
-  };
-  return adapter;
-}
 
-function acquireWriterLock(lockPath, owner) {
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    try {
-      const fd = openSync(lockPath, "wx");
-      try {
-        writeSync(fd, `${JSON.stringify(owner)}\n`);
-        fsyncSync(fd);
-      } finally {
-        closeSync(fd);
-      }
-      fsyncDirectory(dirname(lockPath));
-      return;
-    } catch (error) {
-      if (error?.code !== "EEXIST") throw error;
-    }
-
-    let existing;
-    try {
-      existing = JSON.parse(readFileSync(lockPath, "utf8"));
-    } catch {
-      throw writerLockError(lockPath, "malformed lock; manual cleanup required");
-    }
-    if (!existing || existing.format !== 1 || typeof existing.pid !== "number" || typeof existing.hostname !== "string" || typeof existing.ownerId !== "string" || typeof existing.targetPath !== "string") {
-      throw writerLockError(lockPath, "malformed lock; manual cleanup required");
-    }
-    if (existing.hostname !== owner.hostname) {
-      throw writerLockError(lockPath, `lock belongs to foreign host ${existing.hostname}; manual verification required`);
-    }
-    try {
-      process.kill(existing.pid, 0);
-      throw writerLockError(lockPath, `live writer pid ${existing.pid} (${existing.ownerId})`);
-    } catch (error) {
-      if (error?.code === "EPERM") throw writerLockError(lockPath, `live writer pid ${existing.pid} cannot be probed`);
-      if (error?.code !== "ESRCH") throw error;
-    }
-
-    const reapPath = `${lockPath}.reap-${process.pid}-${owner.ownerId}-${attempt}`;
-    try {
-      linkSync(lockPath, reapPath);
-      const currentStat = lstatSync(lockPath);
-      const reapStat = lstatSync(reapPath);
-      if (currentStat.dev !== reapStat.dev || currentStat.ino !== reapStat.ino) {
-        throw writerLockError(lockPath, "lock changed during stale-owner recovery");
-      }
-      unlinkSync(lockPath);
-    } finally {
-      if (existsSync(reapPath)) unlinkSync(reapPath);
-    }
-  }
-  throw writerLockError(lockPath, "could not acquire lock after stale-owner recovery");
-}
-
-function writerLockError(lockPath, detail) {
-  const error = new Error(`Writer lock rejected for ${lockPath}: ${detail}`);
-  error.code = "AITIMELINE_WRITER_LOCKED";
-  return error;
-}
-
-function createRollingBackup(targetPath, current, backupCount, ownerId, counter) {
-  const backupTemp = `${targetPath}.bak.tmp-${process.pid}-${ownerId}-${counter}`;
-  try {
-    writeAndSyncFile(backupTemp, current.endsWith("\n") ? current : `${current}\n`);
-    for (let index = backupCount; index >= 2; index -= 1) {
-      const older = `${targetPath}.bak.${index - 1}`;
-      const destination = `${targetPath}.bak.${index}`;
-      if (existsSync(destination)) unlinkSync(destination);
-      if (existsSync(older)) renameSync(older, destination);
-    }
-    if (existsSync(`${targetPath}.bak.1`)) unlinkSync(`${targetPath}.bak.1`);
-    renameSync(backupTemp, `${targetPath}.bak.1`);
-    fsyncDirectory(dirname(targetPath));
-  } finally {
-    if (existsSync(backupTemp)) unlinkSync(backupTemp);
-  }
-}
-
-function writeAndSyncFile(path, contents) {
-  const fd = openSync(path, "wx");
-  try {
-    writeSync(fd, contents);
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
-  }
-}
-
-function fsyncDirectory(path) {
-  const fd = openSync(path, "r");
-  try { fsyncSync(fd); } finally { closeSync(fd); }
-}
-
-
-const maxJsonBodyBytes = 1024 * 1024;
-
-function rejectOversizedContentLength(request, response) {
-  const header = request.headers?.["content-length"];
-  const value = Array.isArray(header) ? header[0] : header;
-
-  if (typeof value !== "string" || !/^\d+$/.test(value.trim())) {
-    return false;
-  }
-
-  const contentLength = Number(value);
-
-  if (Number.isSafeInteger(contentLength) && contentLength <= maxJsonBodyBytes) {
-    return false;
-  }
-
-  response.setHeader("Connection", "close");
-  response.shouldKeepAlive = false;
-  sendJson(response, 413, { error: "Request body is too large." });
-  safelyDrainRequest(request);
-  return true;
-}
-
-function safelyDrainRequest(request) {
-  if (typeof request.resume === "function" && !request.destroyed && !request.complete) {
-    request.resume();
-  }
-}
-
-async function readJsonBody(request) {
-  const chunks = [];
-  let totalBytes = 0;
-  const iterator =
-    typeof request.iterator === "function"
-      ? request.iterator({ destroyOnReturn: false })
-      : request[Symbol.asyncIterator]();
-  const iterable = { [Symbol.asyncIterator]: () => iterator };
-
-  for await (const input of iterable) {
-    const chunk = Buffer.isBuffer(input) ? input : Buffer.from(input);
-    totalBytes += chunk.byteLength;
-
-    if (totalBytes > maxJsonBodyBytes) {
-      chunks.length = 0;
-      throw new HttpError(413, "Request body is too large.");
-    }
-
-    chunks.push(chunk);
-  }
-
-  const rawBody = Buffer.concat(chunks).toString("utf8");
-  let parsedBody;
-
-  try {
-    parsedBody = rawBody ? JSON.parse(rawBody) : {};
-  } catch {
-    throw new HttpError(400, "Request body is not valid JSON.");
-  }
-
-  return requireObjectBody(parsedBody);
-}
-
-function requireObjectBody(value) {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new HttpError(400, "Request body must be an object.");
-  }
-
-  return value;
-}
-
-
-function requireIsoDate(value, fieldName) {
-  if (typeof value !== "string" || !isValidIsoDateString(value.trim())) {
-    throw new HttpError(400, `${fieldName} must be a valid ISO date.`);
-  }
-
-  try {
-    return normalizeIsoDate(value.trim());
-  } catch {
-    throw new HttpError(400, `${fieldName} must be a valid ISO date.`);
-  }
-}
-
-function isValidIsoDateString(value) {
-  const match = value.match(
-    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(?:Z|([+-])(\d{2}):(\d{2}))$/
-  );
-
-  if (!match) {
-    return false;
-  }
-
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  const hour = Number(match[4]);
-  const minute = Number(match[5]);
-  const second = Number(match[6]);
-  const offsetHour = match[8] === undefined ? 0 : Number(match[8]);
-  const offsetMinute = match[9] === undefined ? 0 : Number(match[9]);
-  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
-  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-
-  return (
-    month >= 1 &&
-    month <= 12 &&
-    day >= 1 &&
-    day <= daysInMonth[month - 1] &&
-    hour <= 23 &&
-    minute <= 59 &&
-    second <= 59 &&
-    offsetHour <= 23 &&
-    offsetMinute <= 59 &&
-    Number.isFinite(new Date(value).getTime())
-  );
-}
-
-function requireInteractionSignal(signal, snapshot) {
-  if (typeof signal !== "object" || signal === null || Array.isArray(signal)) {
-    throw new HttpError(400, "signal is required.");
-  }
-
-  requireString(signal.postId, "signal.postId");
-  requireString(signal.topicId, "signal.topicId");
-
-  if (
-    !Array.isArray(signal.conceptIds) ||
-    signal.conceptIds.some((conceptId) => typeof conceptId !== "string" || !conceptId.trim())
-  ) {
-    throw new HttpError(400, "signal.conceptIds must be an array of non-empty strings.");
-  }
-
-  const booleanFields = [
-    "impression",
-    "openedThread",
-    "liked",
-    "saved",
-    "askedQuestion",
-    "reviewed",
-    "skippedQuickly"
-  ];
-
-  for (const field of booleanFields) {
-    if (typeof signal[field] !== "boolean") {
-      throw new HttpError(400, `signal.${field} must be a boolean.`);
-    }
-  }
-
-  const dwellTimeMs =
-    signal.dwellTimeMs === undefined && signal.dwellSeconds !== undefined
-      ? signal.dwellSeconds * 1000
-      : signal.dwellTimeMs;
-
-  if (typeof dwellTimeMs !== "number" || !Number.isFinite(dwellTimeMs) || dwellTimeMs < 0) {
-    throw new HttpError(400, "signal.dwellTimeMs must be a finite non-negative number.");
-  }
-
-  if (
-    signal.dwellSeconds !== undefined &&
-    (typeof signal.dwellSeconds !== "number" || !Number.isFinite(signal.dwellSeconds) || signal.dwellSeconds < 0)
-  ) {
-    throw new HttpError(400, "signal.dwellSeconds must be a finite non-negative number.");
-  }
-
-  const postId = signal.postId.trim();
-
-  if (!snapshot.posts.some((post) => post.id === postId)) {
-    throw new HttpError(400, "signal.postId does not reference a known post.");
-  }
-
-  return {
-    ...signal,
-    postId,
-    topicId: signal.topicId.trim(),
-    conceptIds: signal.conceptIds.map((conceptId) => conceptId.trim()),
-    dwellTimeMs,
-    createdAt: requireIsoDate(signal.createdAt, "signal.createdAt")
-  };
-}
-
-function requireTopicState(topicState, signalTopicId) {
-  if (typeof topicState !== "object" || topicState === null || Array.isArray(topicState)) {
-    throw new HttpError(400, "topicState must be an object.");
-  }
-
-  requireString(topicState.topicId, "topicState.topicId");
-
-  if (topicState.topicId.trim() !== signalTopicId) {
-    throw new HttpError(400, "topicState.topicId must match signal.topicId.");
-  }
-
-  for (const field of ["interestScore", "fatigueScore", "comprehensionScore"]) {
-    if (typeof topicState[field] !== "number" || !Number.isFinite(topicState[field])) {
-      throw new HttpError(400, `topicState.${field} must be a finite number.`);
-    }
-  }
-
-  return {
-    ...topicState,
-    topicId: topicState.topicId.trim(),
-    ...(topicState.cooldownUntil
-      ? { cooldownUntil: requireIsoDate(topicState.cooldownUntil, "topicState.cooldownUntil") }
-      : {})
-  };
-}
-
-function requireSupportedSourceCandidates(candidates) {
-  for (const candidate of candidates) {
-    if (
-      typeof candidate !== "object" ||
-      candidate === null ||
-      Array.isArray(candidate) ||
-      typeof candidate.source !== "object" ||
-      candidate.source === null ||
-      Array.isArray(candidate.source) ||
-      !isSupportedSourceCandidateType(candidate.source.type)
-    ) {
-      throw new HttpError(
-        400,
-        "Source candidate type is not supported. Supported types: article, blog, news, youtube."
-      );
-    }
-
-    requireString(candidate.id, "sourceCandidates[].id");
-    requireString(candidate.source.id, "sourceCandidates[].source.id");
-    requireString(candidate.source.title, "sourceCandidates[].source.title");
-    requireString(candidate.source.url, "sourceCandidates[].source.url");
-    parseHttpUrl(candidate.source.url);
-
-    if (
-      !Array.isArray(candidate.conceptIds) ||
-      candidate.conceptIds.some((conceptId) => typeof conceptId !== "string" || !conceptId.trim())
-    ) {
-      throw new HttpError(400, "sourceCandidates[].conceptIds must be an array of non-empty strings.");
-    }
-
-    for (const field of ["relevanceScore", "noveltyScore", "qualityScore"]) {
-      if (
-        typeof candidate[field] !== "number" ||
-        !Number.isFinite(candidate[field]) ||
-        candidate[field] < 0 ||
-        candidate[field] > 1
-      ) {
-        throw new HttpError(400, `sourceCandidates[].${field} must be a number between 0 and 1.`);
-      }
-    }
-  }
-}
-
-function parseReviewGrade(value) {
-  if (value === undefined) {
-    return "remembered";
-  }
-
-  if (value !== "remembered" && value !== "fuzzy" && value !== "forgot") {
-    throw new HttpError(400, "grade must be remembered, fuzzy, or forgot.");
-  }
-
-  return value;
-}
-
-function parseOptionalIdempotencyKey(value, fieldName) {
-  if (value === undefined) {
-    return undefined;
-  }
-
-  if (typeof value !== "string" || !value.trim()) {
-    throw new HttpError(400, `${fieldName} must be a non-empty string.`);
-  }
-
-  return value.trim();
-}
-
-function parseOptionalUserId(value) {
-  if (value === undefined) {
-    return "local-user";
-  }
-
-  if (typeof value !== "string" || !value.trim()) {
-    throw new HttpError(400, "userId must be a non-empty string.");
-  }
-
-  return value.trim();
-}
-
-
-function sendJson(response, status, payload) {
-  response.writeHead(status, { "content-type": "application/json" });
-  response.end(JSON.stringify(payload, null, 2));
-}
-
-function sendMediaFile(response, mediaRootDir, pathname) {
-  let relativePath = "";
-
-  try {
-    relativePath = decodeURIComponent(pathname.replace(/^\/media\//, ""));
-  } catch {
-    sendJson(response, 400, { error: "Media path is not valid." });
-    return;
-  }
-
-  if (!relativePath || relativePath.includes("\0")) {
-    sendJson(response, 404, { error: "Media not found." });
-    return;
-  }
-
-  const filePath = resolve(mediaRootDir, relativePath);
-  const safeRelativePath = relative(mediaRootDir, filePath);
-
-  if (safeRelativePath.startsWith("..") || isAbsolute(safeRelativePath)) {
-    sendJson(response, 404, { error: "Media not found." });
-    return;
-  }
-
-  if (!existsSync(filePath)) {
-    sendJson(response, 404, { error: "Media not found." });
-    return;
-  }
-
-  const contentType = getMediaContentType(filePath);
-
-  if (!contentType) {
-    sendJson(response, 404, { error: "Media not found." });
-    return;
-  }
-
-  try {
-    const bytes = readFileSync(filePath);
-
-    response.writeHead(200, { "content-type": contentType });
-    response.end(bytes);
-  } catch {
-    sendJson(response, 404, { error: "Media not found." });
-  }
-}
-
-function getMediaContentType(filePath) {
-  switch (extname(filePath).toLowerCase()) {
-    case ".png":
-      return "image/png";
-    case ".jpg":
-    case ".jpeg":
-      return "image/jpeg";
-    case ".gif":
-      return "image/gif";
-    case ".svg":
-      return "image/svg+xml";
-    case ".webp":
-      return "image/webp";
-    default:
-      return undefined;
-  }
-}
-
-function sendHtml(response, html) {
-  response.writeHead(200, { "content-type": "text/html" });
-  response.end(html);
-}
-
-function sendXml(response, xml) {
-  response.writeHead(200, { "content-type": "application/rss+xml" });
-  response.end(xml);
-}
-
-function getRequestOrigin(request) {
-  return `http://${request.headers.host ?? "127.0.0.1"}`;
-}
-
-function createBindingSecurity(host, tokenValue) {
-  const authToken = typeof tokenValue === "string" ? tokenValue.trim() : "";
-  if (!isLoopbackHost(host) && !authToken) {
-    throw new Error(
-      `Refusing to bind AITimeline API to non-loopback host "${host}" without authentication. ` +
-      "Set AITIMELINE_AUTH_TOKEN to a non-empty secret before starting the server."
-    );
-  }
-  // A configured token is enforced even on loopback: setting a secret and
-  // having it silently ignored would be worse than requiring the header.
-  return { host, requireAuth: Boolean(authToken), authToken };
-}
-
-function isLoopbackHost(hostValue) {
-  const host = String(hostValue).trim().toLowerCase().replace(/^\[|\]$/g, "");
-  return host === "127.0.0.1" || host === "localhost" || host === "::1";
-}
-
-function hasValidApiToken(request, expectedToken) {
-  const authorization = request.headers.authorization;
-  const bearer = typeof authorization === "string" && /^Bearer\s+(.+)$/i.exec(authorization)?.[1];
-  const alternate = request.headers["x-aitimeline-token"];
-  return bearer === expectedToken || alternate === expectedToken;
-}
-
-function resolveCorsOrigins(optionValue, environmentValue) {
-  const configured = optionValue ?? environmentValue;
-  const values = configured === undefined
-    ? defaultCorsOrigins
-    : Array.isArray(configured) ? configured : String(configured).split(",");
-  return new Set(values.map((value) => String(value).trim()).filter(Boolean));
-}
-
-function fixtureSubscriptionFeedXml(variant) {
-  const safeVariant = sanitizeSlug(variant);
-
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<rss version="2.0">
-  <channel>
-    <title>AITimeline Subscription Fixture ${safeVariant}</title>
-    <link>https://fixtures.local/subscription/${safeVariant}</link>
-    <description>Local subscription fixture for RSS polling smoke checks.</description>
-    <item>
-      <title><![CDATA[RAG retrieval architecture ${safeVariant} 4]]></title>
-      <link>https://fixtures.local/subscription/${safeVariant}/rag-4</link>
-      <pubDate>Tue, 07 Jul 2026 04:00:00 GMT</pubDate>
-      <description><![CDATA[<p>RAG retrieval architecture and grounded evaluation notes.</p>]]></description>
-    </item>
-    <item>
-      <title>RAG retrieval architecture ${safeVariant} 3</title>
-      <link>https://fixtures.local/subscription/${safeVariant}/rag-3</link>
-      <pubDate>Tue, 07 Jul 2026 03:00:00 GMT</pubDate>
-      <description>RAG retrieval quality improves with grounded evaluation.</description>
-    </item>
-    <item>
-      <title>RAG retrieval architecture ${safeVariant} 2</title>
-      <link>https://fixtures.local/subscription/${safeVariant}/rag-2</link>
-      <pubDate>Tue, 07 Jul 2026 02:00:00 GMT</pubDate>
-      <description>RAG system design and indexing trade-offs.</description>
-    </item>
-    <item>
-      <title>RAG retrieval architecture ${safeVariant} 1</title>
-      <link>https://fixtures.local/subscription/${safeVariant}/rag-1</link>
-      <pubDate>Tue, 07 Jul 2026 01:00:00 GMT</pubDate>
-      <description>RAG notes beyond the single-source import cap.</description>
-    </item>
-    <item>
-      <title>Gardening calendar ${safeVariant}</title>
-      <link>https://fixtures.local/subscription/${safeVariant}/garden</link>
-      <pubDate>Tue, 07 Jul 2026 00:00:00 GMT</pubDate>
-      <description>Tomato watering schedule with no relevant AI concepts.</description>
-    </item>
-  </channel>
-</rss>`;
-}
-
-function fixtureArticleHtml(title) {
-  return `
-    <html>
-      <head>
-        <meta property="og:title" content="${title}" />
-        <meta name="author" content="AITimeline API Smoke" />
-        <meta property="article:published_time" content="2026-06-10T00:00:00.000Z" />
-      </head>
-      <body>
-        <article>
-          <p>${title} describes how an AI Agent can turn source material into durable knowledge when it keeps citations, extracts concepts, and creates a learning surface that users can revisit.</p>
-          <p>For ${title}, the Knowledge Graph keeps Memory useful because saved concepts, weak concepts, and Recommendation signals point the user toward review at the right time.</p>
-          <p>In the ${title} smoke architecture, each imported paragraph becomes a registered chunk, every generated card must cite a chunk id, and the evidence ledger rejects unsupported numeric claims before the card reaches the timeline.</p>
-          <p>The ${title} background worker uses interaction signals to choose between three actions: import a matching source, discover a new source, or create a same-source follow-up when no better source is available.</p>
-          <p>The operational trade-off in ${title} is budget control. A daily counter caps automatic discover, import, and follow-up jobs so passive reading cannot create an unbounded queue of model and search calls.</p>
-        </article>
-      </body>
-    </html>
-  `;
-}
 
 function normalizeWorkerIntervalMs(value, minimumMs = 1) {
   const parsed =
