@@ -1,3 +1,4 @@
+import type { ConceptMapEdgeInput } from "@aitimeline/core";
 import { t } from "./i18n";
 
 export const apiBaseUrl = (import.meta.env.VITE_AITIMELINE_API_URL ?? "http://127.0.0.1:8787").replace(/\/$/, "");
@@ -183,4 +184,43 @@ export function getCardMedia(card: unknown): CardMediaItem[] {
 
 export function resolveMediaUrl(url: string): string {
   return url.startsWith("/") ? `${apiBaseUrl}${url}` : url;
+}
+
+const knowledgeEdgeRelations = ["requires", "extends", "contrasts", "applies", "evaluates", "summarizes"] as const;
+
+/**
+ * Concept edges as the timeline hands them over. The API spreads whole cards,
+ * so an older snapshot can be missing `graphEdges` or carry half-built entries;
+ * the concept map only wants the two endpoints, the relation and the weight.
+ */
+export function getCardGraphEdges(card: unknown): ConceptMapEdgeInput[] {
+  if (!isRecord(card) || !Array.isArray(card.graphEdges)) {
+    return [];
+  }
+
+  return card.graphEdges.flatMap((edge) => {
+    if (!isRecord(edge) || typeof edge.sourceConcept !== "string" || typeof edge.targetConcept !== "string") {
+      return [];
+    }
+
+    const relation = knowledgeEdgeRelations.find((known) => known === edge.relation);
+
+    return [
+      {
+        sourceConcept: edge.sourceConcept,
+        targetConcept: edge.targetConcept,
+        relation,
+        weight: typeof edge.weight === "number" ? edge.weight : undefined
+      }
+    ];
+  });
+}
+
+/** Concept labels as the timeline hands them over (older snapshots may omit them). */
+export function getCardConcepts(card: unknown): string[] {
+  if (!isRecord(card) || !Array.isArray(card.concepts)) {
+    return [];
+  }
+
+  return card.concepts.filter((concept): concept is string => typeof concept === "string");
 }
