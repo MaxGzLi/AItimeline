@@ -52,6 +52,7 @@ export * from "./text/mathDelimiters.js";
 export * from "./time/calendarKeys.js";
 export * from "./transform/arxivHtmlImport.js";
 export * from "./transform/articleImport.js";
+export * from "./transform/mediaAssets.js";
 export * from "./transform/mockYoutubeImport.js";
 export * from "./transform/conversationImport.js";
 export * from "./transform/noteImport.js";

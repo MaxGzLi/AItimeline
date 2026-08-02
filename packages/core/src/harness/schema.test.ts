@@ -85,4 +85,28 @@ describe("knowledge post schema validation", () => {
     expect(result.valid).toBe(true);
     expect(result.issues.filter((issue) => issue.severity === "error")).toEqual([]);
   });
+
+  it.each(["paper", "derived", "article", "video"] as const)("accepts %s as a media origin", (origin) => {
+    const post = makeValidPost();
+    post.media = [{ assetId: "source-1-image-lead", caption: "Lead image", origin }];
+
+    const result = validateKnowledgePost(post);
+
+    expect(result.valid).toBe(true);
+    expect(result.issues.filter((issue) => issue.severity === "error")).toEqual([]);
+  });
+
+  it("rejects an unregistered media origin", () => {
+    const result = validateKnowledgePost({
+      ...makeValidPost(),
+      media: [{ assetId: "source-1-image-lead", caption: "Lead image", origin: "screenshot" }]
+    });
+
+    expect(result.valid).toBe(false);
+    expect(result.issues).toContainEqual({
+      path: "$.media[0].origin",
+      message: "origin has an unsupported value.",
+      severity: "error"
+    });
+  });
 });

@@ -218,7 +218,7 @@ export interface EvidenceSpan {
   endTimeSeconds?: number;
 }
 
-export type KnowledgePostMediaOrigin = "paper" | "derived";
+export type KnowledgePostMediaOrigin = "paper" | "derived" | "article" | "video";
 
 export interface KnowledgePostMedia {
   assetId: string;

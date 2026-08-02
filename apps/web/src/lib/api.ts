@@ -165,7 +165,7 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 export interface CardMediaItem {
   assetId: string;
   caption: string;
-  origin: "paper" | "derived";
+  origin: "paper" | "derived" | "article" | "video";
   url?: string;
   figureLabel?: string;
 }

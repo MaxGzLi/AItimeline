@@ -47,7 +47,7 @@ const edgeRelations = [
   "summarizes"
 ] as const satisfies readonly KnowledgeEdgeRelation[];
 const reviewPromptKinds = ["recall", "compare", "apply", "explain"] as const satisfies readonly ReviewPromptKind[];
-const mediaOrigins = ["paper", "derived"] as const satisfies readonly KnowledgePostMediaOrigin[];
+const mediaOrigins = ["paper", "derived", "article", "video"] as const satisfies readonly KnowledgePostMediaOrigin[];
 const nextActionPolicies = [
   "continue_deeper",
   "expand_broader",

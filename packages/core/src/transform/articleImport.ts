@@ -11,6 +11,7 @@ import type {
   PaperDigestInput,
   Source,
   SourceAsset,
+  SourceImageAsset,
   SourceImport,
   SourceRegistry
 } from "../types.js";
@@ -20,13 +21,13 @@ import {
   fetchArxivHtmlDecomposition,
   type ArxivHtmlDecomposition
 } from "./arxivHtmlImport.js";
+import { attachLeadMediaToFirstCard, cacheLeadImageAsset, type LeadImageCacheOptions } from "./mediaAssets.js";
 
-export interface ArticleFetchOptions {
+export interface ArticleFetchOptions extends LeadImageCacheOptions {
   fetch?: typeof fetch;
   createdAt?: string;
   maxChunks?: number;
   minParagraphLength?: number;
-  mediaRootDir?: string;
 }
 
 export interface ArticleTransformOptions extends ArticleFetchOptions {
@@ -41,6 +42,7 @@ export interface ArticleFetchResult {
   asset: SourceAsset;
   assets: SourceAsset[];
   paragraphs: string[];
+  leadImageAsset?: SourceImageAsset;
   arxivHtml?: ArxivHtmlDecomposition;
 }
 
@@ -111,12 +113,25 @@ export async function fetchArticle(url: string, options: ArticleFetchOptions = {
     content: paragraphs.join("\n\n"),
     createdAt
   };
+  const leadImage = extractArticleLeadImage(html, parsedUrl);
+  const leadImageAsset = leadImage
+    ? await cacheLeadImageAsset({
+        sourceId: source.id,
+        imageUrl: leadImage.imageUrl,
+        caption: leadImage.caption,
+        mediaRootDir: options.mediaRootDir,
+        writeMedia: options.writeMedia,
+        fetch: fetchImpl,
+        createdAt
+      })
+    : undefined;
 
   return {
     source,
     asset,
-    assets: [asset],
-    paragraphs
+    assets: leadImageAsset ? [asset, leadImageAsset] : [asset],
+    paragraphs,
+    leadImageAsset
   };
 }
 
@@ -163,7 +178,7 @@ export async function transformArticleUrl(
     asset: fetched.asset,
     assets: fetched.assets,
     chunks,
-    cards: importResult.posts,
+    cards: attachLeadMediaToFirstCard(importResult.posts, fetched.leadImageAsset, "article"),
     sourceRegistry: importResult.sourceRegistry,
     harnessRun: importResult.harnessRun,
     validation: importResult.validation,
@@ -453,6 +468,44 @@ function extractArticleMetadata(html: string, url: URL): { title: string; author
       readMetaContent(html, "name", "date") ??
       readMetaContent(html, "itemprop", "datePublished")
   };
+}
+
+// 首图优先级:og:image → twitter:image → 正文第一张 <img>。
+// caption 取 og:title / img 的 alt,取不到就留空串——宁可没有说明,也不要编一个。
+export function extractArticleLeadImage(
+  html: string,
+  url: URL
+): { imageUrl: string; caption: string } | undefined {
+  const metaImage = readMetaContent(html, "property", "og:image") ?? readMetaContent(html, "name", "twitter:image");
+  const metaImageUrl = metaImage ? resolveArticleImageUrl(metaImage, url) : undefined;
+
+  if (metaImageUrl) {
+    return { imageUrl: metaImageUrl, caption: readMetaContent(html, "property", "og:title") ?? "" };
+  }
+
+  const contentHtml = readTagHtml(html, "article") ?? readTagHtml(html, "main") ?? readTagHtml(html, "body") ?? html;
+
+  for (const match of removeNonContentTags(contentHtml).matchAll(/<img\b[^>]*>/gi)) {
+    const tag = match[0];
+    const source = tag.match(/\bsrc=["']([^"']+)["']/i)?.[1];
+    const imageUrl = source ? resolveArticleImageUrl(source, url) : undefined;
+
+    if (imageUrl) {
+      return { imageUrl, caption: normalizeArticleText(tag.match(/\balt=["']([^"']*)["']/i)?.[1] ?? "") };
+    }
+  }
+
+  return undefined;
+}
+
+function resolveArticleImageUrl(source: string, url: URL): string | undefined {
+  try {
+    const resolved = new URL(normalizeArticleText(source), url);
+
+    return resolved.protocol === "http:" || resolved.protocol === "https:" ? resolved.toString() : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function extractArticleParagraphs(

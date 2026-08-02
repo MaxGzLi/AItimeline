@@ -421,7 +421,10 @@ export function PostView({
           </span>
         </div>
       ) : null}
-      <article className={`x-post${isFocused ? " focused" : ""}`} ref={postRef}>
+      <article
+        className={`x-post${leadMedia?.url ? " has-media" : ""}${isFocused ? " focused" : ""}`}
+        ref={postRef}
+      >
         <span className={`x-avatar${isUserNote ? "" : " agent"}`} aria-hidden="true">
           {isUserNote ? t("common.you") : getAgentInitials(primaryConcept)}
         </span>

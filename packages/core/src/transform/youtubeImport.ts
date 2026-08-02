@@ -4,6 +4,7 @@ import type {
   KnowledgePostAgentRunner,
   Source,
   SourceAsset,
+  SourceImageAsset,
   SourceImport
 } from "../types.js";
 import type { ContentLanguage } from "../harness/contentLanguage.js";
@@ -14,6 +15,7 @@ import {
   type TranscriptSegment,
   type TranscriptTransformResult
 } from "./transcriptToCards.js";
+import { attachLeadMediaToFirstCard, cacheLeadImageAsset, type LeadImageCacheOptions } from "./mediaAssets.js";
 import { parseYouTubeVideoId } from "./mockYoutubeImport.js";
 
 export interface YouTubeTranscriptTrack {
@@ -23,7 +25,7 @@ export interface YouTubeTranscriptTrack {
   kind?: string;
 }
 
-export interface YouTubeTranscriptFetchOptions {
+export interface YouTubeTranscriptFetchOptions extends LeadImageCacheOptions {
   fetch?: typeof fetch;
   languagePreferences?: string[];
   createdAt?: string;
@@ -35,6 +37,7 @@ export interface YouTubeTranscriptFetchResult {
   asset: SourceAsset;
   segments: TranscriptSegment[];
   track: YouTubeTranscriptTrack;
+  thumbnailAsset?: SourceImageAsset;
 }
 
 export interface YouTubeTransformOptions extends YouTubeTranscriptFetchOptions {
@@ -47,6 +50,7 @@ export interface YouTubeTransformOptions extends YouTubeTranscriptFetchOptions {
 export interface YouTubeTransformResult extends Omit<TranscriptTransformResult, "harnessRun"> {
   harnessRun?: AgentHarnessRun;
   asset: SourceAsset;
+  assets: SourceAsset[];
   importRecord: SourceImport;
   track: YouTubeTranscriptTrack;
 }
@@ -128,13 +132,23 @@ export async function fetchYouTubeTranscript(
     content: segments.map((segment) => segment.text).join("\n\n"),
     createdAt
   };
+  const thumbnailAsset = await cacheLeadImageAsset({
+    sourceId: source.id,
+    imageUrl: buildThumbnailUrl(videoId),
+    caption: source.title,
+    mediaRootDir: options.mediaRootDir,
+    writeMedia: options.writeMedia,
+    fetch: fetchImpl,
+    createdAt
+  });
 
   return {
     videoId,
     source,
     asset,
     segments,
-    track
+    track,
+    thumbnailAsset
   };
 }
 
@@ -145,16 +159,19 @@ export async function transformYouTubeUrl(
   const fetched = await fetchYouTubeTranscript(url, options);
   const createdAt = options.createdAt ?? fetched.asset.createdAt;
   const chunks = buildTranscriptChunks(fetched.source, fetched.segments);
+  const assets: SourceAsset[] = fetched.thumbnailAsset
+    ? [fetched.asset, fetched.thumbnailAsset]
+    : [fetched.asset];
   const sourceRegistry = createSourceRegistry({
     sources: [fetched.source],
-    assets: [fetched.asset],
+    assets,
     chunks,
     createdAt
   });
   const importResult = await runSourceImport(
     {
       source: fetched.source,
-      assets: [fetched.asset],
+      assets,
       chunks,
       sourceRegistry,
       contentLanguage: options.contentLanguage,
@@ -172,14 +189,20 @@ export async function transformYouTubeUrl(
   return {
     source: fetched.source,
     chunks,
-    cards: importResult.posts,
+    cards: attachLeadMediaToFirstCard(importResult.posts, fetched.thumbnailAsset, "video"),
     sourceRegistry: importResult.sourceRegistry,
     harnessRun: importResult.harnessRun,
     validation: importResult.validation,
     asset: fetched.asset,
+    assets,
     track: fetched.track,
     importRecord: importResult.importRecord
   };
+}
+
+// YouTube 封面走固定 URL 模板,不需要额外的元数据请求。
+function buildThumbnailUrl(videoId: string): string {
+  return `https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/hqdefault.jpg`;
 }
 
 async function fetchText(fetchImpl: typeof fetch, url: string): Promise<string> {
