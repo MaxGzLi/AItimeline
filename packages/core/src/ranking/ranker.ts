@@ -17,7 +17,7 @@ import {
   coalesceInteractionSignals,
   type InteractionSignalInput
 } from "../interaction/coalesceInteractionSignals.js";
-import { countSeenReadSignalsByPostId } from "./lifecycle.js";
+import { countSeenReadSignalsByPostId, isLifecycleInteractionSignal } from "./lifecycle.js";
 
 export type RecommendationIntent =
   | "deepen_interest"
@@ -39,7 +39,19 @@ export interface PersonalizedTimelineRankingInput {
   contentLanguage?: ContentLanguage;
   now?: string | Date;
   timeZone?: string;
+  /**
+   * Per-page-load seed. When set, cards whose scores sit inside the same narrow
+   * window are rotated deterministically so a new visit does not always open on
+   * the same card. Omitting it keeps the ranking purely deterministic.
+   */
+  sessionSeed?: string;
 }
+
+/** A shown-but-ignored card loses this much per exposure, up to the cap. */
+const exposureFatiguePenaltyPerSignal = 8;
+const maxExposureFatiguePenalty = 24;
+/** Cards within this many points of the window head rotate among themselves. */
+const sessionRotationScoreWindow = 10;
 
 export interface PersonalizedRankedKnowledgeCard extends RankedKnowledgeCard {
   recommendationIntent: RecommendationIntent;
@@ -101,6 +113,7 @@ export function rankPersonalizedTimeline(input: PersonalizedTimelineRankingInput
   const topicStateById = new Map((input.topicStates ?? []).map((state) => [state.topicId, state]));
   const coalescedSignals = coalesceInteractionSignals(input.recentSignals ?? [], input.timeZone);
   const derivedSeenReadCounts = countSeenReadSignalsByPostId(coalescedSignals, input.timeZone);
+  const exposureFatigueCounts = countIgnoredExposuresByPostId(coalescedSignals);
   const recentSignals = [...coalescedSignals]
     .sort((left, right) => normalizeDate(right.createdAt).getTime() - normalizeDate(left.createdAt).getTime())
     .slice(0, 80);
@@ -113,7 +126,7 @@ export function rankPersonalizedTimeline(input: PersonalizedTimelineRankingInput
   const dueReviewPostIds = new Set(input.dueReviewPostIds ?? []);
   const contentLanguage = input.contentLanguage ?? "en";
 
-  return input.cards
+  const ranked = input.cards
     .map((card) => {
       const reasons: string[] = [];
       let score = 10;
@@ -230,6 +243,16 @@ export function rankPersonalizedTimeline(input: PersonalizedTimelineRankingInput
           score -= seenReadPenalty;
           reasons.unshift("Already read; lowering it so fresh cards can surface");
         }
+
+        const exposureFatiguePenalty = Math.min(
+          (exposureFatigueCounts[card.id] ?? 0) * exposureFatiguePenaltyPerSignal,
+          maxExposureFatiguePenalty
+        );
+
+        if (exposureFatiguePenalty > 0) {
+          score -= exposureFatiguePenalty;
+          reasons.unshift("Scrolled past without a look; making room for something new");
+        }
       }
 
       if (reasons.length === 0) {
@@ -252,6 +275,76 @@ export function rankPersonalizedTimeline(input: PersonalizedTimelineRankingInput
 
       return normalizeDate(right.createdAt).getTime() - normalizeDate(left.createdAt).getTime();
     });
+
+  return rotateRankedCardsBySessionSeed(ranked, input.sessionSeed);
+}
+
+/**
+ * Counts merged signals that only ever showed the card: an impression with no
+ * like / save / thread open / question / review and no read-length dwell.
+ */
+function countIgnoredExposuresByPostId(signals: readonly InteractionSignal[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+
+  for (const signal of signals) {
+    if (signal.impression && !isLifecycleInteractionSignal(signal)) {
+      counts[signal.postId] = (counts[signal.postId] ?? 0) + 1;
+    }
+  }
+
+  return counts;
+}
+
+/**
+ * Rotates cards inside score windows so consecutive page loads open on a
+ * different card without letting a low-scoring card jump the queue. A window is
+ * the run of cards scoring within `sessionRotationScoreWindow` of its head; the
+ * order inside it comes from a seeded hash, never from Math.random, so the same
+ * seed always yields the same list. Without a seed the input order is kept.
+ */
+export function rotateRankedCardsBySessionSeed<T extends { id: string; score: number }>(
+  cards: readonly T[],
+  sessionSeed: string | undefined
+): T[] {
+  if (!sessionSeed) {
+    return [...cards];
+  }
+
+  const rotated: T[] = [];
+  let windowStart = 0;
+
+  while (windowStart < cards.length) {
+    const headScore = cards[windowStart].score;
+    let windowEnd = windowStart + 1;
+
+    while (windowEnd < cards.length && headScore - cards[windowEnd].score <= sessionRotationScoreWindow) {
+      windowEnd += 1;
+    }
+
+    const window = cards.slice(windowStart, windowEnd).map((card, offset) => ({ card, offset }));
+
+    window.sort(
+      (left, right) =>
+        hashStringFnv1a(`${sessionSeed} ${left.card.id}`) - hashStringFnv1a(`${sessionSeed} ${right.card.id}`) ||
+        left.offset - right.offset
+    );
+    rotated.push(...window.map((entry) => entry.card));
+    windowStart = windowEnd;
+  }
+
+  return rotated;
+}
+
+/** FNV-1a 32-bit: deterministic across processes, unlike any RNG. */
+function hashStringFnv1a(value: string): number {
+  let hash = 0x811c9dc5;
+
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+
+  return hash >>> 0;
 }
 
 function formatLearningGoalReason(concepts: string[], contentLanguage: ContentLanguage): string {

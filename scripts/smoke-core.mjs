@@ -4030,8 +4030,8 @@ const sameDayDueRankedCard = rankPersonalizedTimeline({
 
 assert.equal(
   Math.round((sameDayDueRankedCard.score - sameDayRankedCard.score) * 10) / 10,
-  42,
-  "ranker should apply one 12-point seen penalty to cumulative same-day dwell, plus the 30-point due boost"
+  50,
+  "ranker should apply one 12-point seen penalty and one 8-point ignored-exposure penalty to cumulative same-day dwell, plus the 30-point due boost"
 );
 
 const longHistoryReadSignal = {
