@@ -70,12 +70,13 @@ export async function importArticle(body, runner, mediaRootDir, contentLanguage,
   return toSourceImportWorkerResult(result);
 }
 
-export async function importYouTube(body, runner, contentLanguage, userContext, fetchImpl) {
+export async function importYouTube(body, runner, mediaRootDir, contentLanguage, userContext, fetchImpl) {
   requireString(body.url, "url");
   const result = await transformYouTubeUrl(body.url, {
     createdAt: body.createdAt,
     recommendedBecause: body.recommendedBecause,
     runner,
+    mediaRootDir,
     contentLanguage,
     userContext,
     fetch: fetchImpl

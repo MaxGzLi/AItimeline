@@ -1160,6 +1160,7 @@ export function createApiServer(options = {}) {
         const importResult = await importYouTube(
           body,
           importRunner,
+          mediaRootDir,
           contentLanguage,
           buildSourceQualityUserContext(persistenceStore.getSnapshot()),
           guardedFetchImpl
