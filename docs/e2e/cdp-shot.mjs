@@ -102,9 +102,11 @@ try {
     console.log("interaction signal:", r.result?.value ?? r.result?.description ?? "(none)");
   }
 
+  // Full page by default; VIEWPORT=1 keeps the shot to the emulated viewport so
+  // an interaction that scrolls to a card can frame just that card.
   const shot = await send("Page.captureScreenshot", {
     format: "png",
-    captureBeyondViewport: true,
+    captureBeyondViewport: !process.env.VIEWPORT,
   });
   writeFileSync(out, Buffer.from(shot.data, "base64"));
   console.log("cdp screenshot written:", out);

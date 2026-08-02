@@ -634,21 +634,27 @@ body:has(.x-frame) {
   gap: 8px;
   margin: 0 0 8px;
 }
-/* 论文附图:X 式媒体位。图底固定白色——论文图多为白底/透明 PNG,暗色主题下不能跟着变黑。 */
+/* 原文首图 / 论文附图:X 式媒体位。图底固定白色——论文图多为白底/透明 PNG,暗色主题下不能跟着变黑。 */
 .x-media {
   display: block;
-  margin: 4px 0 10px;
+  margin: 4px 0 12px;
   border: 1px solid var(--x-line);
   border-radius: 16px;
   overflow: hidden;
   background: #ffffff;
 }
+/* 竖图封顶后用 cover 裁掉多余高度,而不是 contain 留出白边;宽图按原比例占满卡宽。 */
 .x-media img {
   display: block;
   width: 100%;
-  max-height: 510px;
-  object-fit: contain;
+  max-height: 440px;
+  object-fit: cover;
 }
+/* 有图卡让文字贴住图、整体收紧;无图卡多留一档行距与段后空,两种节奏在信息流里交错。 */
+.x-post.has-media .x-title { margin-bottom: 3px; }
+.x-post.has-media .x-body { margin-bottom: 4px; }
+.x-post:not(.has-media) .x-title { margin: 3px 0 4px; }
+.x-post:not(.has-media) .x-body { margin-bottom: 10px; line-height: 1.5; }
 .x-quote {
   display: block;
   width: 100%;
