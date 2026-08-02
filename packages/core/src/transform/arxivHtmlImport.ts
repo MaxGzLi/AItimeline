@@ -510,7 +510,7 @@ function decodeBase64(value: string): Uint8Array {
   return bytes;
 }
 
-function inferImageExtension(contentType: string | undefined, sourceUrl: string): string | undefined {
+export function inferImageExtension(contentType: string | undefined, sourceUrl: string): string | undefined {
   const normalizedContentType = contentType?.split(";", 1)[0]?.trim().toLowerCase();
   const extensionFromContentType = normalizedContentType
     ? imageExtensionsByMimeType.get(normalizedContentType)
@@ -536,7 +536,7 @@ function isAllowedArxivHost(hostname: string): boolean {
   return normalizedHostname === "arxiv.org" || normalizedHostname.endsWith(".arxiv.org");
 }
 
-async function writeMediaFile(
+export async function writeMediaFile(
   mediaRootDir: string,
   sourceId: string,
   fileName: string,
@@ -556,7 +556,7 @@ async function importNodeModule<T>(specifier: string): Promise<T> {
   return dynamicImport(specifier);
 }
 
-function sanitizePathSegment(value: string): string {
+export function sanitizePathSegment(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/(^-+|-+$)/g, "") || "source";
 }
 
