@@ -1774,6 +1774,83 @@ try {
     await closeServer(topicBlocksServer);
   }
 
+  // Feed freshness: a per-page-load seed rotates cards that score close together
+  // so a reload opens on a different card, while a seedless request stays
+  // deterministic.
+  const freshnessDataPath = join(tempDir, "feed-freshness-timeline.json");
+  const freshnessCurationPath = join(tempDir, "feed-freshness-curation.json");
+  const freshnessNow = "2026-07-08T10:00:00.000Z";
+
+  await writeFile(
+    freshnessDataPath,
+    JSON.stringify({
+      version: 1,
+      updatedAt: freshnessNow,
+      posts: Array.from({ length: 6 }, (_unused, index) =>
+        makeApiSmokePost({
+          id: `freshness-post-${index + 1}`,
+          title: `Freshness post ${index + 1}`,
+          concepts: ["Freshness"],
+          createdAt: `2026-07-08T0${index}:00:00.000Z`
+        })
+      )
+    })
+  );
+
+  const freshnessServer = createApiServer({
+    dataPath: freshnessDataPath,
+    curationDataPath: freshnessCurationPath,
+    mediaRootDir,
+    enableFixtures: true,
+    searchProvider: fakeSearchProvider
+  });
+
+  try {
+    const freshnessTimelineIds = async (seed) =>
+      (
+        await requestJsonFromServer(
+          freshnessServer,
+          `/api/timeline?userId=local-user&now=${encodeURIComponent(freshnessNow)}${
+            seed === undefined ? "" : `&seed=${encodeURIComponent(seed)}`
+          }`
+        )
+      ).posts.map((post) => post.id);
+    const seedlessIds = await freshnessTimelineIds();
+
+    assert.equal(seedlessIds.length, 6, "feed freshness fixture should expose all six candidate posts");
+    assert.deepEqual(
+      await freshnessTimelineIds(),
+      seedlessIds,
+      "timeline without a seed should return the same order on every request"
+    );
+
+    const firstSeedIds = await freshnessTimelineIds("page-load-one");
+    const secondSeedIds = await freshnessTimelineIds("page-load-two");
+
+    assert.deepEqual(
+      await freshnessTimelineIds("page-load-one"),
+      firstSeedIds,
+      "the same seed should return the same order, so polling inside one page load does not shuffle"
+    );
+    assert.notEqual(
+      firstSeedIds[0],
+      secondSeedIds[0],
+      `two different seeds should open on different posts: ${JSON.stringify({ firstSeedIds, secondSeedIds })}`
+    );
+    assert.deepEqual(
+      [...firstSeedIds].sort(),
+      [...seedlessIds].sort(),
+      "seed rotation should reorder the timeline without adding or dropping posts"
+    );
+    assert.deepEqual(
+      await freshnessTimelineIds("not a valid seed!"),
+      seedlessIds,
+      "an invalid seed should be ignored instead of rejected"
+    );
+  } finally {
+    await closeServer(freshnessServer);
+  }
+
   const conceptKeyApiDataPath = join(tempDir, "concept-key-api.json");
   const conceptKeyApiCurationPath = join(tempDir, "concept-key-api-curation.json");
   const conceptKeyApiNow = "2026-07-08T10:00:00.000Z";
