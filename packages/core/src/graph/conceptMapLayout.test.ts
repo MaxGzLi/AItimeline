@@ -45,15 +45,35 @@ const cjkConcepts = [
   "训练稳定性"
 ];
 
-function cjkEdges(): KnowledgeGraphEdge[] {
-  return cjkConcepts.slice(1).map((concept, index) => ({
-    id: `cjk-edge-${index + 1}`,
-    sourceConcept: cjkConcepts[0],
+const longCjkConcepts = [
+  "多头潜在注意力机制的实现",
+  "键值缓存压缩与显存带宽",
+  "混合专家模型路由",
+  "推理吞吐与并发批处理",
+  "低秩投影的秩选择",
+  "上下文窗口扩展",
+  "显存带宽瓶颈",
+  "稀疏激活比例",
+  "训练稳定性与损失尖峰"
+];
+
+function starEdges(concepts: string[]): KnowledgeGraphEdge[] {
+  return concepts.slice(1).map((concept, index) => ({
+    id: `edge-${index + 1}`,
+    sourceConcept: concepts[0],
     relation: "extends",
     targetConcept: concept,
     evidence: "证据。",
     weight: 0.9 - index * 0.01
   }));
+}
+
+function cjkEdges(): KnowledgeGraphEdge[] {
+  return starEdges(cjkConcepts);
+}
+
+function longCjkEdges(): KnowledgeGraphEdge[] {
+  return starEdges(longCjkConcepts);
 }
 
 /**
@@ -189,16 +209,16 @@ describe("layoutConceptMap", () => {
   it("drops the lightest concepts when a tight canvas cannot fit their labels", () => {
     const nodeCounts: number[] = [];
 
-    // 360x200 is far below the timeline's own box: it forces the collision pass
-    // to actually cut nodes, which the roomy default layout rarely needs.
+    // Long labels in a box narrower than the timeline's own: this forces the
+    // collision pass to actually cut nodes, which the roomy default rarely needs.
     for (let seed = 0; seed < 40; seed += 1) {
       const layout = layoutConceptMap({
         postId: `post-tight-${seed}`,
-        primaryConcept: cjkConcepts[0],
-        concepts: cjkConcepts,
-        graphEdges: cjkEdges(),
-        width: 360,
-        height: 200
+        primaryConcept: longCjkConcepts[0],
+        concepts: longCjkConcepts,
+        graphEdges: longCjkEdges(),
+        width: 420,
+        height: 220
       });
 
       const peerWeights = layout.nodes.slice(1).map((node) => node.weight);
@@ -230,6 +250,31 @@ describe("layoutConceptMap", () => {
     expect(peers.map((node) => node.weight)).toEqual([...peers.map((node) => node.weight)].sort((a, b) => b - a));
     // The eight heaviest edges target Concept 2..9; nothing lighter may sneak in.
     expect(peers.every((node) => concepts.slice(1, 9).includes(node.concept))).toBe(true);
+  });
+
+  it("shrinks the box when there is little to draw, and honours an explicit size", () => {
+    const heightFor = (peerCount: number) =>
+      layoutConceptMap({
+        postId: `post-height-${peerCount}`,
+        primaryConcept: "Concept 1",
+        concepts: makeConcepts(peerCount + 1),
+        graphEdges: makeEdges(peerCount)
+      }).height;
+
+    expect(heightFor(1)).toBe(160);
+    expect(heightFor(2)).toBe(160);
+    expect(heightFor(3)).toBe(200);
+    expect(heightFor(5)).toBe(240);
+    expect(
+      layoutConceptMap({
+        postId: "post-height-explicit",
+        primaryConcept: "Concept 1",
+        concepts: makeConcepts(3),
+        graphEdges: makeEdges(2),
+        width: 400,
+        height: 300
+      })
+    ).toMatchObject({ width: 400, height: 300 });
   });
 
   it("only draws edges between nodes it kept", () => {
@@ -311,6 +356,25 @@ describe("layoutConceptMap", () => {
     });
 
     expect(layout.nodes[0].concept).toBe("Concept 1");
+  });
+
+  it("centres what it drew inside the box", () => {
+    for (const peerCount of [1, 2, 5, 8]) {
+      const layout = layoutConceptMap({
+        postId: `post-centred-${peerCount}`,
+        primaryConcept: cjkConcepts[0],
+        concepts: cjkConcepts.slice(0, peerCount + 1),
+        graphEdges: cjkEdges().slice(0, peerCount)
+      });
+      const boxes = collectBoxes(layout);
+      const left = Math.min(...boxes.map((box) => box.left));
+      const right = Math.max(...boxes.map((box) => box.right));
+      const top = Math.min(...boxes.map((box) => box.top));
+      const bottom = Math.max(...boxes.map((box) => box.bottom));
+
+      expect(left, `${peerCount} peers`).toBeCloseTo(layout.width - right, 5);
+      expect(top, `${peerCount} peers`).toBeCloseTo(layout.height - bottom, 5);
+    }
   });
 
   it("keeps every node and label inside the canvas", () => {

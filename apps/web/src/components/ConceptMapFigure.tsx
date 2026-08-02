@@ -1,9 +1,20 @@
-import type { KnowledgeCard } from "@aitimeline/core";
+import type { ConceptMapEdge, KnowledgeCard } from "@aitimeline/core";
 import { estimateTextWidth, layoutConceptMap } from "@aitimeline/core";
 import { useMemo } from "react";
 import { getCardConcepts, getCardGraphEdges } from "../lib/api";
 import { formatEdgeRelation } from "../lib/format";
 import { t } from "../lib/i18n";
+
+const arrowLength = 7;
+const arrowSpread = 0.38;
+
+function arrowPoints(edge: ConceptMapEdge): string {
+  const angle = Math.atan2(edge.y2 - edge.y1, edge.x2 - edge.x1);
+  const corner = (offset: number) =>
+    `${edge.x2 - arrowLength * Math.cos(angle + offset)},${edge.y2 - arrowLength * Math.sin(angle + offset)}`;
+
+  return `${edge.x2},${edge.y2} ${corner(-arrowSpread)} ${corner(arrowSpread)}`;
+}
 
 /**
  * Lead visual for cards with no source image: the card's own concept graph,
@@ -37,7 +48,12 @@ export function ConceptMapFigure({ card }: { card: KnowledgeCard }) {
     >
       <svg preserveAspectRatio="xMidYMid meet" viewBox={`0 0 ${layout.width} ${layout.height}`}>
         {layout.edges.map((edge) => (
-          <line className="x-dgedge" key={`${edge.from}-${edge.to}`} x1={edge.x1} x2={edge.x2} y1={edge.y1} y2={edge.y2} />
+          <g key={`edge-${edge.from}-${edge.to}`}>
+            <line className="x-dgedge" x1={edge.x1} x2={edge.x2} y1={edge.y1} y2={edge.y2} />
+            {/* A relation runs one way ("A requires B"), so it needs a head to
+                read correctly; the concepts-only fallback has no direction. */}
+            {edge.relation ? <polygon className="x-dgarrow" points={arrowPoints(edge)} /> : null}
+          </g>
         ))}
 
         {layout.edges.map((edge) => {

@@ -665,6 +665,7 @@ body:has(.x-frame) {
   height: auto;
 }
 .x-dgedge { stroke: var(--x-muted); stroke-opacity: 0.45; stroke-width: 1; }
+.x-dgarrow { fill: var(--x-muted); fill-opacity: 0.45; }
 .x-dgdot { fill: var(--x-muted); }
 .x-dgnode { fill: var(--x-ink); }
 /* 关系文案压在边上,垫一块与图底同色的板子把线断开。 */
