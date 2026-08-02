@@ -670,7 +670,8 @@ export function createApiServer(options = {}) {
           url.searchParams.get("now"),
           url.searchParams.get("userId") ?? "local-user",
           resolveContentLanguage(persistenceStore, process.env),
-          curationStore
+          curationStore,
+          url.searchParams.get("seed") ?? undefined
         );
 
         sendJson(

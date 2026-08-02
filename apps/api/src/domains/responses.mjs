@@ -169,8 +169,34 @@ export function sanitizeSubscriptionRecordForResponse(record) {
   return record?.lastError ? { ...record, lastError: "Subscription poll failed." } : record;
 }
 
-/** @param {import("../../../../packages/core/dist/index.js").ContentLanguage} contentLanguage */
-export function getTimelineResponse(snapshot, nowValue, userId = "local-user", contentLanguage = "zh", curationStore) {
+/**
+ * Per-page-load rotation seed. Anything longer than 64 characters or outside
+ * `[A-Za-z0-9_-]` is dropped rather than rejected, so a stale or hand-edited
+ * query string still returns the plain deterministic timeline.
+ *
+ * @param {unknown} value
+ * @returns {string | undefined}
+ */
+export function parseOptionalSessionSeed(value) {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(value)) {
+    return undefined;
+  }
+
+  return value;
+}
+
+/**
+ * @param {import("../../../../packages/core/dist/index.js").ContentLanguage} contentLanguage
+ * @param {unknown} [sessionSeedValue]
+ */
+export function getTimelineResponse(
+  snapshot,
+  nowValue,
+  userId = "local-user",
+  contentLanguage = "zh",
+  curationStore,
+  sessionSeedValue
+) {
   const now = nowValue ? new Date(nowValue) : new Date();
   const releasePlans = snapshot.releasePlans;
   const releaseItems = releasePlans.flatMap((plan) => plan.items);
@@ -212,7 +238,8 @@ export function getTimelineResponse(snapshot, nowValue, userId = "local-user", c
     conceptAliases: snapshot.conceptAliases,
     learningGoalConcepts: collectActiveLearningGoalConcepts(snapshot, userId),
     contentLanguage,
-    now
+    now,
+    sessionSeed: parseOptionalSessionSeed(sessionSeedValue)
   }).map((post) => {
     const dueReviewState = dueReviewStateByPostId.get(post.id);
 
