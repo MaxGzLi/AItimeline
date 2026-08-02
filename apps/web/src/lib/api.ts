@@ -46,6 +46,29 @@ export function isAbortLikeError(error: unknown): boolean {
 
 const defaultTimeoutMs = 20000;
 
+/**
+ * One rotation seed per page load. The ranker uses it to rotate cards that
+ * score close together, so a reload opens on a different card while every poll
+ * inside this page load keeps the same order.
+ */
+const timelineSessionSeed = createTimelineSessionSeed();
+
+function createTimelineSessionSeed(): string {
+  const uuid = globalThis.crypto?.randomUUID?.();
+
+  // The API only accepts [A-Za-z0-9_-] up to 64 characters; both shapes fit.
+  return uuid ?? `s${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+}
+
+/** Only the timeline route reads the seed, so other calls stay untouched. */
+function withTimelineSessionSeed(path: string): string {
+  if (!path.startsWith("/api/timeline")) {
+    return path;
+  }
+
+  return `${path}${path.includes("?") ? "&" : "?"}seed=${timelineSessionSeed}`;
+}
+
 export async function apiRequest<T>(
   path: string,
   options: {
@@ -71,7 +94,7 @@ export async function apiRequest<T>(
   }
 
   try {
-    const response = await fetch(`${apiBaseUrl}${path}`, {
+    const response = await fetch(`${apiBaseUrl}${withTimelineSessionSeed(path)}`, {
       method: options.method ?? "GET",
       headers: {
         "content-type": "application/json"
