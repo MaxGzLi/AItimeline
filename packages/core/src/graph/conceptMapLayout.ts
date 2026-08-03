@@ -1,31 +1,23 @@
-import type { KnowledgeGraphEdge } from "../types.js";
 import { normalizeConceptKey, normalizeConceptLabel } from "./conceptAliases.js";
 
 /**
  * Deterministic concept-map layout for the timeline card lead visual.
  *
- * The card's own `graphEdges` become a centre + ring diagram: the centre is the
- * card's main concept, the ring is its direct neighbours, and every relation is
- * returned verbatim so the UI layer can label the edges in its own language.
- * Cards without usable edges degrade to a concepts-only radial map; cards with
- * nothing to draw report `degenerate` so the UI keeps them text-only.
+ * The card's own concepts become a centre + ring diagram: the centre is the
+ * card's main concept, the ring is the rest, and every edge is a plain spoke
+ * from the centre outwards. No relation is asserted — the card's `graphEdges`
+ * carry relation words whose endpoints never pass the grounding gate, so this
+ * layer draws membership only. Cards with nothing to draw report `degenerate`
+ * so the UI keeps them text-only.
  *
  * Everything here is pure and seeded by `postId`, so the same card always draws
  * the same picture across renders, processes and machines.
  */
 
-export interface ConceptMapEdgeInput {
-  sourceConcept: string;
-  targetConcept: string;
-  relation?: KnowledgeGraphEdge["relation"];
-  weight?: number;
-}
-
 export interface ConceptMapLayoutInput {
   postId: string;
   primaryConcept?: string;
   concepts?: readonly string[];
-  graphEdges?: readonly ConceptMapEdgeInput[];
   width?: number;
   height?: number;
 }
@@ -52,27 +44,15 @@ export interface ConceptMapNode {
   fontSize: number;
 }
 
+/** A bare spoke from the centre to one of its concepts; it carries no relation. */
 export interface ConceptMapEdge {
   from: string;
   to: string;
-  /** Verbatim relation; absent on the concepts-only fallback (no relation known). */
-  relation?: KnowledgeGraphEdge["relation"];
   weight: number;
   x1: number;
   y1: number;
   x2: number;
   y2: number;
-  /** Midpoint reserved for the relation caption. */
-  labelX: number;
-  labelY: number;
-  /**
-   * Horizontal room reserved at the midpoint. Renderers measure their own
-   * (localized) caption and drop the text when it is wider than this; anything
-   * that fits is guaranteed not to collide with another label.
-   */
-  labelMaxWidth: number;
-  labelHeight: number;
-  fontSize: number;
 }
 
 export interface ConceptMapLayout {
@@ -94,10 +74,6 @@ const maxCenterLabelWidth = 168;
 const nodeFontSize = 13;
 const nodeLabelHeight = 17;
 const maxNodeLabelWidth = 120;
-const relationFontSize = 11;
-const relationLabelHeight = 14;
-const maxRelationLabelWidth = 64;
-const minRelationLabelWidth = 16;
 const innerDotRadius = 5;
 const outerDotRadius = 4;
 const labelGap = 6;
@@ -124,14 +100,13 @@ interface ConceptCandidate {
 
 export function layoutConceptMap(input: ConceptMapLayoutInput): ConceptMapLayout {
   const width = input.width ?? defaultWidth;
-  const edges = readEdges(input.graphEdges);
-  const center = pickCenter(input.primaryConcept, input.concepts, edges);
+  const center = pickCenter(input.primaryConcept, input.concepts);
 
   if (!center) {
     return { nodes: [], edges: [], degenerate: true, width, height: input.height ?? defaultHeight };
   }
 
-  const candidates = edges.length > 0 ? neighboursOf(center.key, edges) : spokesOf(center.key, input.concepts);
+  const candidates = spokesOf(center.key, input.concepts);
 
   if (candidates.length === 0) {
     return { nodes: [], edges: [], degenerate: true, width, height: input.height ?? defaultHeight };
@@ -178,10 +153,8 @@ export function layoutConceptMap(input: ConceptMapLayoutInput): ConceptMapLayout
   centerComposition(nodes, placed, width, height);
 
   const drawnEdges = layoutEdges(
-    edges.length > 0 ? edges : peers.map((peer) => spokeEdge(center, peer)),
-    nodes,
-    placed,
-    width
+    peers.map((peer) => spokeEdge(center, peer)),
+    nodes
   );
 
   return { nodes, edges: drawnEdges, degenerate: false, width, height };
@@ -237,90 +210,21 @@ function truncateToWidth(text: string, fontSize: number, maxWidth: number): stri
   return "…";
 }
 
-interface NormalizedEdge {
+interface SpokeEdge {
   sourceKey: string;
   sourceLabel: string;
   targetKey: string;
   targetLabel: string;
-  relation?: KnowledgeGraphEdge["relation"];
   weight: number;
   order: number;
 }
 
-function readEdges(graphEdges: readonly ConceptMapEdgeInput[] | undefined): NormalizedEdge[] {
-  if (!graphEdges) {
-    return [];
-  }
-
-  const byPair = new Map<string, NormalizedEdge>();
-
-  for (const [order, edge] of graphEdges.entries()) {
-    const sourceLabel = normalizeConceptLabel(edge?.sourceConcept ?? "");
-    const targetLabel = normalizeConceptLabel(edge?.targetConcept ?? "");
-    const sourceKey = normalizeConceptKey(sourceLabel);
-    const targetKey = normalizeConceptKey(targetLabel);
-
-    if (!sourceKey || !targetKey || sourceKey === targetKey) {
-      continue;
-    }
-
-    const weight = Number.isFinite(edge?.weight) ? Number(edge?.weight) : 0.5;
-    const pair = [sourceKey, targetKey].sort().join(" ");
-    const existing = byPair.get(pair);
-
-    if (existing && existing.weight >= weight) {
-      continue;
-    }
-
-    byPair.set(pair, {
-      sourceKey,
-      sourceLabel,
-      targetKey,
-      targetLabel,
-      relation: edge?.relation,
-      weight,
-      order
-    });
-  }
-
-  return [...byPair.values()].sort((left, right) => left.order - right.order);
-}
-
 function pickCenter(
   primaryConcept: string | undefined,
-  concepts: readonly string[] | undefined,
-  edges: NormalizedEdge[]
+  concepts: readonly string[] | undefined
 ): { key: string; label: string } | undefined {
   const primaryLabel = normalizeConceptLabel(primaryConcept ?? "");
   const primaryKey = normalizeConceptKey(primaryLabel);
-
-  if (edges.length > 0) {
-    const degrees = new Map<string, { label: string; degree: number; weight: number; order: number }>();
-
-    for (const edge of edges) {
-      for (const [key, label] of [
-        [edge.sourceKey, edge.sourceLabel],
-        [edge.targetKey, edge.targetLabel]
-      ] as const) {
-        const entry = degrees.get(key) ?? { label, degree: 0, weight: 0, order: degrees.size };
-        entry.degree += 1;
-        entry.weight += edge.weight;
-        degrees.set(key, entry);
-      }
-    }
-
-    if (primaryKey && degrees.has(primaryKey)) {
-      return { key: primaryKey, label: degrees.get(primaryKey)?.label ?? primaryLabel };
-    }
-
-    // The main concept is missing from the graph: anchor on the busiest concept
-    // instead of drawing an isolated centre.
-    const busiest = [...degrees.entries()].sort(
-      ([, left], [, right]) => right.degree - left.degree || right.weight - left.weight || left.order - right.order
-    )[0];
-
-    return busiest ? { key: busiest[0], label: busiest[1].label } : undefined;
-  }
 
   if (primaryKey) {
     return { key: primaryKey, label: primaryLabel };
@@ -338,34 +242,7 @@ function pickCenter(
   return undefined;
 }
 
-/** Direct neighbours of the centre, heaviest first. */
-function neighboursOf(centerKey: string, edges: NormalizedEdge[]): ConceptCandidate[] {
-  const neighbours = new Map<string, ConceptCandidate>();
-
-  for (const edge of edges) {
-    const isSource = edge.sourceKey === centerKey;
-    const isTarget = edge.targetKey === centerKey;
-
-    if (!isSource && !isTarget) {
-      continue;
-    }
-
-    const key = isSource ? edge.targetKey : edge.sourceKey;
-    const label = isSource ? edge.targetLabel : edge.sourceLabel;
-    const existing = neighbours.get(key);
-
-    if (!existing) {
-      neighbours.set(key, { key, label, weight: edge.weight, order: edge.order });
-      continue;
-    }
-
-    existing.weight = Math.max(existing.weight, edge.weight);
-  }
-
-  return sortCandidates([...neighbours.values()]);
-}
-
-/** Fallback ring: the remaining concepts, kept in their card order. */
+/** The ring: the remaining concepts, kept in their card order. */
 function spokesOf(centerKey: string, concepts: readonly string[] | undefined): ConceptCandidate[] {
   const spokes: ConceptCandidate[] = [];
   const seen = new Set<string>([centerKey]);
@@ -385,13 +262,7 @@ function spokesOf(centerKey: string, concepts: readonly string[] | undefined): C
   return spokes;
 }
 
-function sortCandidates(candidates: ConceptCandidate[]): ConceptCandidate[] {
-  return candidates.sort(
-    (left, right) => right.weight - left.weight || left.label.localeCompare(right.label) || left.order - right.order
-  );
-}
-
-function spokeEdge(center: { key: string; label: string }, peer: ConceptCandidate): NormalizedEdge {
+function spokeEdge(center: { key: string; label: string }, peer: ConceptCandidate): SpokeEdge {
   return {
     sourceKey: center.key,
     sourceLabel: center.label,
@@ -521,17 +392,11 @@ function assignAngles(postId: string, peers: ConceptCandidate[]): Map<string, nu
   return angles;
 }
 
-function layoutEdges(
-  edges: NormalizedEdge[],
-  nodes: ConceptMapNode[],
-  placed: Box[],
-  width: number
-): ConceptMapEdge[] {
+function layoutEdges(edges: SpokeEdge[], nodes: ConceptMapNode[]): ConceptMapEdge[] {
   const byKey = new Map(nodes.map((node) => [normalizeConceptKey(node.concept), node]));
   const drawable = edges
     .filter((edge) => byKey.has(edge.sourceKey) && byKey.has(edge.targetKey))
     .sort((left, right) => right.weight - left.weight || left.order - right.order);
-  const reserved = [...placed];
   const laidOut: ConceptMapEdge[] = [];
 
   for (const edge of drawable) {
@@ -544,29 +409,15 @@ function layoutEdges(
 
     const start = boundaryPoint(from, to.x, to.y);
     const end = boundaryPoint(to, from.x, from.y);
-    const labelX = (start.x + end.x) / 2;
-    const labelY = (start.y + end.y) / 2;
-    const segment = Math.hypot(end.x - start.x, end.y - start.y);
-    const labelMaxWidth = availableLabelWidth(labelX, labelY, Math.min(maxRelationLabelWidth, segment - 14), reserved, width);
-
-    if (labelMaxWidth > 0) {
-      reserved.push(boxAround(labelX, labelY, labelMaxWidth, relationLabelHeight));
-    }
 
     laidOut.push({
       from: from.concept,
       to: to.concept,
-      relation: edge.relation,
       weight: edge.weight,
       x1: start.x,
       y1: start.y,
       x2: end.x,
-      y2: end.y,
-      labelX,
-      labelY,
-      labelMaxWidth,
-      labelHeight: relationLabelHeight,
-      fontSize: relationFontSize
+      y2: end.y
     });
   }
 
@@ -589,30 +440,6 @@ function boundaryPoint(node: ConceptMapNode, towardX: number, towardY: number): 
       : node.radius + 3;
 
   return { x: node.x + unitX * inset, y: node.y + unitY * inset };
-}
-
-/**
- * Widest caption that still clears every box already on the canvas. Symmetric
- * growth around the midpoint makes this a plain min over the blocking boxes.
- */
-function availableLabelWidth(midX: number, midY: number, cap: number, boxes: Box[], width: number): number {
-  let allowed = Math.min(cap, 2 * (midX - canvasMargin), 2 * (width - canvasMargin - midX));
-
-  for (const box of boxes) {
-    if (midY + relationLabelHeight / 2 + boxPadding <= box.top || midY - relationLabelHeight / 2 - boxPadding >= box.bottom) {
-      continue;
-    }
-
-    if (box.right <= midX) {
-      allowed = Math.min(allowed, 2 * (midX - box.right - boxPadding));
-    } else if (box.left >= midX) {
-      allowed = Math.min(allowed, 2 * (box.left - boxPadding - midX));
-    } else {
-      allowed = 0;
-    }
-  }
-
-  return allowed < minRelationLabelWidth ? 0 : allowed;
 }
 
 function boxAround(centerX: number, centerY: number, width: number, height: number): Box {

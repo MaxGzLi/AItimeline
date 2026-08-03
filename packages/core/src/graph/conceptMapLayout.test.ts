@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import type { KnowledgeGraphEdge } from "../types.js";
 import { estimateTextWidth, layoutConceptMap, type ConceptMapLayout } from "./conceptMapLayout.js";
 
 interface Box {
@@ -11,26 +10,6 @@ interface Box {
 
 function makeConcepts(count: number): string[] {
   return Array.from({ length: count }, (_, index) => `Concept ${index + 1}`);
-}
-
-function makeEdges(count: number, center = "Concept 1"): KnowledgeGraphEdge[] {
-  const relations: KnowledgeGraphEdge["relation"][] = [
-    "requires",
-    "extends",
-    "contrasts",
-    "applies",
-    "evaluates",
-    "summarizes"
-  ];
-
-  return Array.from({ length: count }, (_, index) => ({
-    id: `edge-${index + 1}`,
-    sourceConcept: center,
-    relation: relations[index % relations.length],
-    targetConcept: `Concept ${index + 2}`,
-    evidence: `Evidence ${index + 1}.`,
-    weight: 0.9 - index * 0.01
-  }));
 }
 
 const cjkConcepts = [
@@ -57,28 +36,9 @@ const longCjkConcepts = [
   "训练稳定性与损失尖峰"
 ];
 
-function starEdges(concepts: string[]): KnowledgeGraphEdge[] {
-  return concepts.slice(1).map((concept, index) => ({
-    id: `edge-${index + 1}`,
-    sourceConcept: concepts[0],
-    relation: "extends",
-    targetConcept: concept,
-    evidence: "证据。",
-    weight: 0.9 - index * 0.01
-  }));
-}
-
-function cjkEdges(): KnowledgeGraphEdge[] {
-  return starEdges(cjkConcepts);
-}
-
-function longCjkEdges(): KnowledgeGraphEdge[] {
-  return starEdges(longCjkConcepts);
-}
-
 /**
- * Every box the renderer is allowed to paint text into: concept labels, the
- * node dots they must not cover, and the room reserved for relation captions.
+ * Every box the renderer is allowed to paint text into: concept labels and the
+ * node dots they must not cover.
  */
 function collectBoxes(layout: ConceptMapLayout): Array<Box & { id: string }> {
   const boxes: Array<Box & { id: string }> = [];
@@ -101,20 +61,6 @@ function collectBoxes(layout: ConceptMapLayout): Array<Box & { id: string }> {
         bottom: node.y + node.radius
       });
     }
-  }
-
-  for (const edge of layout.edges) {
-    if (edge.labelMaxWidth <= 0) {
-      continue;
-    }
-
-    boxes.push({
-      id: `relation:${edge.from}->${edge.to}`,
-      left: edge.labelX - edge.labelMaxWidth / 2,
-      right: edge.labelX + edge.labelMaxWidth / 2,
-      top: edge.labelY - edge.labelHeight / 2,
-      bottom: edge.labelY + edge.labelHeight / 2
-    });
   }
 
   return boxes;
@@ -143,15 +89,14 @@ describe("layoutConceptMap", () => {
     const input = {
       postId: "post-stable",
       primaryConcept: "Concept 1",
-      concepts: makeConcepts(9),
-      graphEdges: makeEdges(8)
+      concepts: makeConcepts(9)
     };
 
     expect(layoutConceptMap(input)).toEqual(layoutConceptMap(input));
   });
 
   it("gives different posts different ring rotations", () => {
-    const shared = { primaryConcept: "Concept 1", concepts: makeConcepts(9), graphEdges: makeEdges(8) };
+    const shared = { primaryConcept: "Concept 1", concepts: makeConcepts(9) };
     const first = layoutConceptMap({ postId: "post-a", ...shared });
     const second = layoutConceptMap({ postId: "post-b", ...shared });
 
@@ -160,23 +105,16 @@ describe("layoutConceptMap", () => {
     );
   });
 
-  it("keeps every label clear of every other label, dot and relation caption", () => {
+  it("keeps every label clear of every other label and dot", () => {
     for (const count of [0, 1, 2, 8, 20]) {
       const concepts = makeConcepts(count);
-      const withEdges = layoutConceptMap({
-        postId: `post-edges-${count}`,
-        primaryConcept: concepts[0],
-        concepts,
-        graphEdges: makeEdges(Math.max(0, count - 1))
-      });
-      const withoutEdges = layoutConceptMap({
+      const layout = layoutConceptMap({
         postId: `post-spokes-${count}`,
         primaryConcept: concepts[0],
         concepts
       });
 
-      expect(findOverlap(withEdges), `graph edges, ${count} concepts`).toBeNull();
-      expect(findOverlap(withoutEdges), `concept spokes, ${count} concepts`).toBeNull();
+      expect(findOverlap(layout), `concept spokes, ${count} concepts`).toBeNull();
     }
   });
 
@@ -184,8 +122,7 @@ describe("layoutConceptMap", () => {
     const layout = layoutConceptMap({
       postId: "post-cjk",
       primaryConcept: cjkConcepts[0],
-      concepts: cjkConcepts,
-      graphEdges: cjkEdges()
+      concepts: cjkConcepts
     });
 
     expect(layout.degenerate).toBe(false);
@@ -198,8 +135,7 @@ describe("layoutConceptMap", () => {
       const layout = layoutConceptMap({
         postId: `post-${seed}`,
         primaryConcept: cjkConcepts[0],
-        concepts: cjkConcepts,
-        graphEdges: cjkEdges()
+        concepts: cjkConcepts
       });
 
       expect(findOverlap(layout), `seed ${seed}`).toBeNull();
@@ -216,7 +152,6 @@ describe("layoutConceptMap", () => {
         postId: `post-tight-${seed}`,
         primaryConcept: longCjkConcepts[0],
         concepts: longCjkConcepts,
-        graphEdges: longCjkEdges(),
         width: 420,
         height: 220
       });
@@ -239,8 +174,7 @@ describe("layoutConceptMap", () => {
     const layout = layoutConceptMap({
       postId: "post-truncate",
       primaryConcept: "Concept 1",
-      concepts,
-      graphEdges: makeEdges(20)
+      concepts
     });
     const peers = layout.nodes.slice(1);
 
@@ -248,7 +182,7 @@ describe("layoutConceptMap", () => {
     expect(layout.nodes[0].tier).toBe("center");
     expect(layout.nodes[0].concept).toBe("Concept 1");
     expect(peers.map((node) => node.weight)).toEqual([...peers.map((node) => node.weight)].sort((a, b) => b - a));
-    // The eight heaviest edges target Concept 2..9; nothing lighter may sneak in.
+    // The eight heaviest concepts are Concept 2..9; nothing lighter may sneak in.
     expect(peers.every((node) => concepts.slice(1, 9).includes(node.concept))).toBe(true);
   });
 
@@ -257,8 +191,7 @@ describe("layoutConceptMap", () => {
       layoutConceptMap({
         postId: `post-height-${peerCount}`,
         primaryConcept: "Concept 1",
-        concepts: makeConcepts(peerCount + 1),
-        graphEdges: makeEdges(peerCount)
+        concepts: makeConcepts(peerCount + 1)
       }).height;
 
     expect(heightFor(1)).toBe(160);
@@ -270,7 +203,6 @@ describe("layoutConceptMap", () => {
         postId: "post-height-explicit",
         primaryConcept: "Concept 1",
         concepts: makeConcepts(3),
-        graphEdges: makeEdges(2),
         width: 400,
         height: 300
       })
@@ -281,8 +213,7 @@ describe("layoutConceptMap", () => {
     const layout = layoutConceptMap({
       postId: "post-edges-only",
       primaryConcept: "Concept 1",
-      concepts: makeConcepts(21),
-      graphEdges: makeEdges(20)
+      concepts: makeConcepts(21)
     });
     const kept = new Set(layout.nodes.map((node) => node.concept));
 
@@ -293,18 +224,21 @@ describe("layoutConceptMap", () => {
     }
   });
 
-  it("returns relations verbatim", () => {
+  it("never puts a relation on an edge", () => {
     const layout = layoutConceptMap({
-      postId: "post-relations",
-      primaryConcept: "Concept 1",
-      concepts: makeConcepts(4),
-      graphEdges: makeEdges(3)
+      postId: "post-no-relations",
+      primaryConcept: cjkConcepts[0],
+      concepts: cjkConcepts
     });
 
-    expect(layout.edges.map((edge) => edge.relation).sort()).toEqual(["contrasts", "extends", "requires"]);
+    expect(layout.edges).toHaveLength(8);
+    for (const edge of layout.edges) {
+      expect(Object.keys(edge).sort()).toEqual(["from", "to", "weight", "x1", "x2", "y1", "y2"]);
+      expect("relation" in edge).toBe(false);
+    }
   });
 
-  it("falls back to a concept-only radial map with no relation labels", () => {
+  it("draws a radial map of the card's own concepts", () => {
     const layout = layoutConceptMap({
       postId: "post-spokes",
       primaryConcept: "Concept 1",
@@ -315,24 +249,17 @@ describe("layoutConceptMap", () => {
     expect(layout.nodes[0].concept).toBe("Concept 1");
     expect(layout.nodes).toHaveLength(5);
     expect(layout.edges).toHaveLength(4);
-    expect(layout.edges.every((edge) => edge.relation === undefined)).toBe(true);
     expect(layout.edges.every((edge) => edge.from === "Concept 1")).toBe(true);
   });
 
-  it("ignores unusable edges and falls back to the concept ring", () => {
+  it("skips blank and duplicate concepts", () => {
     const layout = layoutConceptMap({
-      postId: "post-bad-edges",
+      postId: "post-duplicates",
       primaryConcept: "Concept 1",
-      concepts: makeConcepts(3),
-      graphEdges: [
-        { sourceConcept: "  ", targetConcept: "Concept 2" },
-        { sourceConcept: "Concept 1", targetConcept: "concept 1" }
-      ]
+      concepts: ["Concept 1", "  ", "concept 1", "Concept 2", "Concept 2", "Concept 3"]
     });
 
-    expect(layout.degenerate).toBe(false);
-    expect(layout.nodes).toHaveLength(3);
-    expect(layout.edges.every((edge) => edge.relation === undefined)).toBe(true);
+    expect(layout.nodes.map((node) => node.concept)).toEqual(["Concept 1", "Concept 2", "Concept 3"]);
   });
 
   it("reports degenerate when there is nothing worth drawing", () => {
@@ -347,15 +274,14 @@ describe("layoutConceptMap", () => {
     }
   });
 
-  it("anchors on the busiest concept when the card's main concept is off the graph", () => {
+  it("falls back to the first usable concept when the card has no main concept", () => {
     const layout = layoutConceptMap({
-      postId: "post-off-graph",
-      primaryConcept: "Unrelated",
-      concepts: ["Unrelated", "Concept 1"],
-      graphEdges: makeEdges(3)
+      postId: "post-no-primary",
+      concepts: ["  ", "Concept 1", "Concept 2"]
     });
 
     expect(layout.nodes[0].concept).toBe("Concept 1");
+    expect(layout.nodes[0].tier).toBe("center");
   });
 
   it("centres what it drew inside the box", () => {
@@ -363,8 +289,7 @@ describe("layoutConceptMap", () => {
       const layout = layoutConceptMap({
         postId: `post-centred-${peerCount}`,
         primaryConcept: cjkConcepts[0],
-        concepts: cjkConcepts.slice(0, peerCount + 1),
-        graphEdges: cjkEdges().slice(0, peerCount)
+        concepts: cjkConcepts.slice(0, peerCount + 1)
       });
       const boxes = collectBoxes(layout);
       const left = Math.min(...boxes.map((box) => box.left));
@@ -381,8 +306,7 @@ describe("layoutConceptMap", () => {
     const layout = layoutConceptMap({
       postId: "post-bounds",
       primaryConcept: "Concept 1",
-      concepts: makeConcepts(9),
-      graphEdges: makeEdges(8)
+      concepts: makeConcepts(9)
     });
 
     for (const node of layout.nodes) {
