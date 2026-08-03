@@ -438,6 +438,46 @@ describe("anchor-style claim support", () => {
 
   // --- must now be accepted ---
 
+  it("treats the generic classifier 个 as bare counting", () => {
+    expect(
+      validateClaimSupport(
+        "KimiK3 的 MoE 有 898 个专家",
+        ["KimiK3 has 898 experts in total, and its MoE router selects 16 for each token."],
+        sourceFactOptions
+      ).supported
+    ).toBe(true);
+  });
+
+  it("still rejects a classifier count the evidence does not state", () => {
+    expect(
+      validateClaimSupport(
+        "KimiK3 的 MoE 有 999 个专家",
+        ["KimiK3 has 898 experts in total, and its MoE router selects 16 for each token."],
+        sourceFactOptions
+      ).supported
+    ).toBe(false);
+  });
+
+  it("recognizes halving as a stated decrease direction", () => {
+    expect(
+      validateClaimSupport(
+        "MoE 的压缩空间能降低计算量",
+        ["The MoE experts operate in a compressed latent space, which nearly halves the FLOPs."],
+        sourceFactOptions
+      ).supported
+    ).toBe(true);
+  });
+
+  it("does not treat the comparative 不如 as a negation", () => {
+    expect(
+      validateClaimSupport(
+        "ELU+1 的归一化不如 softmax 灵活",
+        ["Linear attention applies a feature map such as ELU+1, while softmax couples every query to every key."],
+        sourceFactOptions
+      ).supported
+    ).toBe(true);
+  });
+
   it("keeps big-O notation attached to its clause instead of tearing out a lone letter", () => {
     expect(
       validateClaimSupport(
