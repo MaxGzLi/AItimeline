@@ -1577,10 +1577,21 @@ function prepareSourceImportResultForPersistence(
   const acceptedImportPosts: KnowledgePost[] = [];
   const skippedPostIds = new Set<string>();
   const validationRejectedPostIds = new Set<string>();
+  const renamedPostIds = new Map<string, string>();
 
   for (const [index, post] of preparedResult.posts.entries()) {
     if (!shouldPersistImportedPost(preparedResult, post, index)) {
       validationRejectedPostIds.add(post.id);
+      continue;
+    }
+
+    const collidingPost = postsById.get(post.id);
+
+    // Re-importing the same source regenerates the same card, so replacing by id is right.
+    if (collidingPost && sharesSourceId(collidingPost, post)) {
+      postsById.set(post.id, post);
+      postsToSaveById.set(post.id, post);
+      acceptedImportPosts.push(post);
       continue;
     }
 
@@ -1605,29 +1616,45 @@ function prepareSourceImportResultForPersistence(
       continue;
     }
 
-    postsById.set(post.id, post);
-    postsToSaveById.set(post.id, post);
-    acceptedImportPosts.push(post);
+    // Models pick the card id themselves and reuse generic ones (`post-001`) across unrelated
+    // sources. Replacing by id destroyed the earlier card, so the newcomer gets a different id
+    // derived from its own sources: deterministic, so re-applying the same import stays idempotent.
+    const accepted = collidingPost ? { ...post, id: buildCollisionFreePostId(post, preparedResult) } : post;
+
+    if (accepted.id !== post.id) {
+      renamedPostIds.set(post.id, accepted.id);
+    }
+
+    postsById.set(accepted.id, accepted);
+    postsToSaveById.set(accepted.id, accepted);
+    acceptedImportPosts.push(accepted);
   }
 
   const removedPostIds = new Set([...skippedPostIds, ...validationRejectedPostIds]);
+  const renamePostId = (postId: string): string => renamedPostIds.get(postId) ?? postId;
+  const renameValidationPostId = <T extends { postId?: string }>(record: T): T =>
+    record.postId && renamedPostIds.has(record.postId) ? { ...record, postId: renamePostId(record.postId) } : record;
 
-  if (removedPostIds.size) {
+  if (removedPostIds.size || renamedPostIds.size) {
     preparedResult.posts = acceptedImportPosts;
 
     // Near-duplicate cards are represented by the merge record, while failed validation must
     // remain in the ledger for audit even though its post is refused.
-    if (skippedPostIds.size && Array.isArray(preparedResult.validation)) {
-      preparedResult.validation = preparedResult.validation.filter((record) => !record.postId || !skippedPostIds.has(record.postId));
+    if (Array.isArray(preparedResult.validation)) {
+      preparedResult.validation = preparedResult.validation
+        .filter((record) => !record.postId || !skippedPostIds.has(record.postId))
+        .map(renameValidationPostId);
     }
 
     if (preparedResult.harnessRun) {
       preparedResult.harnessRun = {
         ...preparedResult.harnessRun,
-        outputPostIds: preparedResult.harnessRun.outputPostIds.filter((postId) => !removedPostIds.has(postId)),
-        validation: preparedResult.harnessRun.validation.filter(
-          (record) => !record.postId || !skippedPostIds.has(record.postId)
-        )
+        outputPostIds: preparedResult.harnessRun.outputPostIds
+          .filter((postId) => !removedPostIds.has(postId))
+          .map(renamePostId),
+        validation: preparedResult.harnessRun.validation
+          .filter((record) => !record.postId || !skippedPostIds.has(record.postId))
+          .map(renameValidationPostId)
       };
     }
   }
@@ -1704,12 +1731,27 @@ function isAcceptedPersistenceValidation(validation: readonly HarnessValidationR
   );
 }
 
+function sharesSourceId(left: KnowledgePost, right: KnowledgePost): boolean {
+  const leftSourceIds = new Set(left.sources.map((source) => source.id));
+
+  return right.sources.some((source) => leftSourceIds.has(source.id));
+}
+
+function buildCollisionFreePostId(post: KnowledgePost, result: SourceImportWorkerResult): string {
+  const sourceIds = post.sources.length
+    ? post.sources.map((source) => source.id)
+    : [result.importRecord.source.id];
+
+  return `${post.id}-${hashText(sourceIds.slice().sort().join("|"))}`;
+}
+
+// Same-id candidates are kept in scope on purpose: a card colliding with an unrelated card is
+// re-id'd rather than replaced, so the collision must still be able to resolve as a content merge.
 function findNearDuplicatePost(
   post: KnowledgePost,
   candidates: KnowledgePost[]
 ): { post: KnowledgePost; similarity: number } | undefined {
   return candidates
-    .filter((candidate) => candidate.id !== post.id)
     .map((candidate) => ({
       post: candidate,
       similarity: scorePostLexicalSimilarity(post, candidate)
