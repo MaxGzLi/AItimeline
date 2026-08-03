@@ -753,10 +753,12 @@ function hasOrderedLexicalSupport(claim: string, evidence: string): boolean {
 }
 
 function splitSupportClauses(value: string): string[] {
-  // A number-only parenthetical ("GPT-2 (2019)", "growth (22,580x)") is an
-  // appositive label for its host, not an independent claim; keep it attached.
-  // Worded parentheticals still split so factual continuations need their own support.
-  const glued = value.replace(/[(（]\s*(\d[\d,.\s%×xX+\-]*)\s*[)）]/gu, " $1 ");
+  // A short single-token parenthetical — a number ("GPT-2 (2019)", "growth
+  // (22,580x)") or a notation fragment ("O(N)", "O(N²)") — is an appositive
+  // label for its host, not an independent claim; keep it attached. Worded
+  // parentheticals (they contain spaces) still split so factual continuations
+  // need their own support.
+  const glued = value.replace(/[(（]\s*([^\s()（）]{1,10})\s*[)）]/gu, " $1 ");
 
   return Array.from(new Intl.Segmenter(undefined, { granularity: "sentence" }).segment(glued))
     .flatMap((entry) => expandSharedPredicateCoordination(entry.segment))
@@ -1125,7 +1127,9 @@ function findUnsupportedProperNouns(claim: string, evidence: readonly string[]):
   ]);
   const matches = Array.from(claim.matchAll(/\b(?:[A-Z]{2,}[A-Z0-9]*|[A-Z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*)\b/g));
   const candidates = matches
-    .filter((match) => !isSentenceCasedCommonWord(claim, match))
+    // A lone capital letter is a math-notation fragment (the O in O(N)), not an
+    // entity name; requiring evidence for it only produces noise.
+    .filter((match) => match[0].length >= 2 && !isSentenceCasedCommonWord(claim, match))
     .map((match) => match[0]);
 
   return Array.from(

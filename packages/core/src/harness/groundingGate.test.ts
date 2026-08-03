@@ -438,6 +438,16 @@ describe("anchor-style claim support", () => {
 
   // --- must now be accepted ---
 
+  it("keeps big-O notation attached to its clause instead of tearing out a lone letter", () => {
+    expect(
+      validateClaimSupport(
+        "KV cache 让内存按 O(N) 增长",
+        ["The KV cache memory grows as O(N) with sequence length, increasing at every step."],
+        sourceFactOptions
+      ).supported
+    ).toBe(true);
+  });
+
   it("does not treat Latin connectives in CJK prose as anchors", () => {
     expect(
       validateClaimSupport(
