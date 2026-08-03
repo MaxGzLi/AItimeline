@@ -372,6 +372,11 @@ assert.match(
   /Source fact does not overlap enough with cited evidence/,
   "repair prompt should include the weak overlap validation issue"
 );
+assert.match(
+  overlapRepairPrompt,
+  /citing the chunk that actually names the term/,
+  "repair prompt should teach citation retargeting for missing entities and terms"
+);
 assert.equal(overlapRepairResult.run.status, "succeeded", "source-fact overlap repair output should pass");
 assert.equal(overlapRepairResult.posts.length, 1, "source-fact overlap repair should keep the repaired post");
 

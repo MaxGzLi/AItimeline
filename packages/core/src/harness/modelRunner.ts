@@ -184,6 +184,8 @@ function buildInitialMessages(
         "- Every post must include citations with registered sourceId and chunkId values.",
         "- Source facts must be supported by cited chunks; do not invent claims outside the source.",
         "- Every numeric token in source-fact fields must appear verbatim in that card's cited chunks. Digits inside names count (GPT-4o contains 4, Claude-3.5 contains 3.5): if a cited chunk does not contain the token, do not write it.",
+        "- Every proper noun and technical term in a claim must appear in a chunk that same claim cites. When a claim names an entity (Linear Attention, DeltaNet, KV cache), cite the chunk that names it; if none of the claim's cited chunks contain the term, do not write it.",
+        "- Only claim an increase or decrease when a cited chunk states that direction in words (grows, drops, higher, 增长, 下降...); if the evidence states a comparison without direction words, mirror the evidence's wording instead of adding a direction.",
         "- Each thread must include explain, example, contrast, extension, and quiz blocks.",
         ...formatThreadDepthRequirements(contentLanguage),
         "- Use graphEdges for durable concept links that can power review and recommendation.",
@@ -200,6 +202,8 @@ function buildInitialMessages(
         "- Every post must include citations with registered sourceId and chunkId values.",
         "- Source facts must be supported by cited chunks; do not invent claims outside the source.",
         "- Every numeric token in source-fact fields must appear verbatim in that card's cited chunks. Digits inside names count (GPT-4o contains 4, Claude-3.5 contains 3.5): if a cited chunk does not contain the token, do not write it.",
+        "- Every proper noun and technical term in a claim must appear in a chunk that same claim cites. When a claim names an entity (Linear Attention, DeltaNet, KV cache), cite the chunk that names it; if none of the claim's cited chunks contain the term, do not write it.",
+        "- Only claim an increase or decrease when a cited chunk states that direction in words (grows, drops, higher, 增长, 下降...); if the evidence states a comparison without direction words, mirror the evidence's wording instead of adding a direction.",
         "- Each thread must include explain, example, contrast, extension, and quiz blocks.",
         ...formatThreadDepthRequirements(contentLanguage),
         "- Use graphEdges for durable concept links that can power review and recommendation.",
@@ -319,6 +323,18 @@ function buildRepairPrompt(
           : "For weak source-fact overlap: when rewriting the failing field, keep key English terms and numbers from the cited chunks verbatim as anchors (method names, model names, metric names, etc.), then organize the Simplified Chinese wording around those anchors. Do not use a pure-Chinese paraphrase for source facts."
       ]
     : [];
+  const entityGuidance = hasUnsupportedEntityValidationError(validation)
+    ? [
+        "",
+        "For proper nouns or technical terms missing from cited evidence: every named entity and technical term in a claim must literally appear in a chunk that same claim cites. Fix it by citing the chunk that actually names the term (change or add the citation), or by dropping the term from that claim. Never keep a name that none of the claim's cited chunks mention."
+      ]
+    : [];
+  const directionGuidance = hasDirectionValidationError(validation)
+    ? [
+        "",
+        "For direction mismatches: the claim asserts an increase or decrease that its cited chunks never state in words. Either cite the chunk that states the direction, or rewrite the claim to mirror the evidence's own comparison wording without adding a direction."
+      ]
+    : [];
 
   return [
     "The previous JSON response failed the AITimeline harness.",
@@ -327,6 +343,8 @@ function buildRepairPrompt(
     ...truncationGuidance,
     ...numberGuidance,
     ...overlapGuidance,
+    ...entityGuidance,
+    ...directionGuidance,
     "",
     "Validation issues:",
     JSON.stringify(
@@ -362,6 +380,20 @@ function hasNumberMismatchValidationError(validation: readonly HarnessValidation
 function hasSourceFactOverlapValidationError(validation: readonly HarnessValidationResult[]): boolean {
   return validation.some((result) =>
     result.issues.some((issue) => /Source fact does not overlap enough with cited evidence/i.test(issue.message))
+  );
+}
+
+function hasUnsupportedEntityValidationError(validation: readonly HarnessValidationResult[]): boolean {
+  return validation.some((result) =>
+    result.issues.some((issue) =>
+      /(?:proper nouns|technical terms) that do not appear in cited evidence/i.test(issue.message)
+    )
+  );
+}
+
+function hasDirectionValidationError(validation: readonly HarnessValidationResult[]): boolean {
+  return validation.some((result) =>
+    result.issues.some((issue) => /uses an? (?:increase|decrease).+direction that does not match/i.test(issue.message))
   );
 }
 
