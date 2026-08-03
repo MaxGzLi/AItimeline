@@ -18,6 +18,7 @@ import { formatConnectionKind, formatDaysAgo, formatRelativeTime, getAgentInitia
 import { t } from "../lib/i18n";
 import { renderMathInText } from "../lib/math";
 import { renderWithWikilinks } from "../lib/wikilinks";
+import { ConceptMapFigure } from "./ConceptMapFigure";
 import { PostReplyThread } from "./PostReplyThread";
 import { ShareCardModal } from "./ShareCardModal";
 import type { WikilinkAutocompleteCandidate } from "./WikilinkAutocomplete";
@@ -469,7 +470,11 @@ export function PostView({
             >
               <img alt={leadMedia.caption} loading="lazy" src={resolveMediaUrl(leadMedia.url)} />
             </a>
-          ) : null}
+          ) : (
+            // No source image: the card's own concept graph takes the media slot,
+            // and ConceptMapFigure keeps the card text-only when there is no graph.
+            <ConceptMapFigure card={card} />
+          )}
 
           <div className="x-tags">
             {card.concepts.slice(0, 3).map((concept) => (

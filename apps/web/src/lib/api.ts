@@ -184,3 +184,12 @@ export function getCardMedia(card: unknown): CardMediaItem[] {
 export function resolveMediaUrl(url: string): string {
   return url.startsWith("/") ? `${apiBaseUrl}${url}` : url;
 }
+
+/** Concept labels as the timeline hands them over (older snapshots may omit them). */
+export function getCardConcepts(card: unknown): string[] {
+  if (!isRecord(card) || !Array.isArray(card.concepts)) {
+    return [];
+  }
+
+  return card.concepts.filter((concept): concept is string => typeof concept === "string");
+}

@@ -650,6 +650,27 @@ body:has(.x-frame) {
   max-height: 440px;
   object-fit: cover;
 }
+/* 概念图占媒体位:同宽同圆角同边框,但底色跟主题走(原文图才强制白底,知识图是自己画的)。 */
+.x-diagram {
+  display: block;
+  margin: 4px 0 12px;
+  border: 1px solid var(--x-line);
+  border-radius: 16px;
+  overflow: hidden;
+  background: var(--x-module);
+}
+.x-diagram svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.x-dgedge { stroke: var(--x-muted); stroke-opacity: 0.45; stroke-width: 1; }
+.x-dgdot { fill: var(--x-muted); }
+.x-dgnode { fill: var(--x-ink); }
+/* 中心概念:描边与字重比周边重一档,别的什么都不加。 */
+.x-dgchip { fill: var(--x-bg); stroke: var(--x-ink); stroke-width: 1; }
+.x-dgcenter { fill: var(--x-ink); font-weight: 700; }
+
 /* 有图卡让文字贴住图、整体收紧;无图卡多留一档行距与段后空,两种节奏在信息流里交错。 */
 .x-post.has-media .x-title { margin-bottom: 3px; }
 .x-post.has-media .x-body { margin-bottom: 4px; }
