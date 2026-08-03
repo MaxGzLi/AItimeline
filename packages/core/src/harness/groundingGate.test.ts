@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { KnowledgePost, SourceRegistry } from "../types.js";
+import type { KnowledgePost, KnowledgeThreadBlock, SourceRegistry } from "../types.js";
 import {
   isConceptPolarityCompatibleWithText,
   normalizedConceptAppearsInText,
@@ -219,6 +219,13 @@ describe("concept word-form tolerance", () => {
     expect(normalizedConceptAppearsInText(concept, evidence)).toBe(true);
   });
 
+  it("matches a name the evidence only writes in possessive form", () => {
+    expect(normalizedConceptAppearsInText("Schlag", "Eloquently put by Schlag’s paper (Fast Weight Programmers)")).toBe(
+      true
+    );
+    expect(normalizedConceptAppearsInText("Schlag", "Eloquently put by Sutskever's paper")).toBe(false);
+  });
+
   it("matches a plural concept against its singular in the evidence", () => {
     expect(normalizedConceptAppearsInText("Agents", "An agent plans and acts.")).toBe(true);
     expect(normalizedConceptAppearsInText("Policies", "The routing policy is learned.")).toBe(true);
@@ -347,6 +354,41 @@ describe("concept grounding scope and severity", () => {
 
     expect(conceptStatus(post, makeRegistry(evidence), true)).toBe("warning");
     expect(conceptStatus(post, makeRegistry(evidence), false)).toBe("failed");
+  });
+
+  // A thread block's own citations used to be checked for quote authenticity and
+  // then ignored as evidence, so a block citing exactly the chunk that names its
+  // entity was still graded against the card-level citations alone.
+  it("grounds a thread block claim in the chunk that block cites", () => {
+    const contents = ["RAG improves retrieval quality.", "ReAct loops let an agent plan before acting."];
+    const evidence = "RAG improves retrieval quality.";
+    const blockClaim = "ReAct loops let an agent plan before acting.";
+    const withBlockCitation = (citations: KnowledgeThreadBlock["citations"]): KnowledgePost => ({
+      ...makePost(evidence),
+      thread: [
+        {
+          id: "thread-1",
+          kind: "explain",
+          title: "ReAct",
+          body: blockClaim,
+          grounded: true,
+          citations
+        }
+      ]
+    });
+    const blockStatus = (post: KnowledgePost): string | undefined =>
+      validateGrounding(post, makeMultiChunkRegistry(contents)).checks.find(
+        (check) => check.fieldPath === "$.thread[0].body"
+      )?.status;
+
+    expect(
+      blockStatus(
+        withBlockCitation([
+          { sourceId: source.id, sourceTitle: source.title, chunkId: "chunk-2", quote: blockClaim }
+        ])
+      )
+    ).toBe("passed");
+    expect(blockStatus(withBlockCitation(undefined))).toBe("failed");
   });
 });
 
@@ -645,5 +687,88 @@ describe("anchor-style claim support", () => {
       validateClaimSupport("Aspirin guarantees immortality", ["Aspirin can reduce ordinary pain."], sourceFactOptions)
         .supported
     ).toBe(true);
+  });
+
+  // --- cross-script evidence scope ---
+
+  it("finds a number anywhere in the citation when claim and evidence use different scripts", () => {
+    expect(
+      validateClaimSupport(
+        "其中 2 个共享处理所有 token",
+        ["KimiK3 has 898 experts in total. Two are shared and process every token; of the remaining 896, the router selects 16 for each token."],
+        sourceFactOptions
+      ).supported
+    ).toBe(true);
+  });
+
+  it("still rejects a number the cross-script citation never states", () => {
+    expect(
+      validateClaimSupport(
+        "每个 token 只经过 18 个专家",
+        ["KimiK3 has 898 experts in total. Two are shared and process every token; of the remaining 896, the router selects 16 for each token."],
+        sourceFactOptions
+      ).supported
+    ).toBe(false);
+  });
+
+  it("keeps numbers clause-local when claim and evidence share a script", () => {
+    expect(
+      validateClaimSupport("Revenue increased 5%.", ["Revenue increased 9%, costs decreased 5%."], {
+        minOverlap: 0.08,
+        minimumSharedTokens: 2,
+        supportMode: "anchors"
+      }).supported
+    ).toBe(false);
+    expect(
+      validateClaimSupport("营收增长了 5%。", ["营收增长了 9%，成本下降了 5%。"], {
+        minOverlap: 0.08,
+        minimumSharedTokens: 2,
+        supportMode: "anchors"
+      }).supported
+    ).toBe(false);
+  });
+
+  it("judges cross-script polarity against the whole citation, not one clause", () => {
+    // "avoids that redundant work" sits in a different clause than the one the
+    // overlap picks, and is the negative statement the claim restates.
+    expect(
+      validateClaimSupport(
+        "生成时就不用重算前面所有 token 的投影",
+        ["The model would otherwise recompute projections for all previous tokens. Storing their key and value vectors avoids that redundant work."],
+        sourceFactOptions
+      ).supported
+    ).toBe(true);
+  });
+
+  it("still rejects a negated claim when nothing in the cross-script citation is negative", () => {
+    expect(
+      validateClaimSupport(
+        "KV cache 不会保存历史 token 的向量",
+        ["That storage is the KV cache. It retains vectors for the previous tokens."],
+        sourceFactOptions
+      ).supported
+    ).toBe(false);
+  });
+
+  // --- hypotheses ---
+
+  it("does not compare a hypothesis's polarity with the evidence", () => {
+    expect(
+      validateClaimSupport(
+        "如果 DeltaNet 无法清除旧记忆会怎样",
+        ["DeltaNet implements a first-order linear recurrence over the cache."],
+        sourceFactOptions
+      ).supported
+    ).toBe(true);
+  });
+
+  it("still holds a hypothesis to its entities", () => {
+    expect(
+      validateClaimSupport(
+        "如果 Mamba 无法清除旧记忆会怎样",
+        ["DeltaNet implements a first-order linear recurrence over the cache."],
+        sourceFactOptions
+      ).supported
+    ).toBe(false);
   });
 });

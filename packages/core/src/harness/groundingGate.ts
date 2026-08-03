@@ -109,7 +109,9 @@ export function validateGrounding(
   const citationIssues = validateCitationsAgainstRegistry(post.citations, registry);
   const threadCitationIssues = validateThreadCitationQuotes(post, registry);
   const claims = createSourceClaims(post);
-  const checks = claims.map((claim) => validateClaimGrounding(claim, post, registry, post.citations, gateOptions));
+  const checks = claims.map((claim) =>
+    validateClaimGrounding(claim, post, registry, resolveClaimCitations(post, claim.fieldPath), gateOptions)
+  );
   const checkIssues = checks.flatMap((check) => checkToIssues(check));
   const issues = [...citationIssues, ...threadCitationIssues, ...checkIssues];
 
@@ -119,6 +121,27 @@ export function validateGrounding(
     checks,
     issues
   };
+}
+
+// A thread block carries its own citations, and they were never used as evidence:
+// every block was graded against the card-level list alone, so a block that
+// correctly cited the chunk naming its entity still failed on that entity. A
+// block's evidence is the card's citations plus its own — the card's citations
+// carry the shared subject, the block's carry what that block adds.
+function resolveClaimCitations(post: KnowledgePost, fieldPath: string): Citation[] | undefined {
+  const blockIndex = Number(fieldPath.match(/^\$\.thread\[(\d+)\]\./)?.[1]);
+  const blockCitations = Number.isInteger(blockIndex) ? post.thread[blockIndex]?.citations : undefined;
+
+  if (!blockCitations?.length) {
+    return post.citations;
+  }
+
+  const cited = new Set((post.citations ?? []).map((citation) => `${citation.sourceId}::${citation.chunkId}`));
+
+  return [
+    ...(post.citations ?? []),
+    ...blockCitations.filter((citation) => !cited.has(`${citation.sourceId}::${citation.chunkId}`))
+  ];
 }
 
 export function createSourceClaims(post: KnowledgePost): SourceClaim[] {
@@ -603,7 +626,17 @@ function validateSingleClaimSupport(
   const candidates = evidence.flatMap(splitEvidenceCandidates);
   const bestEvidence = selectBestEvidenceCandidate(claim, candidates);
   const overlapScore = bestEvidence ? calculateOverlapScore(claim, bestEvidence) : 0;
-  const localEvidence = bestEvidence ? [bestEvidence] : evidence;
+  // Clause-local number checking assumes the closest candidate really is the
+  // aligned sentence. Across scripts there is nothing to align on — a Chinese
+  // clause shares at most a Latin term with its English source sentence — so the
+  // selected clause is close to arbitrary and locality rejects true restatements
+  // ("其中 2 个共享处理所有 token" vs "Two are shared and process every token").
+  // When claim and candidate are written in different scripts, numbers fall back
+  // to the whole cited evidence. Accepted cost: a cross-language claim can pair a
+  // number with the wrong subject inside the same citation; same-script claims
+  // keep the strict clause-local rule that blocks borrowed numbers.
+  const numericEvidence =
+    bestEvidence && !isCrossScriptPair(claim, bestEvidence) ? [bestEvidence] : evidence;
   const claimTokens = Array.from(new Set(tokenize(claim)));
   const evidenceTokens = new Set(tokenize(bestEvidence ?? ""));
   const sharedTokenCount = claimTokens.filter((token) => evidenceTokens.has(token)).length;
@@ -611,7 +644,7 @@ function validateSingleClaimSupport(
   const candidateWasRecalled = sharedTokenCount >= Math.max(1, minimumSharedTokens);
   const claimHasPolarityCue =
     hasNegation(claim) || collectDirections(claim).size > 0 || extractNumericTokens(claim).length > 0;
-  const ungroundedNumbers = findUngroundedNumericTokens(claim, localEvidence);
+  const ungroundedNumbers = findUngroundedNumericTokens(claim, numericEvidence);
 
   if (ungroundedNumbers.length) {
     return {
@@ -648,8 +681,17 @@ function validateSingleClaimSupport(
     (options.checkNegation ?? true) &&
     bestEvidence &&
     candidateWasRecalled &&
+    !isHypotheticalClause(claim) &&
     (!(options.requireClaimPolarityCue ?? false) || claimHasPolarityCue) &&
-    hasNegationMismatch(claim, bestEvidence)
+    (isCrossScriptPair(claim, bestEvidence)
+      ? // Across scripts the overlap-selected clause is not the aligned sentence
+        // (the negative word can sit in a neighbouring clause: "…avoids that
+        // redundant work"), so polarity is judged against the citation as a
+        // whole — a negated claim is rejected only when nothing in the cited
+        // evidence is negative at all. Weaker than the same-script check by
+        // design; reversals inside otherwise-negative evidence get through.
+        hasNegation(claim) && !evidence.some((text) => hasNegation(text))
+      : hasNegationMismatch(claim, bestEvidence))
   ) {
     return {
       supported: false,
@@ -872,6 +914,12 @@ function findUnsupportedClaimAnchors(
 // ("GQA vs MQA 的差异") — glue, not technical terms, so never anchors.
 const cjkLatinConnectives = new Set(["vs", "etc", "eg", "ie", "aka"]);
 
+const cjkScriptPattern = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+
+function isCrossScriptPair(claim: string, evidence: string): boolean {
+  return cjkScriptPattern.test(claim) !== cjkScriptPattern.test(evidence);
+}
+
 function findUngroundedNumericTokens(claim: string, evidence: readonly string[]): string[] {
   const claimNumbers = extractNumericTokens(claim);
 
@@ -1057,7 +1105,22 @@ function collectDirections(value: string): Set<"increase" | "decrease"> {
 function hasNegation(value: string): boolean {
   const normalized = value.normalize("NFKC").toLowerCase();
 
-  return /\b(?:no|not|never|without|cannot|can't|doesn't|didn't|isn't|aren't|wasn't|weren't|won't)\b|不(?!如|同|过|断|错)|未|并非|并不|(?<!如果|若|假如)没有|无法/u.test(normalized);
+  return /\b(?:no|not|never|without|cannot|can't|doesn't|didn't|isn't|aren't|wasn't|weren't|won't)\b|不(?!如|同|过|断|错)|未|并非|并不|(?<!如果|若|假如)没有|无法/u.test(normalized) ||
+    avoidancePattern.test(normalized);
+}
+
+// "Storing their key and value vectors avoids that redundant work" is a negative
+// statement written with a positive verb; a faithful restatement ("生成时就不用
+// 重算") reads as negated and used to fail the polarity check. Both sides use the
+// same list, so a claim that invents an avoidance still needs evidence for it.
+const avoidancePattern =
+  /\b(?:avoids?|avoided|avoiding|prevents?|prevented|preventing|eliminates?|eliminated|eliminating)\b|避免|无需|免去|省去/u;
+
+// A hypothesis ("如果 X 无法 Y 会怎样") belongs to the quiz or scenario block, not
+// to the source: its polarity is the question's own, so it is not compared with
+// the evidence's. Entities, numbers and technical terms in it are still checked.
+function isHypotheticalClause(claim: string): boolean {
+  return /^(?:如果|若|假如|倘若|万一|要是|假设|设想)|^(?:if|suppose|imagine|what\s+if)\b/iu.test(claim.trim());
 }
 
 function hasNegationMismatch(claim: string, evidence: string): boolean {
@@ -1484,7 +1547,11 @@ function segmentComparableWords(value: string): string[] {
     new Intl.Segmenter(undefined, { granularity: "word" }).segment(value.normalize("NFKC").replace(/_+/g, " "))
   )
     .filter((entry) => entry.isWordLike)
-    .map((entry) => entry.segment.toLowerCase());
+    // Word segmentation keeps a possessive attached ("Schlag’s" is one token), so
+    // an entity named in the source only in possessive form looked absent. Both
+    // sides are stripped the same way, straight and curly apostrophes alike.
+    .map((entry) => entry.segment.toLowerCase().replace(/[’']s$|[’']$/u, ""))
+    .filter(Boolean);
 }
 
 function normalizeCaptionForComparison(value: string): string {

@@ -184,10 +184,11 @@ function buildInitialMessages(
         "- Every post must include citations with registered sourceId and chunkId values.",
         "- Source facts must be supported by cited chunks; do not invent claims outside the source.",
         "- Every numeric token in source-fact fields must appear verbatim in that card's cited chunks. Digits inside names count (GPT-4o contains 4, Claude-3.5 contains 3.5): if a cited chunk does not contain the token, do not write it.",
-        "- Every proper noun and technical term in a claim must appear in a chunk that same claim cites. When a claim names an entity (Linear Attention, DeltaNet, KV cache), cite the chunk that names it; if none of the claim's cited chunks contain the term, do not write it.",
+        "- Every proper noun and technical term in a claim must appear in a chunk that same claim cites. A thread block is checked against the card's citations plus that block's own citations, so before finishing a block, scan its text for proper nouns and Latin technical terms: each one must appear in a chunk the card cites or that block cites. If it does not, add a citation for the chunk that contains it (a block may cite several chunks) or drop the term.",
+        "- reviewPrompts and graphEdges carry no citations of their own and are checked against the card-level citations only: keep them to terms and numbers that appear in the chunks the card cites.",
         "- Only claim an increase or decrease when a cited chunk states that direction in words (grows, drops, higher, 增长, 下降...); if the evidence states a comparison without direction words, mirror the evidence's wording instead of adding a direction.",
         "- Example and quiz blocks follow the same rules: build worked examples from numbers and terms that appear in the chunks that block cites, or keep them free of specific figures (\"几个 token\" instead of \"3 个 token\"). Never invent toy numbers.",
-        "- When bridging to the learner's prior knowledge (\"你之前了解过 X\"), only name concepts that literally appear in the chunks that block cites. If the learner's related concept is not in this source, describe the connection without naming it.",
+        "- The prior-knowledge bridge (\"你之前了解过 X\") may name X only when X appears in a chunk the card or that block cites. The learner's other known concepts are not in this source: bridge to them without naming them (\"你之前接触过类似的机制\").",
         "- Each thread must include explain, example, contrast, extension, and quiz blocks.",
         ...formatThreadDepthRequirements(contentLanguage),
         "- Use graphEdges for durable concept links that can power review and recommendation.",
@@ -204,10 +205,11 @@ function buildInitialMessages(
         "- Every post must include citations with registered sourceId and chunkId values.",
         "- Source facts must be supported by cited chunks; do not invent claims outside the source.",
         "- Every numeric token in source-fact fields must appear verbatim in that card's cited chunks. Digits inside names count (GPT-4o contains 4, Claude-3.5 contains 3.5): if a cited chunk does not contain the token, do not write it.",
-        "- Every proper noun and technical term in a claim must appear in a chunk that same claim cites. When a claim names an entity (Linear Attention, DeltaNet, KV cache), cite the chunk that names it; if none of the claim's cited chunks contain the term, do not write it.",
+        "- Every proper noun and technical term in a claim must appear in a chunk that same claim cites. A thread block is checked against the card's citations plus that block's own citations, so before finishing a block, scan its text for proper nouns and Latin technical terms: each one must appear in a chunk the card cites or that block cites. If it does not, add a citation for the chunk that contains it (a block may cite several chunks) or drop the term.",
+        "- reviewPrompts and graphEdges carry no citations of their own and are checked against the card-level citations only: keep them to terms and numbers that appear in the chunks the card cites.",
         "- Only claim an increase or decrease when a cited chunk states that direction in words (grows, drops, higher, 增长, 下降...); if the evidence states a comparison without direction words, mirror the evidence's wording instead of adding a direction.",
         "- Example and quiz blocks follow the same rules: build worked examples from numbers and terms that appear in the chunks that block cites, or keep them free of specific figures (\"几个 token\" instead of \"3 个 token\"). Never invent toy numbers.",
-        "- When bridging to the learner's prior knowledge (\"你之前了解过 X\"), only name concepts that literally appear in the chunks that block cites. If the learner's related concept is not in this source, describe the connection without naming it.",
+        "- The prior-knowledge bridge (\"你之前了解过 X\") may name X only when X appears in a chunk the card or that block cites. The learner's other known concepts are not in this source: bridge to them without naming them (\"你之前接触过类似的机制\").",
         "- Each thread must include explain, example, contrast, extension, and quiz blocks.",
         ...formatThreadDepthRequirements(contentLanguage),
         "- Use graphEdges for durable concept links that can power review and recommendation.",
@@ -330,7 +332,7 @@ function buildRepairPrompt(
   const entityGuidance = hasUnsupportedEntityValidationError(validation)
     ? [
         "",
-        "For proper nouns or technical terms missing from cited evidence: every named entity and technical term in a claim must literally appear in a chunk that same claim cites. Fix it by citing the chunk that actually names the term (change or add the citation), or by dropping the term from that claim. Never keep a name that none of the claim's cited chunks mention."
+        "For proper nouns or technical terms missing from cited evidence: every named entity and technical term in a claim must literally appear in a chunk that same claim cites. The issue path tells you where to add the citation — a $.thread[i] path is checked against the card's citations plus thread[i].citations, so add the chunk that names the term to that block's citations (with a verbatim quote from it); a $.summary, $.keyTakeaway, $.graphEdges or $.reviewPrompts path is checked against the card-level citations, so add the chunk there. If the source has no chunk naming the term, drop the term from that claim."
       ]
     : [];
   const directionGuidance = hasDirectionValidationError(validation)

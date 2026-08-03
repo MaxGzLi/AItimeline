@@ -374,7 +374,7 @@ assert.match(
 );
 assert.match(
   overlapRepairPrompt,
-  /citing the chunk that actually names the term/,
+  /add the chunk that names the term to that block's citations/,
   "repair prompt should teach citation retargeting for missing entities and terms"
 );
 assert.equal(overlapRepairResult.run.status, "succeeded", "source-fact overlap repair output should pass");
