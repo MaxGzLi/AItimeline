@@ -665,12 +665,8 @@ body:has(.x-frame) {
   height: auto;
 }
 .x-dgedge { stroke: var(--x-muted); stroke-opacity: 0.45; stroke-width: 1; }
-.x-dgarrow { fill: var(--x-muted); fill-opacity: 0.45; }
 .x-dgdot { fill: var(--x-muted); }
 .x-dgnode { fill: var(--x-ink); }
-/* 关系文案压在边上,垫一块与图底同色的板子把线断开。 */
-.x-dgplate { fill: var(--x-module); }
-.x-dgrel { fill: var(--x-muted); }
 /* 中心概念:描边与字重比周边重一档,别的什么都不加。 */
 .x-dgchip { fill: var(--x-bg); stroke: var(--x-ink); stroke-width: 1; }
 .x-dgcenter { fill: var(--x-ink); font-weight: 700; }
