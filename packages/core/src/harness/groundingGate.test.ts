@@ -505,6 +505,36 @@ describe("anchor-style claim support", () => {
     ).toBe(true);
   });
 
+  it("does not treat the lexicalized 不同 as a negation", () => {
+    expect(
+      validateClaimSupport(
+        "DeltaNet 则不同",
+        ["DeltaNet addresses this loss of recoverability with a different update."],
+        sourceFactOptions
+      ).supported
+    ).toBe(true);
+  });
+
+  it("does not treat a 如果没有 hypothetical as a negation claim", () => {
+    expect(
+      validateClaimSupport(
+        "如果没有 KV cache，每一步都要重算",
+        ["The KV cache stores key and value vectors so earlier steps are not recomputed."],
+        sourceFactOptions
+      ).supported
+    ).toBe(true);
+  });
+
+  it("recognizes decay as a stated decrease direction", () => {
+    expect(
+      validateClaimSupport(
+        "alpha 投影让模型控制记忆衰减",
+        ["We decay the previous cache through the alpha projection, then add the new cache at full strength."],
+        sourceFactOptions
+      ).supported
+    ).toBe(true);
+  });
+
   it("does not treat the comparative 不如 as a negation", () => {
     expect(
       validateClaimSupport(

@@ -773,7 +773,7 @@ function splitSupportClauses(value: string): string[] {
 }
 
 function expandSharedPredicateCoordination(value: string): string[] {
-  const directionPattern = /\b(?:increase[ds]?|increasing|rise[sn]?|rose|risen|rising|grow(?:s|th|ing)?|grew|higher|above|decrease[ds]?|decreasing|fall(?:s|en|ing)?|fell|drop(?:s|ped|ping)?|lower|below|reduce[ds]?|reducing|decline[ds]?|halv(?:e[sd]?|ing))\b|增加|增长|增幅|上升|提高|提升|上调|高于|超过|减少|下降|降低|减幅|下调|衰减|低于|下跌|减半/iu;
+  const directionPattern = /\b(?:increase[ds]?|increasing|rise[sn]?|rose|risen|rising|grow(?:s|th|ing)?|grew|higher|above|decrease[ds]?|decreasing|fall(?:s|en|ing)?|fell|drop(?:s|ped|ping)?|lower|below|reduce[ds]?|reducing|decline[ds]?|halv(?:e[sd]?|ing)|decay(?:s|ed|ing)?)\b|增加|增长|增幅|上升|提高|提升|上调|高于|超过|减少|下降|降低|减幅|下调|衰减|低于|下跌|减半/iu;
   const direction = directionPattern.exec(value);
 
   if (direction?.index === undefined || !extractNumericTokens(value.slice(direction.index)).length) {
@@ -1041,7 +1041,7 @@ function collectDirections(value: string): Set<"increase" | "decrease"> {
   const normalized = value.normalize("NFKC").toLowerCase();
   const directions = new Set<"increase" | "decrease">();
   const increasePattern = /\b(?:increase[ds]?|increasing|rise[sn]?|rose|risen|rising|grow(?:s|th|ing)?|grew|higher|above)\b|增加|增长|增幅|上升|提高|提升|上调|高于|超过/u;
-  const decreasePattern = /\b(?:decrease[ds]?|decreasing|fall(?:s|en|ing)?|fell|drop(?:s|ped|ping)?|lower|below|reduce[ds]?|reducing|decline[ds]?|halv(?:e[sd]?|ing))\b|减少|下降|降低|减幅|下调|衰减|低于|下跌|减半/u;
+  const decreasePattern = /\b(?:decrease[ds]?|decreasing|fall(?:s|en|ing)?|fell|drop(?:s|ped|ping)?|lower|below|reduce[ds]?|reducing|decline[ds]?|halv(?:e[sd]?|ing)|decay(?:s|ed|ing)?)\b|减少|下降|降低|减幅|下调|衰减|低于|下跌|减半/u;
 
   if (increasePattern.test(normalized)) {
     directions.add("increase");
@@ -1057,7 +1057,7 @@ function collectDirections(value: string): Set<"increase" | "decrease"> {
 function hasNegation(value: string): boolean {
   const normalized = value.normalize("NFKC").toLowerCase();
 
-  return /\b(?:no|not|never|without|cannot|can't|doesn't|didn't|isn't|aren't|wasn't|weren't|won't)\b|不(?!如)|未|并非|并不|没有|无法/u.test(normalized);
+  return /\b(?:no|not|never|without|cannot|can't|doesn't|didn't|isn't|aren't|wasn't|weren't|won't)\b|不(?!如|同|过|断|错)|未|并非|并不|(?<!如果|若|假如)没有|无法/u.test(normalized);
 }
 
 function hasNegationMismatch(claim: string, evidence: string): boolean {
@@ -1127,7 +1127,7 @@ function collectNegatedAnchors(value: string): string[] {
     }
   }
 
-  const chinesePattern = /(?:并非|并不|没有|无法|不(?!如)|未)([\p{Script=Han}]{1,12})/gu;
+  const chinesePattern = /(?:并非|并不|(?<!如果|若|假如)没有|无法|不(?!如|同|过|断|错)|未)([\p{Script=Han}]{1,12})/gu;
 
   for (const match of normalized.matchAll(chinesePattern)) {
     anchors.push(...tokenize(match[1] ?? "").slice(0, 1));
