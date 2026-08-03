@@ -37,6 +37,15 @@ export interface ClaimSupportOptions {
    *   knowledge-card gate, whose hook/metaphor/thread genre is paraphrase.
    */
   supportMode?: "ordered" | "anchors";
+  /**
+   * Quiz bodies enumerate deliberately wrong choices ("A. 增加容量；B. 减少
+   * 容量"). With this on, a clause that starts with an option marker (A.–E.)
+   * skips the direction and negation comparison — offering a choice asserts
+   * nothing about the source. Entities, numbers and Latin anchors inside the
+   * option are still checked. Enabled only for question-kind claims; the answer
+   * and its rationale are ordinary clauses and stay fully checked.
+   */
+  exemptChoiceOptionPolarity?: boolean;
 }
 
 export interface ClaimSupportResult {
@@ -405,7 +414,8 @@ function getClaimSupportOptions(
       // A question can still assert a false premise. If its recalled evidence
       // is negated, omitting that negation is a deterministic contradiction.
       requireClaimPolarityCue: false,
-      supportMode: "anchors"
+      supportMode: "anchors",
+      exemptChoiceOptionPolarity: true
     };
   }
 
@@ -577,9 +587,39 @@ export function validateClaimSupport(
   }
 
   let lowestOverlap = 1;
+  // Clause splitting severs polarity scopes that span clauses: an option marker
+  // from its text ("A. 增加容量" → "A." + "增加容量"), and a hypothesis from its
+  // consequent ("如果…，但发现内存不够" — the second clause no longer starts with
+  // 如果). Both are recovered here by locating each clause in the (glued)
+  // original: a clause preceded by an option marker, or inside a sentence that
+  // opened with a hypothesis marker, skips direction/negation comparison.
+  // Entities, numbers and anchors in it are still checked.
+  const glued = glueShortParentheticals(claim);
+  let cursor = 0;
+  let hypotheticalUntil = -1;
 
   for (const clause of claimClauses) {
-    const support = validateSingleClaimSupport(clause, evidenceClauses, options);
+    let clauseOptions = options;
+    const at = glued.indexOf(clause, cursor);
+
+    if (at >= 0) {
+      cursor = at + clause.length;
+
+      if (isHypotheticalClause(clause)) {
+        const terminator = glued.slice(at).search(/[。．！？!?]|\.(?=\s|$)/u);
+        hypotheticalUntil = terminator >= 0 ? at + terminator : glued.length;
+      }
+
+      const isOption =
+        (options.exemptChoiceOptionPolarity ?? false) &&
+        choiceOptionMarkerBefore.test(glued.slice(Math.max(0, at - 8), at));
+
+      if (isOption || at < hypotheticalUntil) {
+        clauseOptions = { ...options, checkDirection: false, checkNegation: false };
+      }
+    }
+
+    const support = validateSingleClaimSupport(clause, evidenceClauses, clauseOptions);
     lowestOverlap = Math.min(lowestOverlap, support.overlapScore);
 
     if (!support.supported) {
@@ -644,6 +684,7 @@ function validateSingleClaimSupport(
   const candidateWasRecalled = sharedTokenCount >= Math.max(1, minimumSharedTokens);
   const claimHasPolarityCue =
     hasNegation(claim) || collectDirections(claim).size > 0 || extractNumericTokens(claim).length > 0;
+  const isChoiceOption = (options.exemptChoiceOptionPolarity ?? false) && choiceOptionPattern.test(claim);
   const ungroundedNumbers = findUngroundedNumericTokens(claim, numericEvidence);
 
   if (ungroundedNumbers.length) {
@@ -655,7 +696,13 @@ function validateSingleClaimSupport(
     };
   }
 
-  if ((options.checkDirection ?? true) && bestEvidence && candidateWasRecalled) {
+  if (
+    (options.checkDirection ?? true) &&
+    !isChoiceOption &&
+    !isHypotheticalClause(claim) &&
+    bestEvidence &&
+    candidateWasRecalled
+  ) {
     const directionMismatch = findDirectionMismatch(claim, bestEvidence);
 
     if (directionMismatch) {
@@ -668,7 +715,7 @@ function validateSingleClaimSupport(
     }
   }
 
-  if ((options.checkNegation ?? true) && bestEvidence && hasScopedNegationOfClaim(claim, bestEvidence)) {
+  if ((options.checkNegation ?? true) && !isChoiceOption && bestEvidence && hasScopedNegationOfClaim(claim, bestEvidence)) {
     return {
       supported: false,
       overlapScore,
@@ -679,6 +726,7 @@ function validateSingleClaimSupport(
 
   if (
     (options.checkNegation ?? true) &&
+    !isChoiceOption &&
     bestEvidence &&
     candidateWasRecalled &&
     !isHypotheticalClause(claim) &&
@@ -794,13 +842,17 @@ function hasOrderedLexicalSupport(claim: string, evidence: string): boolean {
   return claimTokens.length > 0;
 }
 
+// A short single-token parenthetical — a number ("GPT-2 (2019)", "growth
+// (22,580x)") or a notation fragment ("O(N)", "O(N²)") — is an appositive
+// label for its host, not an independent claim; keep it attached. Worded
+// parentheticals (they contain spaces) still split so factual continuations
+// need their own support.
+function glueShortParentheticals(value: string): string {
+  return value.replace(/[(（]\s*([^\s()（）]{1,10})\s*[)）]/gu, " $1 ");
+}
+
 function splitSupportClauses(value: string): string[] {
-  // A short single-token parenthetical — a number ("GPT-2 (2019)", "growth
-  // (22,580x)") or a notation fragment ("O(N)", "O(N²)") — is an appositive
-  // label for its host, not an independent claim; keep it attached. Worded
-  // parentheticals (they contain spaces) still split so factual continuations
-  // need their own support.
-  const glued = value.replace(/[(（]\s*([^\s()（）]{1,10})\s*[)）]/gu, " $1 ");
+  const glued = glueShortParentheticals(value);
 
   return Array.from(new Intl.Segmenter(undefined, { granularity: "sentence" }).segment(glued))
     .flatMap((entry) => expandSharedPredicateCoordination(entry.segment))
@@ -1117,11 +1169,22 @@ const avoidancePattern =
   /\b(?:avoids?|avoided|avoiding|prevents?|prevented|preventing|eliminates?|eliminated|eliminating)\b|避免|无需|免去|省去/u;
 
 // A hypothesis ("如果 X 无法 Y 会怎样") belongs to the quiz or scenario block, not
-// to the source: its polarity is the question's own, so it is not compared with
-// the evidence's. Entities, numbers and technical terms in it are still checked.
+// to the source: its direction and negation are the question's own, so neither is
+// compared with the evidence's — for the whole hypothesis sentence, not just the
+// marker clause (validateClaimSupport widens the scope to the sentence end).
+// Entities, numbers and technical terms in it are still checked.
 function isHypotheticalClause(claim: string): boolean {
   return /^(?:如果|若|假如|倘若|万一|要是|假设|设想)|^(?:if|suppose|imagine|what\s+if)\b/iu.test(claim.trim());
 }
+
+// A multiple-choice option marker: "A. 增加容量", "B、…", "(C) …", "D：…".
+// Uppercase A–E only, and the marker must be followed by whitespace or CJK text
+// so "E.g." style abbreviations never read as options. The clause-start form
+// covers whole-claim validation; the look-behind form covers split clauses,
+// where the marker letter must itself follow a boundary ("列表A：" is a name,
+// not an option).
+const choiceOptionPattern = /^[(（]?\s*[A-E][.、．:：)）](?:\s|(?=[\p{Script=Han}]))/u;
+const choiceOptionMarkerBefore = /(?:^|[\s。．.！!？?；;：:，,、（()）])[A-E][.、．:：)）]\s*$/u;
 
 function hasNegationMismatch(claim: string, evidence: string): boolean {
   const claimIsNegated = hasNegation(claim);

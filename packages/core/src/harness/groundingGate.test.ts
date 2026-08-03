@@ -771,4 +771,83 @@ describe("anchor-style claim support", () => {
       ).supported
     ).toBe(false);
   });
+
+  it("exempts the whole hypothesis sentence, not just its marker clause", () => {
+    // "但发现…内存不够" is the hypothesis's own scenario; the negation belongs to
+    // the question, not to the source.
+    expect(
+      validateClaimSupport(
+        "如果你要处理超长序列，但发现 softmax 注意力内存不够，你会怎么做？",
+        ["Linear attention uses ELU+1, while softmax uses exponentiation."],
+        sourceFactOptions
+      ).supported
+    ).toBe(true);
+  });
+
+  it("resumes polarity checking after the hypothesis sentence ends", () => {
+    expect(
+      validateClaimSupport(
+        "如果状态超过容量，会互相干扰。Retrieval quality drops.",
+        ["Once the state exceeds its effective capacity, associations begin to interfere. Retrieval quality is measured."],
+        sourceFactOptions
+      ).supported
+    ).toBe(false);
+  });
+
+  // --- quiz choice options (user decision 2026-08-03: deterministic rule, no model) ---
+
+  const questionOptions = {
+    minOverlap: 1,
+    minimumSharedTokens: 1,
+    checkProperNouns: true,
+    checkDirection: true,
+    checkNegation: true,
+    requireClaimPolarityCue: false,
+    supportMode: "anchors",
+    exemptChoiceOptionPolarity: true
+  } as const;
+
+  it("does not compare a quiz option's direction or negation with the evidence", () => {
+    expect(
+      validateClaimSupport(
+        "你会优先考虑什么优化？A. 增加 KV Cache 的容量；B. 减少 KV Cache 的容量；C. 不用 KV Cache",
+        ["That storage is the KV cache. It retains vectors for the previous tokens."],
+        questionOptions
+      ).supported
+    ).toBe(true);
+  });
+
+  it("still checks entities and numbers inside quiz options", () => {
+    expect(
+      validateClaimSupport(
+        "A. 改用 FlashAttention",
+        ["That storage is the KV cache."],
+        questionOptions
+      ).supported
+    ).toBe(false);
+    expect(
+      validateClaimSupport(
+        "A. 把专家数增加到 64 个",
+        ["KimiK3 has 898 experts in total."],
+        questionOptions
+      ).supported
+    ).toBe(false);
+  });
+
+  it("keeps checking a question premise that is not an option", () => {
+    expect(
+      validateClaimSupport("Why did throughput decrease by 5%?", ["Throughput increased by 5%."], questionOptions)
+        .supported
+    ).toBe(false);
+  });
+
+  it("keeps option-shaped clauses checked for callers without the exemption", () => {
+    expect(
+      validateClaimSupport(
+        "A. 增加 KV Cache 的容量",
+        ["That storage is the KV cache. It retains vectors for the previous tokens."],
+        sourceFactOptions
+      ).supported
+    ).toBe(false);
+  });
 });
