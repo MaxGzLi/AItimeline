@@ -100,11 +100,15 @@ export function createConnectionNoteForImport(input: ConnectionNoteGenerationInp
     sources: [],
     citations: [],
     recommendedBecause: input.contentLanguage === "en" ? "A new import connected to an older card." : "\u65b0\u5bfc\u5165\u548c\u65e7\u5361\u8fde\u4e0a\u4e86\u3002",
-    trustState: "supported",
+    // A connection note carries no citations or sources of its own (see sources/citations
+    // above); it only ever restates an edge already grounded on the mother card. So it can
+    // never earn the library's top trust/confidence tier, which every other card has to
+    // qualify for through cited evidence.
+    trustState: "emerging",
     createdAt,
     estimatedReadMinutes: 1,
     difficulty: "beginner",
-    confidence: "high",
+    confidence: "low",
     thread: [],
     graphEdges: [],
     reviewPrompts: [],
