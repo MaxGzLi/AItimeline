@@ -25,6 +25,18 @@ export interface ClaimSupportOptions {
   checkNegation?: boolean;
   requireClaimPolarityCue?: boolean;
   allowBeyondSource?: boolean;
+  /**
+   * Final-gate strictness for prose that survives the numeric/direction/
+   * negation/proper-noun checks (docs/specs/2026-08-03-anchor-grounding.md):
+   * - "ordered" (default): every meaningful claim token must appear in order
+   *   in the closest evidence candidate — near-extraction only. Kept for
+   *   near-extractive surfaces with deterministic fallbacks (deep-read
+   *   paragraphs, concept briefs, grounded Q&A).
+   * - "anchors": only fact anchors (Latin terms inside CJK prose, technical
+   *   symbol tokens) must be traceable; narrative wording is free. Used by the
+   *   knowledge-card gate, whose hook/metaphor/thread genre is paraphrase.
+   */
+  supportMode?: "ordered" | "anchors";
 }
 
 export interface ClaimSupportResult {
@@ -346,13 +358,17 @@ function getClaimSupportOptions(
   claim: SourceClaim,
   options: GroundingGateOptions
 ): ClaimSupportOptions {
+  // Every card field opts into anchor-style support: the card genre
+  // (hook/metaphor/thread) is paraphrase by design, so only fact anchors are
+  // held to verbatim traceability (docs/specs/2026-08-03-anchor-grounding.md).
   if (claim.fieldPath === "$.recommendedBecause") {
     return {
       minOverlap: 1,
       minimumSharedTokens: 1,
       checkProperNouns: true,
       checkDirection: true,
-      checkNegation: true
+      checkNegation: true,
+      supportMode: "anchors"
     };
   }
 
@@ -365,7 +381,8 @@ function getClaimSupportOptions(
       checkNegation: true,
       // A question can still assert a false premise. If its recalled evidence
       // is negated, omitting that negation is a deterministic contradiction.
-      requireClaimPolarityCue: false
+      requireClaimPolarityCue: false,
+      supportMode: "anchors"
     };
   }
 
@@ -374,14 +391,16 @@ function getClaimSupportOptions(
       minOverlap: 1,
       minimumSharedTokens: 1,
       checkProperNouns: true,
-      requireClaimPolarityCue: true
+      requireClaimPolarityCue: true,
+      supportMode: "anchors"
     };
   }
 
   return {
     minOverlap: 1,
     minimumSharedTokens: 2,
-    checkProperNouns: true
+    checkProperNouns: true,
+    supportMode: "anchors"
   };
 }
 
@@ -588,7 +607,6 @@ function validateSingleClaimSupport(
   const claimTokens = Array.from(new Set(tokenize(claim)));
   const evidenceTokens = new Set(tokenize(bestEvidence ?? ""));
   const sharedTokenCount = claimTokens.filter((token) => evidenceTokens.has(token)).length;
-  const orderedLexicalSupport = bestEvidence ? hasOrderedLexicalSupport(claim, bestEvidence) : false;
   const minimumSharedTokens = options.minimumSharedTokens ?? Math.min(2, claimTokens.length);
   const candidateWasRecalled = sharedTokenCount >= Math.max(1, minimumSharedTokens);
   const claimHasPolarityCue =
@@ -667,10 +685,37 @@ function validateSingleClaimSupport(
     };
   }
 
+  if ((options.supportMode ?? "ordered") === "anchors") {
+    // Anchor-style support (docs/specs/2026-08-03-anchor-grounding.md): numbers,
+    // direction, negation and proper nouns are enforced above; here every Latin
+    // technical term embedded in CJK prose must appear in the cited evidence, with
+    // the same regularized word-form tolerance concepts get. Narrative wording is
+    // the model's own voice and is deliberately not order-checked any more —
+    // still no semantics, no synonym tables, no model.
+    const unsupportedAnchors = findUnsupportedClaimAnchors(claim, evidence, options);
+
+    if (unsupportedAnchors.length) {
+      return {
+        supported: false,
+        overlapScore,
+        reason: `Claim contains technical terms that do not appear in cited evidence: ${unsupportedAnchors.join(", ")}.`,
+        issueKind: "overlap"
+      };
+    }
+
+    return {
+      supported: true,
+      overlapScore,
+      reason: "Claim anchors (numbers, polarity, entities, technical terms) are grounded in cited evidence.",
+      issueKind: "supported"
+    };
+  }
+
   // Overlap chooses the closest evidence candidate; it is never sufficient for
   // acceptance. Without semantic NLU, fail closed unless every meaningful
   // claim token is present in that local candidate.
   const minOverlap = Math.max(1, options.minOverlap ?? 1);
+  const orderedLexicalSupport = bestEvidence ? hasOrderedLexicalSupport(claim, bestEvidence) : false;
 
   if (overlapScore < minOverlap || sharedTokenCount < minimumSharedTokens || !orderedLexicalSupport) {
     return {
@@ -689,8 +734,31 @@ function validateSingleClaimSupport(
   };
 }
 
+function hasOrderedLexicalSupport(claim: string, evidence: string): boolean {
+  const claimTokens = tokenize(claim);
+  const evidenceTokens = tokenize(evidence);
+  let evidenceIndex = 0;
+
+  for (const claimToken of claimTokens) {
+    const nextIndex = evidenceTokens.indexOf(claimToken, evidenceIndex);
+
+    if (nextIndex < 0) {
+      return false;
+    }
+
+    evidenceIndex = nextIndex + 1;
+  }
+
+  return claimTokens.length > 0;
+}
+
 function splitSupportClauses(value: string): string[] {
-  return Array.from(new Intl.Segmenter(undefined, { granularity: "sentence" }).segment(value))
+  // A number-only parenthetical ("GPT-2 (2019)", "growth (22,580x)") is an
+  // appositive label for its host, not an independent claim; keep it attached.
+  // Worded parentheticals still split so factual continuations need their own support.
+  const glued = value.replace(/[(（]\s*(\d[\d,.\s%×xX+\-]*)\s*[)）]/gu, " $1 ");
+
+  return Array.from(new Intl.Segmenter(undefined, { granularity: "sentence" }).segment(glued))
     .flatMap((entry) => expandSharedPredicateCoordination(entry.segment))
     .flatMap((entry) =>
       entry.split(
@@ -760,6 +828,48 @@ function splitOnNonNumericCommas(value: string): string[] {
   return clauses;
 }
 
+// The fact-bearing tokens of a clause. In CJK prose every embedded Latin term
+// is technical vocabulary (KV cache, token, transformer) and must trace to the
+// evidence. Latin-script prose anchors on proper nouns instead — enforced via
+// options.checkProperNouns above, or here for callers that did not opt in.
+function findUnsupportedClaimAnchors(
+  claim: string,
+  evidence: readonly string[],
+  options: ClaimSupportOptions
+): string[] {
+  const hasCjk = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(claim);
+
+  if (!hasCjk) {
+    // Symbol-bearing technical tokens (C#, A/B, TCP/IP, ELU+1) are entities even
+    // in lowercase prose; a bare proper-noun scan cannot tell C# from C.
+    const symbolTokens =
+      claim.match(/[A-Za-z][A-Za-z0-9]*(?:\+\+|#)|[A-Za-z0-9]+(?:[/+][A-Za-z0-9]+)+/g) ?? [];
+    const unsupportedSymbols = Array.from(new Set(symbolTokens)).filter(
+      (token) => !evidence.some((text) => normalizedConceptAppearsInText(token, text))
+    );
+
+    if (options.checkProperNouns) {
+      return unsupportedSymbols;
+    }
+
+    return [...unsupportedSymbols, ...findUnsupportedProperNouns(claim, evidence)];
+  }
+
+  const anchors = Array.from(
+    new Set(
+      tokenize(claim).filter(
+        (token) => token.length >= 2 && /[a-z]/.test(token) && !cjkLatinConnectives.has(token)
+      )
+    )
+  );
+
+  return anchors.filter((anchor) => !evidence.some((text) => normalizedConceptAppearsInText(anchor, text)));
+}
+
+// Latin abbreviations that act as prose connectives inside CJK sentences
+// ("GQA vs MQA 的差异") — glue, not technical terms, so never anchors.
+const cjkLatinConnectives = new Set(["vs", "etc", "eg", "ie", "aka"]);
+
 function findUngroundedNumericTokens(claim: string, evidence: readonly string[]): string[] {
   const claimNumbers = extractNumericTokens(claim);
 
@@ -770,6 +880,17 @@ function findUngroundedNumericTokens(claim: string, evidence: readonly string[])
   const evidenceNumbers = new Set(evidence.flatMap(extractNumericTokens));
 
   return Array.from(new Set(claimNumbers.filter((token) => !evidenceNumbers.has(token))));
+}
+
+// Letter-led identifiers that merely contain digits (GPT-2, ELU+1, KimiK3, Top-2)
+// are technical tokens, not numeric claims. They are stripped before numeric
+// extraction on both the claim and the evidence side; their letters remain
+// covered by the proper-noun and Latin-anchor checks.
+function stripTechnicalIdentifiers(value: string): string {
+  return value.replace(
+    /(?<![\p{L}\p{N}])(?=[A-Za-z0-9/+\-.#]*\d)[A-Za-z][A-Za-z0-9]*(?:[/+\-.#][A-Za-z0-9]+)*(?![\p{L}\p{N}])/gu,
+    " "
+  );
 }
 
 function extractNumericTokens(value: string): string[] {
@@ -800,6 +921,7 @@ function extractNumericTokens(value: string): string[] {
     "bytes?",
     "kib|mib|gib|tib|kb|mb|gb|tb",
     "hz|khz|mhz|ghz|ms|km|cm|mm|kg",
+    "x(?![a-z0-9])|×|-?folds?",
     "个百分点|百分比|年|个月|月|日|天|小时|分钟|秒|毫秒|步|步骤|个|项|次|人|倍|元|美元|千米|公里|米|厘米|毫米|千克|公斤|克"
   ].join("|");
   const currency = "(?:[$€£¥￥]|usd|eur|gbp|jpy|cny|rmb)";
@@ -809,9 +931,23 @@ function extractNumericTokens(value: string): string[] {
     `(?:${semanticPrefix}\\s*)*(?:(?:\\d{1,3}(?:,\\d{3})+)|\\d+|\\.\\d+)(?:\\.\\d+)?(?:\\s*(?:${unit}|${currency}))?`,
     "giu"
   );
-  const matches = value.normalize("NFKC").match(pattern) ?? [];
+  // "a factor of 22,580" is the prefix spelling of a multiplier; rewrite it to the
+  // suffix form so it lands in the same normalized token as "22,580x" and "22,580 倍".
+  const prepared = stripTechnicalIdentifiers(value.normalize("NFKC")).replace(
+    /\b(?:a\s+)?factor\s+of\s+(\d[\d,]*(?:\.\d+)?)/gi,
+    "$1×"
+  );
+  const matches = prepared.match(pattern) ?? [];
 
-  return matches.map((token) => token.toLowerCase().replace(/[\s,]+/g, "").replace(/−/g, "-"));
+  return matches.map((token) => {
+    const normalized = token.toLowerCase().replace(/[\s,]+/g, "").replace(/−/g, "-");
+
+    // Multiplier markers are cross-language spellings of the same unit, and a
+    // calendar year reads identically with or without its unit word.
+    return normalized
+      .replace(/(?:倍|times|x|×|-?folds?)$/u, "×")
+      .replace(/^((?:19|20)\d{2})(?:年|years?)$/u, "$1");
+  });
 }
 
 function splitEvidenceCandidates(value: string): string[] {
@@ -987,18 +1123,48 @@ function findUnsupportedProperNouns(claim: string, evidence: readonly string[]):
     "smoke",
     "test"
   ]);
-  const candidates = claim.match(/\b(?:[A-Z]{2,}[A-Z0-9]*|[A-Z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*)\b/g) ?? [];
-  const normalizedEvidence = evidence.map(normalizeForComparison);
+  const matches = Array.from(claim.matchAll(/\b(?:[A-Z]{2,}[A-Z0-9]*|[A-Z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*)\b/g));
+  const candidates = matches
+    .filter((match) => !isSentenceCasedCommonWord(claim, match))
+    .map((match) => match[0]);
 
   return Array.from(
     new Set(
       candidates.filter((candidate) => {
         const normalized = normalizeForComparison(candidate);
 
-        return normalized && !ignored.has(normalized) && !normalizedEvidence.some((text) => text.includes(normalized));
+        // Word-boundary matching, not bare containment: "RAG" must not ride on
+        // the letters inside "storage". Same matcher the concept check uses.
+        return (
+          normalized &&
+          !ignored.has(normalized) &&
+          !evidence.some((text) => normalizedConceptAppearsInText(candidate, text))
+        );
       })
     )
   );
+}
+
+// English capitalizes every sentence opener, so a clause-initial "Scaling" or
+// "Models" is sentence case, not an entity. Only simple-cased words whose shape
+// matches ordinary word morphology are demoted; bare names (Aspirin, Kimi),
+// ALL-CAPS, CamelCase and hyphenated terms stay anchors wherever they appear.
+function isSentenceCasedCommonWord(claim: string, match: RegExpExecArray): boolean {
+  const word = match[0];
+
+  if (!/^[A-Z][a-z]+$/.test(word)) {
+    return false;
+  }
+
+  // Suffixes chosen to exclude name shapes: bare -s/-es (Mars, Postgres),
+  // -er (Sutskever) and -al (Mistral) stay anchors even at sentence start.
+  if (!/(?:ing|ed|tion|sion|ment|ness|ity|able|ible|ly)$/.test(word.toLowerCase())) {
+    return false;
+  }
+
+  const prefix = claim.slice(0, match.index ?? 0).trimEnd();
+
+  return prefix === "" || /[.!?:;。！？：；]["')\]]?$/.test(prefix);
 }
 
 function calculateOverlapScore(claim: string, evidence: string): number {
@@ -1016,24 +1182,6 @@ function calculateOverlapScore(claim: string, evidence: string): number {
   const overlap = claimTokens.filter((token) => evidenceTokens.has(token)).length;
 
   return overlap / claimTokens.length;
-}
-
-function hasOrderedLexicalSupport(claim: string, evidence: string): boolean {
-  const claimTokens = tokenize(claim);
-  const evidenceTokens = tokenize(evidence);
-  let evidenceIndex = 0;
-
-  for (const claimToken of claimTokens) {
-    const nextIndex = evidenceTokens.indexOf(claimToken, evidenceIndex);
-
-    if (nextIndex < 0) {
-      return false;
-    }
-
-    evidenceIndex = nextIndex + 1;
-  }
-
-  return claimTokens.length > 0;
 }
 
 function tokenize(value: string): string[] {

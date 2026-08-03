@@ -53,6 +53,7 @@ export function getKnowledgePostLanguagePolicy(language: ContentLanguage): strin
       "- Write all user-facing text fields (title, hook, thesis, shortBody, keyTakeaway, summary, thread, reviewPrompts, recommendedBecause) in natural English.",
       "- Preserve source quotes verbatim in the source language.",
       "- Keep technical terms, proper nouns, concepts, and graphEdges concept names in their original wording so graph nodes stay continuous.",
+      "- Every entry in concepts must be a phrase that appears verbatim in the source chunks; never invent, merge, or reword concept names.",
       "- Except inside citation quote fields, never copy source sentences verbatim; explain in your own English words while retaining key source terms and numbers.",
       "- Numbers must match the cited evidence exactly.",
       "- graphEdges evidence must stay in the source language: quote or closely paraphrase the cited chunk; do not translate it.",
@@ -68,6 +69,7 @@ export function getKnowledgePostLanguagePolicy(language: ContentLanguage): strin
     "- Except inside citation quote fields, never copy sentences from the evidence verbatim; explain in your own words in Simplified Chinese while keeping the key English terms.",
     "- Numbers must match the cited evidence exactly.",
     "- Keep concepts and graphEdges concept names in English so graph nodes stay continuous.",
+    "- Every entry in concepts must be a phrase that appears verbatim in the source chunks; never invent, merge, or reword concept names.",
     "- graphEdges evidence must stay in the source language: quote or closely paraphrase the cited chunk; do not translate it into Chinese.",
     "- Every source-fact field (summary, thesis, shortBody, graphEdges evidence) must retain at least one key English term or number taken from the cited evidence."
   ];
