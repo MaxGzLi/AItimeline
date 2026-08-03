@@ -1199,6 +1199,19 @@ function normalizeForBoundedExact(value: string): string {
     .trim();
 }
 
+// A concept is grounded only when its own words appear in the cited chunk. The
+// matcher tolerates *rule-generated* surface variants of that same string:
+// letter case, hyphen/underscore/space used interchangeably as word separators,
+// and regular English plural inflection (`s` / `es` / `y`->`ies`), both ways.
+//
+// It deliberately does NOT tolerate: semantic similarity, synonym or
+// abbreviation tables ("MoE" is not "Mixture-of-Experts" here), stemmers,
+// irregular plurals, model calls, or partial/prefix matches. The concept must
+// still occur as a complete, contiguous, word-boundary-aligned run of words, so
+// widening the word form cannot admit a concept the source never named — the
+// only strings newly accepted are ones a human reading that chunk would call
+// the same term. Severity mapping is untouched: an unmatched concept still
+// fails closed.
 export function normalizedConceptAppearsInText(concept: string, evidence: string): boolean {
   const normalizedConcept = normalizeForExactSupport(concept);
 
@@ -1206,9 +1219,13 @@ export function normalizedConceptAppearsInText(concept: string, evidence: string
     return false;
   }
 
+  // CJK gets no form tolerance at all: Chinese has no plural inflection and no
+  // hyphenation, so any relaxation there would only add false positives.
+  // Concepts carrying arithmetic or currency symbols keep the literal path too,
+  // because word segmentation drops those symbols ("C++" -> "c").
   if (
     /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(concept) ||
-    /[$€£¥￥%+#\-−<>≤≥~≈°/]/u.test(concept)
+    /[$€£¥￥%+#−<>≤≥~≈°/]/u.test(concept)
   ) {
     return normalizeForExactSupport(evidence).includes(normalizedConcept);
   }
@@ -1221,8 +1238,42 @@ export function normalizedConceptAppearsInText(concept: string, evidence: string
   }
 
   return evidenceWords.some((_word, index) =>
-    conceptWords.every((conceptWord, offset) => evidenceWords[index + offset] === conceptWord)
+    conceptWords.every((conceptWord, offset) =>
+      conceptWordMatchesEvidenceWord(conceptWord, evidenceWords[index + offset])
+    )
   );
+}
+
+function conceptWordMatchesEvidenceWord(conceptWord: string, evidenceWord: string | undefined): boolean {
+  if (evidenceWord === undefined) {
+    return false;
+  }
+
+  if (conceptWord === evidenceWord) {
+    return true;
+  }
+
+  return isRegularEnglishPlural(conceptWord, evidenceWord) || isRegularEnglishPlural(evidenceWord, conceptWord);
+}
+
+// True when `plural` is the regular English plural of `singular`. Rules only —
+// no irregular table, no stemming. The three-character floor and the sibilant
+// exclusion keep short words from collapsing into each other: "Los" must not
+// pass as the singular of "Loss", and "Bu" must not pass for "Bus".
+function isRegularEnglishPlural(singular: string, plural: string): boolean {
+  if (singular.length < 3) {
+    return false;
+  }
+
+  if (/[^aeiou]y$/.test(singular)) {
+    return `${singular.slice(0, -1)}ies` === plural;
+  }
+
+  if (/(?:s|x|z|ch|sh)$/.test(singular)) {
+    return `${singular}es` === plural;
+  }
+
+  return `${singular}s` === plural;
 }
 
 export function isConceptPolarityCompatibleWithText(concept: string, evidence: string): boolean {
@@ -1230,7 +1281,11 @@ export function isConceptPolarityCompatibleWithText(concept: string, evidence: s
 }
 
 function segmentComparableWords(value: string): string[] {
-  return Array.from(new Intl.Segmenter(undefined, { granularity: "word" }).segment(value.normalize("NFKC")))
+  // Underscores are the one separator word segmentation joins rather than
+  // splits ("Multi_Token" stays one token), so normalize them to spaces first.
+  return Array.from(
+    new Intl.Segmenter(undefined, { granularity: "word" }).segment(value.normalize("NFKC").replace(/_+/g, " "))
+  )
     .filter((entry) => entry.isWordLike)
     .map((entry) => entry.segment.toLowerCase());
 }
