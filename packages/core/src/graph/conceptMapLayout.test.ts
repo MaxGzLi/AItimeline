@@ -114,6 +114,10 @@ describe("layoutConceptMap", () => {
         concepts
       });
 
+      // Below the ring floor there is no drawing at all, so state which counts
+      // are actually being checked for overlap instead of passing on emptiness.
+      expect(layout.degenerate, `concept spokes, ${count} concepts`).toBe(count < 4);
+      expect(collectBoxes(layout).length > 0, `concept spokes, ${count} concepts`).toBe(count >= 4);
       expect(findOverlap(layout), `concept spokes, ${count} concepts`).toBeNull();
     }
   });
@@ -143,7 +147,8 @@ describe("layoutConceptMap", () => {
   });
 
   it("drops the lightest concepts when a tight canvas cannot fit their labels", () => {
-    const nodeCounts: number[] = [];
+    const drawnCounts: number[] = [];
+    let culledToTextOnly = 0;
 
     // Long labels in a box narrower than the timeline's own: this forces the
     // collision pass to actually cut nodes, which the roomy default rarely needs.
@@ -156,17 +161,30 @@ describe("layoutConceptMap", () => {
         height: 220
       });
 
+      expect(findOverlap(layout), `tight canvas, seed ${seed}`).toBeNull();
+
+      if (layout.degenerate) {
+        expect(layout.nodes, `tight canvas, seed ${seed}`).toEqual([]);
+        expect(layout.edges, `tight canvas, seed ${seed}`).toEqual([]);
+        culledToTextOnly += 1;
+        continue;
+      }
+
       const peerWeights = layout.nodes.slice(1).map((node) => node.weight);
 
-      expect(findOverlap(layout), `tight canvas, seed ${seed}`).toBeNull();
       // Culling walks the ring heaviest first, so survivors stay weight-ordered.
       expect(peerWeights, `tight canvas, seed ${seed}`).toEqual([...peerWeights].sort((a, b) => b - a));
-      nodeCounts.push(layout.nodes.length);
+      // Whatever survives still clears the ring floor.
+      expect(layout.nodes.length, `tight canvas, seed ${seed}`).toBeGreaterThanOrEqual(4);
+      drawnCounts.push(layout.nodes.length);
     }
 
-    // Something always gets cut at this size, and the map never collapses.
-    expect(Math.max(...nodeCounts)).toBeLessThan(9);
-    expect(Math.min(...nodeCounts)).toBeGreaterThanOrEqual(3);
+    // Something always gets cut at this size, most cards still draw something,
+    // and cutting past the floor turns a card text-only rather than thin.
+    expect(Math.max(...drawnCounts)).toBeLessThan(9);
+    expect(Math.min(...drawnCounts)).toBeGreaterThanOrEqual(4);
+    expect(drawnCounts.length).toBeGreaterThan(30);
+    expect(culledToTextOnly).toBeGreaterThan(0);
   });
 
   it("truncates the ring to nine nodes, heaviest concepts first", () => {
@@ -194,19 +212,18 @@ describe("layoutConceptMap", () => {
         concepts: makeConcepts(peerCount + 1)
       }).height;
 
-    expect(heightFor(1)).toBe(160);
-    expect(heightFor(2)).toBe(160);
     expect(heightFor(3)).toBe(200);
+    expect(heightFor(4)).toBe(200);
     expect(heightFor(5)).toBe(240);
     expect(
       layoutConceptMap({
         postId: "post-height-explicit",
         primaryConcept: "Concept 1",
-        concepts: makeConcepts(3),
+        concepts: makeConcepts(4),
         width: 400,
         height: 300
       })
-    ).toMatchObject({ width: 400, height: 300 });
+    ).toMatchObject({ width: 400, height: 300, degenerate: false });
   });
 
   it("only draws edges between nodes it kept", () => {
@@ -256,10 +273,10 @@ describe("layoutConceptMap", () => {
     const layout = layoutConceptMap({
       postId: "post-duplicates",
       primaryConcept: "Concept 1",
-      concepts: ["Concept 1", "  ", "concept 1", "Concept 2", "Concept 2", "Concept 3"]
+      concepts: ["Concept 1", "  ", "concept 1", "Concept 2", "Concept 2", "Concept 3", "Concept 4"]
     });
 
-    expect(layout.nodes.map((node) => node.concept)).toEqual(["Concept 1", "Concept 2", "Concept 3"]);
+    expect(layout.nodes.map((node) => node.concept)).toEqual(["Concept 1", "Concept 2", "Concept 3", "Concept 4"]);
   });
 
   it("reports degenerate when there is nothing worth drawing", () => {
@@ -274,10 +291,28 @@ describe("layoutConceptMap", () => {
     }
   });
 
+  it("refuses to draw a ring of fewer than three concepts", () => {
+    const pair = layoutConceptMap({ postId: "post-pair", primaryConcept: "Concept 1", concepts: makeConcepts(2) });
+    const triple = layoutConceptMap({ postId: "post-triple", primaryConcept: "Concept 1", concepts: makeConcepts(3) });
+    const floor = layoutConceptMap({ postId: "post-floor", primaryConcept: "Concept 1", concepts: makeConcepts(4) });
+
+    // One or two spokes only restate the concept chips printed under the card,
+    // and cost a third of the card's height to do it.
+    for (const layout of [pair, triple]) {
+      expect(layout.degenerate).toBe(true);
+      expect(layout.nodes).toEqual([]);
+      expect(layout.edges).toEqual([]);
+    }
+
+    expect(floor.degenerate).toBe(false);
+    expect(floor.nodes).toHaveLength(4);
+    expect(floor.edges).toHaveLength(3);
+  });
+
   it("falls back to the first usable concept when the card has no main concept", () => {
     const layout = layoutConceptMap({
       postId: "post-no-primary",
-      concepts: ["  ", "Concept 1", "Concept 2"]
+      concepts: ["  ", "Concept 1", "Concept 2", "Concept 3", "Concept 4"]
     });
 
     expect(layout.nodes[0].concept).toBe("Concept 1");
@@ -285,7 +320,7 @@ describe("layoutConceptMap", () => {
   });
 
   it("centres what it drew inside the box", () => {
-    for (const peerCount of [1, 2, 5, 8]) {
+    for (const peerCount of [3, 4, 5, 8]) {
       const layout = layoutConceptMap({
         postId: `post-centred-${peerCount}`,
         primaryConcept: cjkConcepts[0],

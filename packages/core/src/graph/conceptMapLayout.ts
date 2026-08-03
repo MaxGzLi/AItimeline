@@ -8,7 +8,9 @@ import { normalizeConceptKey, normalizeConceptLabel } from "./conceptAliases.js"
  * from the centre outwards. No relation is asserted — the card's `graphEdges`
  * carry relation words whose endpoints never pass the grounding gate, so this
  * layer draws membership only. Cards with nothing to draw report `degenerate`
- * so the UI keeps them text-only.
+ * so the UI keeps them text-only — and "nothing to draw" includes a ring of one
+ * or two concepts: a line with a dot on it repeats the concept chips that sit
+ * right under the card and costs a third of the card's height to say it.
  *
  * Everything here is pure and seeded by `postId`, so the same card always draws
  * the same picture across renders, processes and machines.
@@ -67,6 +69,8 @@ export interface ConceptMapLayout {
 const defaultWidth = 520;
 const defaultHeight = 240;
 const maxPeripheralNodes = 8;
+/** Below this the ring says nothing the concept chips under the card do not. */
+const minPeripheralNodes = 3;
 const centerFontSize = 14;
 const centerChipHeight = 32;
 const centerChipPaddingX = 12;
@@ -108,7 +112,7 @@ export function layoutConceptMap(input: ConceptMapLayoutInput): ConceptMapLayout
 
   const candidates = spokesOf(center.key, input.concepts);
 
-  if (candidates.length === 0) {
+  if (candidates.length < minPeripheralNodes) {
     return { nodes: [], edges: [], degenerate: true, width, height: input.height ?? defaultHeight };
   }
 
@@ -118,7 +122,7 @@ export function layoutConceptMap(input: ConceptMapLayoutInput): ConceptMapLayout
   }));
   // A small ring in a tall box reads as empty space, so a sparse map gets a
   // shorter box and the ring widens until the longest label hits the edge.
-  const height = input.height ?? (peers.length >= 5 ? defaultHeight : peers.length >= 3 ? 200 : 160);
+  const height = input.height ?? (peers.length >= 5 ? defaultHeight : 200);
   const radiusX = Math.max(
     60,
     width / 2 -
@@ -131,7 +135,7 @@ export function layoutConceptMap(input: ConceptMapLayoutInput): ConceptMapLayout
   const placed: Box[] = [boxAround(centerNode.labelX, centerNode.labelY, centerNode.labelWidth, centerNode.labelHeight)];
   const nodes: ConceptMapNode[] = [centerNode];
   const angles = assignAngles(input.postId, peers);
-  const innerCount = peers.length > 2 ? Math.ceil(peers.length / 2) : 0;
+  const innerCount = Math.ceil(peers.length / 2);
 
   for (const [rank, peer] of peers.entries()) {
     const node = layoutPeerNode(peer, angles.get(peer.key) ?? 0, rank < innerCount, radiusX, width, height);
@@ -146,7 +150,9 @@ export function layoutConceptMap(input: ConceptMapLayoutInput): ConceptMapLayout
     nodes.push(node);
   }
 
-  if (nodes.length < 2) {
+  // Culling can take the ring below the floor too, and a map that thin is not
+  // worth the height it costs.
+  if (nodes.length - 1 < minPeripheralNodes) {
     return { nodes: [], edges: [], degenerate: true, width, height };
   }
 
@@ -333,9 +339,9 @@ function layoutPeerNode(
 }
 
 /**
- * Culling can leave the drawing hugging one side, and a two-node map always
- * does. Shifting everything by the same offset re-centres it without touching
- * the relative geometry the collision pass just cleared.
+ * Culling can leave the drawing hugging one side. Shifting everything by the
+ * same offset re-centres it without touching the relative geometry the
+ * collision pass just cleared.
  */
 function centerComposition(nodes: ConceptMapNode[], placed: Box[], width: number, height: number): void {
   const left = Math.min(...placed.map((box) => box.left));
@@ -369,14 +375,6 @@ function centerComposition(nodes: ConceptMapNode[], placed: Box[], width: number
  * (and the wobble inside it) comes from the post-seeded hash, never from a RNG.
  */
 function assignAngles(postId: string, peers: ConceptCandidate[]): Map<string, number> {
-  // A lone neighbour reads as a sentence, so it sits beside the centre rather
-  // than at whatever angle the hash picked.
-  if (peers.length === 1) {
-    const side = hashStringFnv1a(`${postId}#side`) % 2 === 0 ? 0 : Math.PI;
-
-    return new Map([[peers[0].key, side]]);
-  }
-
   const sector = tau / peers.length;
   const rotation = (hashStringFnv1a(`${postId}#rotation`) / 0x100000000) * tau;
   const slots = peers
