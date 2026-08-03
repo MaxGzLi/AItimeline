@@ -77,6 +77,7 @@ export function createConnectionNoteForImport(input: ConnectionNoteGenerationInp
     newPostId: candidate.newPost.id,
     newPostTitle: candidate.newPost.title,
     evidence: candidate.edge.evidence,
+    edgeId: candidate.edge.id,
     relation: candidate.edge.relation,
     sourceConcept: candidate.sourceConcept,
     targetConcept: candidate.targetConcept,
@@ -100,11 +101,15 @@ export function createConnectionNoteForImport(input: ConnectionNoteGenerationInp
     sources: [],
     citations: [],
     recommendedBecause: input.contentLanguage === "en" ? "A new import connected to an older card." : "\u65b0\u5bfc\u5165\u548c\u65e7\u5361\u8fde\u4e0a\u4e86\u3002",
-    trustState: "supported",
+    // A connection note carries no citations or sources of its own (see sources/citations
+    // above); it only ever restates an edge already grounded on the mother card. So it can
+    // never earn the library's top trust/confidence tier, which every other card has to
+    // qualify for through cited evidence.
+    trustState: "emerging",
     createdAt,
     estimatedReadMinutes: 1,
     difficulty: "beginner",
-    confidence: "high",
+    confidence: "low",
     thread: [],
     graphEdges: [],
     reviewPrompts: [],
@@ -206,6 +211,43 @@ export function buildConnectionNoteBody(details: ConnectionNoteDetails, language
   }
 
   return `\u4f60 ${details.daysSinceOldCard} \u5929\u524d\u5b66\u8fc7\u7684\u300a${details.oldPostTitle}\u300b\u548c\u521a\u5bfc\u5165\u7684\u300a${details.newPostTitle}\u300b\u8fde\u4e0a\u4e86:${details.evidence}`;
+}
+
+export type ConnectionNoteEdgeStatus = "verified" | "stale" | "unknown";
+
+export interface ConnectionNoteEdgeCheck {
+  status: ConnectionNoteEdgeStatus;
+  // The edge currently on the mother card with a matching id, if any. Its evidence
+  // may differ from details.evidence even when this is present (status "stale").
+  currentEdge?: KnowledgeGraphEdge;
+}
+
+// The connection note's own evidence string is a snapshot copied at generation
+// time (see createConnectionNoteForImport above); the mother card's graphEdges
+// can change afterward and silently strand that copy. This lets a consumer look
+// the edge back up by its stable id and find out whether the copied evidence is
+// still backed by anything, instead of trusting it forever.
+export function checkConnectionNoteEdge(
+  details: ConnectionNoteDetails,
+  posts: readonly KnowledgeCard[]
+): ConnectionNoteEdgeCheck {
+  if (!details.edgeId) {
+    return { status: "unknown" };
+  }
+
+  const motherPost = posts.find((post) => post.id === details.newPostId);
+
+  if (!motherPost) {
+    return { status: "stale" };
+  }
+
+  const currentEdge = (motherPost.graphEdges ?? []).find((edge) => edge.id === details.edgeId);
+
+  if (!currentEdge || currentEdge.evidence !== details.evidence) {
+    return { status: "stale", currentEdge };
+  }
+
+  return { status: "verified", currentEdge };
 }
 
 function buildConceptGraphIndex(

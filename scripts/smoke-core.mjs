@@ -1999,6 +1999,15 @@ assert.ok(
   buildConnectionNoteBody(batchNote.connectionNote).includes(batchNote.connectionNote.evidence),
   "connection note template should preserve existing evidence text"
 );
+// A connection note has zero sources/citations of its own; it must not carry the
+// library's top trust/confidence tier, which is reserved for cited cards.
+assert.equal(batchNote.trustState, "emerging", "connection notes have no citations and must not be trustState supported");
+assert.equal(batchNote.confidence, "low", "connection notes have no citations and must not be confidence high");
+assert.equal(
+  batchNote.connectionNote.edgeId,
+  "edge-kg-eval",
+  "connection note details should record the stable graph edge id the evidence was copied from"
+);
 
 const limitedNote = createConnectionNoteForImport({
   existingPosts: [

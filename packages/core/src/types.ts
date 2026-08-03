@@ -322,6 +322,12 @@ export interface ConnectionNoteDetails {
   newPostId: string;
   newPostTitle: string;
   evidence: string;
+  // Stable identifier for the graph edge the evidence was copied from (the mother
+  // card's post id is newPostId above). Lets a consumer look the edge back up and
+  // check it still exists with the same evidence, instead of trusting the copied
+  // string forever. Optional because notes generated before this field existed
+  // don't have it.
+  edgeId?: string;
   relation: KnowledgeEdgeRelation;
   sourceConcept: string;
   targetConcept: string;
