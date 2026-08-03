@@ -438,6 +438,43 @@ describe("anchor-style claim support", () => {
 
   // --- must now be accepted ---
 
+  it("treats single-word English cardinals as the same number in digits", () => {
+    expect(
+      validateClaimSupport(
+        "其中 2 个共享专家处理所有 token",
+        ["Two are shared experts that process every token."],
+        sourceFactOptions
+      ).supported
+    ).toBe(true);
+  });
+
+  it("still rejects a digit the word-form evidence does not state", () => {
+    expect(
+      validateClaimSupport(
+        "其中 3 个共享专家处理所有 token",
+        ["Two are shared experts that process every token."],
+        sourceFactOptions
+      ).supported
+    ).toBe(false);
+  });
+
+  it("lets evidence stating an addition satisfy an increase-shaped claim", () => {
+    expect(
+      validateClaimSupport(
+        "Kimi Linear 通过 alpha projection 增加了通道缩放",
+        ["Kimi Linear adds a per-channel scale through the alpha projection."],
+        sourceFactOptions
+      ).supported
+    ).toBe(true);
+  });
+
+  it("still rejects an increase claim when evidence states the opposite direction", () => {
+    expect(
+      validateClaimSupport("KV cache 命中率增加", ["KV cache hit rates dropped sharply."], sourceFactOptions)
+        .supported
+    ).toBe(false);
+  });
+
   it("treats the generic classifier 个 as bare counting", () => {
     expect(
       validateClaimSupport(

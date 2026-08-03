@@ -935,10 +935,13 @@ function extractNumericTokens(value: string): string[] {
   );
   // "a factor of 22,580" is the prefix spelling of a multiplier; rewrite it to the
   // suffix form so it lands in the same normalized token as "22,580x" and "22,580 倍".
-  const prepared = stripTechnicalIdentifiers(value.normalize("NFKC")).replace(
-    /\b(?:a\s+)?factor\s+of\s+(\d[\d,]*(?:\.\d+)?)/gi,
-    "$1×"
-  );
+  // Single-word English cardinals are the same numbers in word form ("Two are
+  // shared" ↔ "2 个共享", user decision 2026-08-03). "one" is deliberately
+  // excluded: as a pronoun/determiner ("one of the ways") it would fabricate
+  // number claims out of ordinary prose. Multi-word numerals stay out of scope.
+  const prepared = stripTechnicalIdentifiers(value.normalize("NFKC"))
+    .replace(/\b(?:zero|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)\b/gi, (word) => String(englishCardinalValues[word.toLowerCase()]))
+    .replace(/\b(?:a\s+)?factor\s+of\s+(\d[\d,]*(?:\.\d+)?)/gi, "$1×");
   const matches = prepared.match(pattern) ?? [];
 
   return matches.map((token) => {
@@ -985,7 +988,15 @@ function findDirectionMismatch(claim: string, evidence: string): string | undefi
 
   const evidenceDirections = collectDirections(evidence);
 
-  if (claimDirections.has("increase") && !evidenceDirections.has("increase")) {
+  // 增加/提升 in Chinese prose often means "adds a component", not a quantity
+  // rising. Evidence that states an addition satisfies an increase-shaped claim
+  // (user decision 2026-08-03). Evidence-side only: claims saying "adds" do not
+  // start requiring direction support.
+  const evidenceStatesAddition = /\b(?:add(?:s|ed|ing)?|introduce[sd]?|introducing)\b|加入|新增|添加|引入/iu.test(
+    evidence.normalize("NFKC").toLowerCase()
+  );
+
+  if (claimDirections.has("increase") && !evidenceDirections.has("increase") && !evidenceStatesAddition) {
     return "Claim uses an increase/above direction that does not match the closest cited evidence.";
   }
 
@@ -995,6 +1006,36 @@ function findDirectionMismatch(claim: string, evidence: string): string | undefi
 
   return undefined;
 }
+
+const englishCardinalValues: Record<string, number> = {
+  zero: 0,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+  eleven: 11,
+  twelve: 12,
+  thirteen: 13,
+  fourteen: 14,
+  fifteen: 15,
+  sixteen: 16,
+  seventeen: 17,
+  eighteen: 18,
+  nineteen: 19,
+  twenty: 20,
+  thirty: 30,
+  forty: 40,
+  fifty: 50,
+  sixty: 60,
+  seventy: 70,
+  eighty: 80,
+  ninety: 90
+};
 
 function collectDirections(value: string): Set<"increase" | "decrease"> {
   const normalized = value.normalize("NFKC").toLowerCase();
