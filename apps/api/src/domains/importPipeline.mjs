@@ -6,6 +6,7 @@ import {
   createSourcePostReleasePlan,
   fetchArticle,
   fetchYouTubeTranscript,
+  mergeTranscriptSegments,
   previewSourceImportApplications,
   settleDailyAutoJobBudget,
   transformArticleUrl,
@@ -424,7 +425,8 @@ export async function ingestSourceCandidate(candidate, fetchImpl) {
           sourceId: candidate.source.id
         }
       ],
-      chunks: fetched.segments.map((segment, index) => ({
+      // 攒成段落体量再切块,否则来源质检只看得到三条碎字幕轴。
+      chunks: mergeTranscriptSegments(fetched.segments).map((segment, index) => ({
         id: `${candidate.source.id}-chunk-${index + 1}`,
         sourceId: candidate.source.id,
         content: segment.text,
