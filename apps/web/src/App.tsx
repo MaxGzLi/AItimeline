@@ -2363,6 +2363,25 @@ export function App() {
     }
   }
 
+  /** 基地对话入口:一句话调喜好。服务端真实写记忆并排策展任务,回复描述实际变更。 */
+  async function handlePreferenceChat(text: string): Promise<{ understood: boolean; reply: string }> {
+    try {
+      // 大快照下这一步要写三次全量持久化文件,实测可到 ~17s,默认 20s 超时太贴边。
+      const result = await apiRequest<{ understood: boolean; reply: string }>("/api/agent/preferences", {
+        method: "POST",
+        body: { text, userId: "local-user" },
+        timeoutMs: 60000
+      });
+
+      void refreshFromApi({ silent: true });
+
+      return result;
+    } catch (error) {
+      markOfflineIfTransport(error);
+      throw error;
+    }
+  }
+
   function handleIdeaProbe(action: AgentReplyAction) {
     const threadId = agentResponse?.turnRecord.threadId;
 
@@ -2795,6 +2814,7 @@ export function App() {
             }}
             onOpenImports={() => openAgentSection("import")}
             onOpenReview={() => setActiveView("review")}
+            onSendPreference={handlePreferenceChat}
             reviewCardsById={reviewCardsById}
             reviewQueue={reviewQueue}
             sourceImports={sourceImports}

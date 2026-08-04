@@ -14,7 +14,8 @@ const REVIEW_PREVIEW_LIMIT = 3;
 /**
  * 基地第一屏:agent 工作台账。全部数字来自现有接口的真数据 —— 导入记录来自
  * /api/timeline,复习队列来自 /api/review/due,图谱在前端由快照卡片确定性构建。
- * 对话入口目前只是占位:提交只在前端提示,不发请求(后续任务接后端)。
+ * 对话入口把一句话交给 /api/agent/preferences:服务端解析意图、写用户记忆、
+ * 调整策展方向,回复文案描述真实发生的变更,这里只显示最近一条。
  */
 export function BaseView({
   linkedGraph,
@@ -23,6 +24,7 @@ export function BaseView({
   onOpenGraph,
   onOpenImports,
   onOpenReview,
+  onSendPreference,
   reviewCardsById,
   reviewQueue,
   sourceImports
@@ -33,12 +35,14 @@ export function BaseView({
   onOpenGraph: () => void;
   onOpenImports: () => void;
   onOpenReview: () => void;
+  onSendPreference: (text: string) => Promise<{ understood: boolean; reply: string }>;
   reviewCardsById: Record<string, RankedKnowledgeCard>;
   reviewQueue: ReviewQueueEntry[];
   sourceImports: SourceImport[];
 }) {
   const [chatDraft, setChatDraft] = useState("");
   const [chatNotice, setChatNotice] = useState<string | null>(null);
+  const [isSendingChat, setIsSendingChat] = useState(false);
   const weeklyImportCount = useMemo(
     () => countRecentImports(sourceImports, new Date()),
     [sourceImports]
@@ -48,14 +52,31 @@ export function BaseView({
   // 只展示还能找到卡片正文的复习条目,和复习页的口径一致。
   const reviewPreview = reviewQueue.filter((entry) => reviewCardsById[entry.cardId]);
 
-  function handleChatSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleChatSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const text = chatDraft.trim();
 
-    if (!chatDraft.trim()) {
+    if (!text || isSendingChat) {
       return;
     }
 
-    setChatNotice(t("base.chat.comingSoon"));
+    setIsSendingChat(true);
+    setChatNotice(null);
+
+    try {
+      const result = await onSendPreference(text);
+
+      setChatNotice(result.reply);
+
+      // 没听懂时保留原句,方便用户改一改重发。
+      if (result.understood) {
+        setChatDraft("");
+      }
+    } catch {
+      setChatNotice(t("base.chat.error"));
+    } finally {
+      setIsSendingChat(false);
+    }
   }
 
   return (
@@ -92,7 +113,7 @@ export function BaseView({
               value={chatDraft}
             />
           </label>
-          <button className="x-pill start" type="submit">
+          <button className="x-pill start" disabled={isSendingChat} type="submit">
             {t("base.chat.submit")}
           </button>
         </form>
