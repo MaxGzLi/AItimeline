@@ -55,6 +55,21 @@ function makeClient(answer: string): ModelClient {
   };
 }
 
+function makeScriptedClient(answers: string[]): { client: ModelClient; calls: string[][] } {
+  const calls: string[][] = [];
+
+  return {
+    calls,
+    client: {
+      complete: async (request) => {
+        calls.push(request.messages.map((message) => message.content));
+
+        return { content: JSON.stringify({ answer: answers[calls.length - 1], citedExcerpts: [1] }) };
+      }
+    }
+  };
+}
+
 describe("askGrounded", () => {
   // 真机上抓到的:DeepSeek 偶尔回一个没有正文的响应,异常一路抛到接口,
   // 用户问一句话换来一个报错。退回确定性答案,而且它只由登记过的原文块拼成。
@@ -91,6 +106,40 @@ describe("askGrounded", () => {
     expect(result.answer).toBe(answer);
     expect(result.citations).toHaveLength(1);
     expect(result.citations[0].chunkId).toBe("chunk-1");
+  });
+
+  // 门禁一次定生死的话,同一个问题这次能答、下次被拦,全看模型这回怎么措辞。
+  // 拦下来先让它照着拒绝理由改写一次再判。
+  it("asks the model to rewrite once when the gate rejects the first answer", async () => {
+    const { client, calls } = makeScriptedClient([
+      "根据提供的资料,DeepSeekMoE 靠 FlashAttention 内核把计算量压下来。",
+      "DeepSeekMoE 每个 token 只激活一部分 expert,所以计算量很小。"
+    ]);
+    const result = await askGrounded(
+      { post: makePost(), registry: makeRegistry(), question: "混合专家是怎么省算力的?" },
+      { client, contentLanguage: "zh" }
+    );
+
+    expect(calls).toHaveLength(2);
+    expect(calls[1].at(-1)).toContain("rejected by the deterministic grounding check");
+    expect(result.grounded).toBe(true);
+    expect(result.answer).toBe("DeepSeekMoE 每个 token 只激活一部分 expert,所以计算量很小。");
+  });
+
+  // 重写不是无限重试:改了还不合格就认输,不能拿用户的等待时间赌模型。
+  it("gives up after one rewrite instead of retrying forever", async () => {
+    const { client, calls } = makeScriptedClient([
+      "DeepSeekMoE 靠 FlashAttention 内核提速。",
+      "DeepSeekMoE 靠 FlashAttention 内核提速。"
+    ]);
+    const result = await askGrounded(
+      { post: makePost(), registry: makeRegistry(), question: "混合专家是怎么省算力的?" },
+      { client, contentLanguage: "zh" }
+    );
+
+    expect(calls).toHaveLength(2);
+    expect(result.grounded).toBe(false);
+    expect(result.answer).toBe("库内暂无足够依据回答这个问题。");
   });
 
   // 放宽的是连接用的散文,不是事实。来源里没有的数字和术语必须照样拦住,
