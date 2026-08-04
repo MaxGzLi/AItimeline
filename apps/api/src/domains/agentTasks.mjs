@@ -458,8 +458,11 @@ function describeJob(job, contentLanguage) {
     return title ? (zh ? `导入来源:${title}` : `Import source: ${title}`) : label;
   }
 
-  if (job.kind === "research_question" && job.researchQuestion) {
-    return zh ? `研究问题:${job.researchQuestion}` : `Research question: ${job.researchQuestion}`;
+  // researchQuestion 是一整个对象({turnId, question, choices, ...}),要的是里面那句问题。
+  if (job.kind === "research_question" && job.researchQuestion?.question) {
+    const asked = job.researchQuestion.question;
+
+    return zh ? `研究问题:${asked}` : `Research question: ${asked}`;
   }
 
   if (!topic) return label;

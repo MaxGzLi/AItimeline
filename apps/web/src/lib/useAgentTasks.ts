@@ -5,22 +5,33 @@ import type { AgentTaskDetailResponse, AgentTaskListResponse, AgentTaskSummary }
 
 const pollIntervalMs = 5000;
 
+export interface AgentConfirmQuestion {
+  id: string;
+  label: string;
+  options: Array<{ id: string; label: string }>;
+}
+
 export interface AgentDispatchReply {
   taskId: string | null;
   text: string;
   quote: string | null;
   sourceTitle: string | null;
+  /** 库里答不全、要往外搜时才有:先问过用户才动网络。 */
+  confirm: { turnId: string; questions: AgentConfirmQuestion[] } | null;
+  confirmedNote: string | null;
 }
 
 interface DispatchResponse {
   route?: "preference" | "question";
   taskId?: string | null;
   reply?: string;
+  turnRecord?: { id?: string } | null;
   turn?: {
     answer?: {
       answer?: string;
       citations?: Array<{ quote?: string; sourceTitle?: string }>;
     } | null;
+    actions?: Array<{ kind?: string; questions?: AgentConfirmQuestion[] }>;
   };
 }
 
@@ -31,6 +42,10 @@ interface DispatchResponse {
  */
 function extractDispatchReply(result: DispatchResponse): AgentDispatchReply | null {
   const answer = result.turn?.answer;
+  const confirmAction = result.turn?.actions?.find((action) => action.kind === "confirm_discovery");
+  const turnId = result.turnRecord?.id;
+  const confirm =
+    confirmAction?.questions?.length && turnId ? { turnId, questions: confirmAction.questions } : null;
 
   if (answer?.answer) {
     const citation = answer.citations?.find((entry) => entry.quote);
@@ -39,12 +54,21 @@ function extractDispatchReply(result: DispatchResponse): AgentDispatchReply | nu
       taskId: result.taskId ?? null,
       text: answer.answer,
       quote: citation?.quote ?? null,
-      sourceTitle: citation?.sourceTitle ?? null
+      sourceTitle: citation?.sourceTitle ?? null,
+      confirm,
+      confirmedNote: null
     };
   }
 
   if (result.reply) {
-    return { taskId: result.taskId ?? null, text: result.reply, quote: null, sourceTitle: null };
+    return {
+      taskId: result.taskId ?? null,
+      text: result.reply,
+      quote: null,
+      sourceTitle: null,
+      confirm,
+      confirmedNote: null
+    };
   }
 
   return null;
@@ -211,6 +235,29 @@ export function useAgentTasks(enabled: boolean) {
     [refreshTasks]
   );
 
+  // 用户点了「去找来源」才真的动网络。确认之后排的是一个研究任务,会出现在列表里。
+  const confirmDiscovery = useCallback(
+    async (turnId: string, choices: Record<string, string>) => {
+      setDispatchPending(true);
+
+      try {
+        await apiRequest("/api/agent/confirm", {
+          method: "POST",
+          body: { turnId, choices },
+          timeoutMs: 60000
+        });
+
+        setLastReply((reply) => (reply ? { ...reply, confirm: null, confirmedNote: t("tasks.confirmQueued") } : reply));
+        await refreshTasks();
+      } catch {
+        setDispatchError(t("tasks.confirmFailed"));
+      } finally {
+        setDispatchPending(false);
+      }
+    },
+    [refreshTasks]
+  );
+
   // 换看别的任务就把上一次的回话收起来,免得它一直挂在不相干的任务上面。
   const selectTask = useCallback((taskId: string) => {
     setSelectedTaskId((current) => {
@@ -223,6 +270,7 @@ export function useAgentTasks(enabled: boolean) {
   }, []);
 
   return {
+    confirmDiscovery,
     detail,
     detailLoading,
     dispatchError,

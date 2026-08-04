@@ -350,6 +350,17 @@ function buildActions(
   }
 
   if (zone === "frontier") {
+    // 先用库里已有的东西回答,要往外搜必须先问过用户。此前 frontier 只给
+    // discover_sources、不给确认动作,而 handleAgentAsk 正是靠「有没有确认动作」
+    // 决定要不要立刻搜——于是问一句话就静默发真实搜索、花掉搜索额度、写候选源。
+    // 知道得少的 dark 区反而有确认门,门是设反的。
+    const queries = planDiscoveryQueries({
+      concepts: matchedConcepts,
+      nextAction: "expand_broader",
+      goals: memory?.profile.goals,
+      maxQueries: maxDiscoveryQueries
+    });
+
     return [
       {
         kind: "start_series",
@@ -357,15 +368,17 @@ function buildActions(
         concepts: matchedConcepts
       },
       {
+        kind: "confirm_discovery",
+        label: contentLanguage === "en" ? "Confirm research scope" : "确认研究范围",
+        concepts: matchedConcepts,
+        queries,
+        questions: buildDiscoveryConfirmationQuestions(contentLanguage)
+      },
+      {
         kind: "discover_sources",
         label: contentLanguage === "en" ? "Find related sources" : "找找相关来源",
         concepts: matchedConcepts,
-        queries: planDiscoveryQueries({
-          concepts: matchedConcepts,
-          nextAction: "expand_broader",
-          goals: memory?.profile.goals,
-          maxQueries: maxDiscoveryQueries
-        })
+        queries
       }
     ];
   }

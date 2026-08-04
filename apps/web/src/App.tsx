@@ -2640,6 +2640,7 @@ export function App() {
         failedCount={agentTasks.failedCount}
         lastReply={agentTasks.lastReply}
         listError={agentTasks.listError}
+        onConfirmDiscovery={(turnId, choices) => void agentTasks.confirmDiscovery(turnId, choices)}
         onDispatchSubmit={(event) => {
           event.preventDefault();
           void agentTasks.dispatchTask(agentTasks.dispatchText);

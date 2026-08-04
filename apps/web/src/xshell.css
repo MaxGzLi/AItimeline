@@ -3226,3 +3226,56 @@ button.x-chip {
   margin-top: 4px;
   font-style: normal;
 }
+
+/* 确认去外面找来源:库里答完了才出现,选完两项才能点。 */
+.x-task-confirm {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--x-line);
+}
+.x-task-confirmhead {
+  margin: 0 0 8px;
+  color: var(--x-muted);
+}
+.x-task-confirmrow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.x-task-confirmlabel {
+  color: var(--x-muted);
+  margin-right: 2px;
+}
+.x-task-choice {
+  padding: 4px 10px;
+  border: 1px solid var(--x-line);
+  border-radius: 999px;
+  background: none;
+  color: var(--x-ink);
+  font: inherit;
+  cursor: pointer;
+}
+.x-task-choice:hover { background: var(--x-hover); }
+.x-task-choice.active {
+  border-color: var(--x-task-accent);
+  color: var(--x-task-accent);
+  font-weight: 700;
+}
+.x-task-confirmgo {
+  margin-top: 8px;
+  padding: 7px 16px;
+  border: none;
+  border-radius: 999px;
+  background: var(--x-btn-bg);
+  color: var(--x-btn-ink);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+.x-task-confirmgo:disabled { opacity: 0.4; cursor: default; }
+.x-task-confirmed {
+  margin: 12px 0 0;
+  color: var(--x-repost);
+}

@@ -151,3 +151,47 @@ describe("runConversationTurn concept matching for Chinese and abbreviated quest
     expect(turn.answerCardId).toBe("post-moe");
   });
 });
+
+// 什么时候会真的花钱、动网络,由「这一轮带不带 confirm_discovery」决定:
+// handleAgentAsk 只在带确认动作时才不立刻搜。所以这几条断言守的是钱和网络,
+// 不只是界面文案。
+describe("discovery consent", () => {
+  const moePost = makePost({ id: "post-moe", concepts: ["Mixture-of-Experts", "Sparse Activation"] });
+  const library = [moePost];
+
+  it("asks before searching outside even when the question matched a known concept", async () => {
+    const turn = await ask("MoE 到底省在哪?", library);
+    const kinds = turn.actions.map((action) => action.kind);
+
+    expect(turn.zone).toBe("frontier");
+    expect(kinds).toContain("confirm_discovery");
+    // 确认动作在前:handleAgentAsk 看到它就不会自动搜。
+    expect(kinds.indexOf("confirm_discovery")).toBeLessThan(kinds.indexOf("discover_sources"));
+  });
+
+  it("hands the confirmation the same queries the search would have used", async () => {
+    const turn = await ask("MoE 到底省在哪?", library);
+    const confirm = turn.actions.find((action) => action.kind === "confirm_discovery");
+    const discover = turn.actions.find((action) => action.kind === "discover_sources");
+
+    expect(confirm?.questions?.length).toBeGreaterThan(0);
+    expect(confirm?.queries).toEqual(discover?.queries);
+    expect(confirm?.queries?.length).toBeGreaterThan(0);
+  });
+
+  it("still asks before searching for a question nothing in the library covers", async () => {
+    const turn = await ask("量子拓扑织机怎么用", library);
+
+    expect(turn.zone).toBe("dark");
+    expect(turn.actions.map((action) => action.kind)).toContain("confirm_discovery");
+  });
+
+  it("never offers to search when the answer is fully inside the library", async () => {
+    const turn = await ask("稀疏激活是什么意思", library);
+
+    // learning / inside 区本来就没有 discover 动作,别因为改 frontier 把它们带上。
+    if (turn.zone === "learning" || turn.zone === "inside") {
+      expect(turn.actions.map((action) => action.kind)).not.toContain("discover_sources");
+    }
+  });
+});

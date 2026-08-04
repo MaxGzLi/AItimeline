@@ -1,5 +1,5 @@
 import { ArrowUp, LoaderCircle, RotateCcw } from "lucide-react";
-import type { FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { formatRelativeTime, formatShortTime } from "../lib/format";
 import { t } from "../lib/i18n";
 import { groupAgentTasks, type AgentTaskDetailResponse, type AgentTaskStatus, type AgentTaskSummary } from "../lib/tasks";
@@ -23,6 +23,7 @@ export interface TaskClientViewProps {
   failedCount: number;
   lastReply: AgentDispatchReply | null;
   listError: string | null;
+  onConfirmDiscovery: (turnId: string, choices: Record<string, string>) => void;
   onDispatchSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onDispatchTextChange: (value: string) => void;
   onOpenCard: (cardId: string) => void;
@@ -45,6 +46,7 @@ export function TaskClientView({
   failedCount,
   lastReply,
   listError,
+  onConfirmDiscovery,
   onDispatchSubmit,
   onDispatchTextChange,
   onOpenCard,
@@ -58,6 +60,16 @@ export function TaskClientView({
   tasksLoading
 }: TaskClientViewProps) {
   const groups = groupAgentTasks(tasks, new Date());
+  const [confirmChoices, setConfirmChoices] = useState<Record<string, string>>({});
+  const confirmTurnId = lastReply?.confirm?.turnId ?? null;
+  const isConfirmReady = Boolean(
+    lastReply?.confirm?.questions.every((confirmQuestion) => confirmChoices[confirmQuestion.id])
+  );
+
+  // 换一轮对话就把上一轮的勾选清掉,免得把旧选择带进新的确认。
+  useEffect(() => {
+    setConfirmChoices({});
+  }, [confirmTurnId]);
 
   return (
     <div className="x-task-client">
@@ -151,6 +163,41 @@ export function TaskClientView({
                     {lastReply.sourceTitle ? <em>{lastReply.sourceTitle}</em> : null}
                   </p>
                 ) : null}
+                {/* 库里的答完了;要往外搜先问过用户,别静默花掉搜索额度。 */}
+                {lastReply.confirm ? (
+                  <div className="x-task-confirm">
+                    <p className="x-task-confirmhead">{t("tasks.confirmHead")}</p>
+                    {lastReply.confirm.questions.map((confirmQuestion) => (
+                      <div className="x-task-confirmrow" key={confirmQuestion.id}>
+                        <span className="x-task-confirmlabel">{confirmQuestion.label}</span>
+                        {confirmQuestion.options.map((option) => (
+                          <button
+                            aria-pressed={confirmChoices[confirmQuestion.id] === option.id}
+                            className={`x-task-choice${
+                              confirmChoices[confirmQuestion.id] === option.id ? " active" : ""
+                            }`}
+                            key={option.id}
+                            onClick={() =>
+                              setConfirmChoices((current) => ({ ...current, [confirmQuestion.id]: option.id }))
+                            }
+                            type="button"
+                          >
+                            {option.label}
+                          </button>
+                        ))}
+                      </div>
+                    ))}
+                    <button
+                      className="x-task-confirmgo"
+                      disabled={!isConfirmReady || dispatchPending}
+                      onClick={() => onConfirmDiscovery(lastReply.confirm!.turnId, confirmChoices)}
+                      type="button"
+                    >
+                      {t("tasks.confirmGo")}
+                    </button>
+                  </div>
+                ) : null}
+                {lastReply.confirmedNote ? <p className="x-task-confirmed">{lastReply.confirmedNote}</p> : null}
               </div>
             </div>
           </div>

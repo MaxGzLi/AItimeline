@@ -295,6 +295,30 @@ describe("task titles", () => {
     ).toBe("导入来源:Ann on memory");
   });
 
+  // researchQuestion 是对象不是字符串,直接内插会印出 [object Object]。
+  it("names a research task by the question that was asked, not the whole payload", () => {
+    expect(
+      __testing.describeJob(
+        {
+          kind: "research_question",
+          topicId: "question-abc",
+          researchQuestion: {
+            turnId: "agent-turn-1",
+            question: "混合专家是什么",
+            choices: { focus: "definition", depth: "quick" }
+          }
+        },
+        "zh"
+      )
+    ).toBe("研究问题:混合专家是什么");
+  });
+
+  it("falls back to the topic when a research job carries no question text", () => {
+    expect(__testing.describeJob({ kind: "research_question", topicId: "question-abc" }, "zh")).toBe(
+      "研究问题:question-abc"
+    );
+  });
+
   it("falls back to the topic when the job carries no source title", () => {
     expect(__testing.describeJob({ kind: "discover_sources", topicId: "agent memory" }, "zh")).toBe(
       "找来源:agent memory"
