@@ -166,6 +166,7 @@ function buildCaptureBody(tweet) {
     author: tweet.author || undefined,
     publishedAt: tweet.postedAt || undefined,
     topic: tweet.topic || undefined,
+    capturedMedia: Array.isArray(tweet.media) && tweet.media.length ? tweet.media : undefined,
     intakeKind: "browser_share",
     reason: "Saved from X via the AITimeline extension."
   };

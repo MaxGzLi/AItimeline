@@ -4051,7 +4051,16 @@ try {
     "give the agent the three files that matter and it one-shots the change;",
     "dump the whole repo in and it drowns. curation is the real skill now."
   ].join(" ");
+  // 剪藏随文带图:唯一放行的 fetch 是首条推文的配图(服务端下载进媒体库);
+  // 其余任何请求(含第二条故意给的坏图 URL)照旧必须失败,验证配图失败不阻塞出卡。
+  const clipImageUrl = "https://pbs.twimg.com/media/clip-smoke-1?format=png&name=large";
+  const clipBrokenImageUrl = "https://pbs.twimg.com/media/clip-smoke-broken?format=png&name=large";
+  const clipImageBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
   const clipFetch = async (input) => {
+    if (getFetchUrl(input) === clipImageUrl) {
+      return new Response(clipImageBytes, { status: 200, headers: { "content-type": "image/png" } });
+    }
+
     throw new Error(`Browser clip smoke must not fetch anything, but requested: ${getFetchUrl(input)}`);
   };
   const previousClipBudget = process.env.AITIMELINE_DAILY_AUTO_JOB_BUDGET;
@@ -4075,10 +4084,20 @@ try {
         title: "Andrej Karpathy (@karpathy) on X",
         author: "Andrej Karpathy",
         publishedAt: "2026-08-01T09:00:00.000Z",
+        capturedMedia: [
+          { kind: "image", url: clipImageUrl },
+          { kind: "image", url: "javascript:alert(1)" }
+        ],
         intakeKind: "browser_share",
         reason: "Saved from X via the AITimeline extension."
       }
     });
+
+    assert.deepEqual(
+      clipCapture.record.candidate.capturedMedia,
+      [{ kind: "image", url: clipImageUrl }],
+      "capture should keep the http image reference and drop the non-http one"
+    );
 
     assert.equal(clipCapture.status, "queued", "a clipped tweet should queue an import job immediately");
     assert.equal(clipCapture.record.intakeKind, "browser_share", "extension captures should use the browser_share intake");
@@ -4092,7 +4111,13 @@ try {
       method: "POST",
       body: {
         url: clipSecondTweetUrl,
-        capturedText: clipTweetText,
+        // 与首条不同的正文:同文导入会按去重合并进已有卡(零新卡成功),
+        // 这里要一张独立的卡来验证坏图不阻塞出卡。
+        capturedText:
+          "counterpoint from a week of pair-writing evals: grading rubrics beat vibes. " +
+          "write the failure modes down first, score against them, and disagreements between " +
+          "reviewers drop by half. the rubric is the product, the model is just the pen.",
+        capturedMedia: [{ kind: "image", url: clipBrokenImageUrl }],
         intakeKind: "browser_share",
         reason: "Saved from X via the AITimeline extension."
       }
@@ -4122,6 +4147,28 @@ try {
       clipSnapshot.sourceRegistries.some((record) => record.sourceId === clipPost.sources[0].id),
       true,
       "the tweet should be registered as a citable source"
+    );
+
+    // capturedMedia 通路:配图下载成媒体库资产、进 registry、挂上首卡。
+    const clipSourceId = clipPost.sources[0].id;
+    const clipRegistry = clipSnapshot.sourceRegistries.find((record) => record.sourceId === clipSourceId);
+    const clipImageAsset = (clipRegistry?.registry?.assets ?? []).find((asset) => asset.kind === "image");
+
+    assert.equal(Boolean(clipImageAsset), true, "the clipped image should be registered as an image asset");
+    assert.equal(
+      clipImageAsset.url,
+      `/media/${clipSourceId}/lead.png`,
+      "the clipped image asset should point into the media library"
+    );
+    assert.deepEqual(
+      clipPost.media,
+      [{ assetId: clipImageAsset.id, caption: clipImageAsset.caption, origin: "article" }],
+      "the clipped image should be attached to the card"
+    );
+    assert.deepEqual(
+      new Uint8Array(await readFile(join(mediaRootDir, clipSourceId, "lead.png"))),
+      clipImageBytes,
+      "the clipped image bytes should be cached on disk"
     );
 
     const clipEvidence = await requestJsonFromServer(clipServer, `/api/evidence/${clipPost.id}`);
@@ -4157,6 +4204,14 @@ try {
       "imported",
       "the pending browser_share capture should drain and import on the next run"
     );
+
+    // 坏图 URL(fetch 直接抛)不阻塞出卡:卡照常出,只是没配图。
+    const clipSecondPost = clipDrainedSnapshot.posts.find((post) =>
+      (post.sources ?? []).some((source) => source.url === clipSecondTweetUrl)
+    );
+
+    assert.equal(Boolean(clipSecondPost), true, "a failing clipped image must not block the card");
+    assert.equal(clipSecondPost.media, undefined, "the card with a failing image should ship without media");
   } finally {
     await closeServer(clipServer);
     if (previousClipBudget === undefined) {

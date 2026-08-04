@@ -96,6 +96,23 @@ smoke 覆盖。
 **P0-3 视频链接**。带视频的推文:存视频 poster 图(kind:"video" 带 posterUrl)
 + 推文链接本身就是视频链接;卡面配图用 poster。不下载视频。
 
+**P0-2/P0-3 方案(设计门禁记录,2026-08-04 主会话批,单独 PR)**:
+
+- 字段形状:`capturedMedia: [{kind:"image"|"video", url, posterUrl?}]`,服务端
+  收口时图片最多 4 条、视频最多 1 条,URL 仅收 http/https。
+- 通路:插件抓推文内 `pbs.twimg.com/media` 图片(排除引用块内的)与视频
+  poster → capture 候选记录随 capturedText 同样方式存 `capturedMedia`(快照
+  sourceCandidates 解码是整条 deepClone,未知字段存活;队列层校验只验必填
+  不剥字段,均无需登记)→ `ingestSourceCandidate` 的 capturedText 分支取首图
+  (无图取视频 poster)调 core 的 `cacheLeadImageAsset` 下载进媒体库(≤3MB、
+  content-type 校验、任何失败返回 undefined 不阻塞)→ image asset 进 assets,
+  worker 建 sourceRegistry 时自然收录 → `runImportSourceJob` 产卡后
+  `attachLeadMediaToFirstCard` 挂首卡(origin:图=article、视频 poster=video)
+  → 结算 `saveSourceImportResult` 落库,时间线响应 `enrichPostsMedia` 从
+  registry 补 url,网页现有配图通路直接渲染。
+- 放弃的选项:把下载挪到结算侧(要在 core 结果里塞图片字节,与 #162 刚做的
+  result 瘦身背道而驰);全量下载 4 图(卡面只用首图,其余是死重)。
+
 **P0-4 X 文章(Article)与折叠长文**。时间线上被折叠的长推文不再静默存半截
 (幂等去重意味着第一次存半截会永久污染,必须在源头拦)。X Article 页面
 (twitterArticle 结构)提取完整正文;选择器真机验证,验不过先写进 README

@@ -34,6 +34,50 @@
     return text || null;
   }
 
+  /** 推文自带的配图与视频 poster(排除引用块里的、头像表情等非正文图)。
+   *  只收 URL,下载在服务端做;video 的 url 由调用方补推文永久链接。 */
+  function extractCapturedMedia(article) {
+    const media = [];
+
+    for (const img of article.querySelectorAll('[data-testid="tweetPhoto"] img')) {
+      if (media.length >= 4) {
+        break;
+      }
+
+      if (img.closest('div[role="link"]')) {
+        continue;
+      }
+
+      const src = img.currentSrc || img.src || "";
+
+      if (!src.includes("pbs.twimg.com/media")) {
+        continue;
+      }
+
+      let url = src;
+
+      try {
+        // 时间线上是缩略图(name=small/medium),存大图。
+        const parsed = new URL(src);
+
+        parsed.searchParams.set("name", "large");
+        url = parsed.toString();
+      } catch {
+        // URL 解析不了就按原样存。
+      }
+
+      media.push({ kind: "image", url });
+    }
+
+    const video = article.querySelector("video[poster]");
+
+    if (video && !video.closest('div[role="link"]') && /^https?:/.test(video.poster)) {
+      media.push({ kind: "video", url: "", posterUrl: video.poster });
+    }
+
+    return media;
+  }
+
   function extractTweet(article) {
     const timeEl = article.querySelector("time[datetime]");
     const permalinkEl = timeEl ? timeEl.closest("a[href]") : null;
@@ -46,17 +90,20 @@
 
     // Canonicalize to x.com so the same tweet dedupes across both hostnames.
     const permalinkPath = new URL(permalinkEl.getAttribute("href"), "https://x.com").pathname;
+    const url = `https://x.com${permalinkPath}`;
     const userNameEl = article.querySelector('[data-testid="User-Name"]');
     const authorParts = userNameEl
       ? userNameEl.innerText.split("\n").map((part) => part.trim()).filter(Boolean)
       : [];
 
     return {
-      url: `https://x.com${permalinkPath}`,
+      url,
       text,
       author: authorParts[0] || "",
       handle: authorParts.find((part) => part.startsWith("@")) || "",
-      postedAt: timeEl ? timeEl.getAttribute("datetime") : null
+      postedAt: timeEl ? timeEl.getAttribute("datetime") : null,
+      // 视频没有独立文件链接,推文永久链接就是它的链接。
+      media: extractCapturedMedia(article).map((item) => (item.kind === "video" ? { ...item, url } : item))
     };
   }
 
