@@ -1,7 +1,12 @@
 # AITimeline Clipper(Chrome 插件)
 
-在 x.com / twitter.com 的每条推文操作栏里加一个「保存」按钮,点击后把推文
-(正文、作者、永久链接、发布时间)送进本机 AITimeline API,登记成待转化的来源。
+两条通路:
+
+- **剪藏**:在 x.com / twitter.com 的每条推文操作栏里加一个「保存」按钮,点击后把推文
+  (正文、作者、永久链接、发布时间)送进本机 AITimeline API,登记成待转化的来源。
+- **注入**:从本机 API 拉「该回来找用户」的知识卡(复习到期优先),以 X 原生帖的
+  外观插进时间线;拉不到卡就完全不注入。文件:`inject.js` + `lib/injectCore.js`
+  (纯逻辑,有 Vitest 单测)+ `inject.css`。
 
 通路:content script 抓取推文 → `chrome.runtime.sendMessage` → background
 service worker → `POST http://127.0.0.1:8787/api/captures/source`。
@@ -39,10 +44,36 @@ service worker → `POST http://127.0.0.1:8787/api/captures/source`。
 9. 断连演练:停掉 API 再点「保存」,按钮应变红色「重试」,悬停可见错误
    提示;重启 API 后点击可恢复。
 
+## 人工验收步骤(注入)
+
+x.com 上的 DOM 行为没法无头验证,以下步骤必须真人过一遍:
+
+1. 起本机 API(`npm run dev:api`)和网页应用(`npm run dev`,127.0.0.1:5173)。
+   确认知识库里已有卡:`curl -s "http://127.0.0.1:8787/api/inject/cards" | python3 -m json.tool`
+   应返回 1-3 张卡(复习到期的优先);返回空数组则先导入几篇文章再验。
+2. 重新加载扩展(`chrome://extensions` → 刷新按钮),打开 https://x.com 并登录。
+3. 滚动信息流几屏,应看到一张「你的知识库 · N 天前存的」卡混在推文之间:
+   40px 圆形头像位、标题加粗、摘要、来源标题、蓝色「在知识库中打开」。
+   外观应与前后推文融为一体(分隔线、字体、内边距一致),不重叠不破版。
+4. 频率克制:同屏不应出现两张注入卡(间隔约 8 条推文);整个页面生命周期
+   最多 3 张;刷新页面后重新计数。
+5. 滚动存活:把注入卡滚出视口很远(1-2 万像素)再滚回来,卡应还在原来那条
+   推文上方、且只有一份(锚点稳定 + 查重)。
+6. 点击注入卡:新标签页打开 http://127.0.0.1:5173(网页应用没有单卡路由,
+   开首页是预期行为)。
+7. 信号回传:注入卡进视口停留几秒后,查
+   `curl -s http://127.0.0.1:8787/api/snapshot | python3 -c "import json,sys; d=json.load(sys.stdin); print([ (r['signal']['postId'], r['signal']['dwellTimeMs'], r['signal']['openedThread']) for r in d['interactionSignals'][-5:] ])"`
+   应看到该卡的纯曝光记录(dwell 0)、随停留追加的累计 dwell 记录,以及
+   点开后 openedThread=true 的记录。
+8. 断连演练:停掉 API 再刷新 x.com,不应有任何注入卡出现(不造假卡),
+   页面无报错弹窗;重启 API 后刷新恢复。
+
 ## 已知限制
 
 - 太短的推文可能被来源质量检查拒收(判据要求正文有足够词量与实质内容),
   候选会落为 `rejected_source`。长推文/长帖(Article)通过率高。
 - 只在推文操作栏注入;X 的 DOM 结构(`article[data-testid="tweet"]`、
   `[data-testid="tweetText"]` 等)若改版,选择器需要跟进。
+- 注入依赖 X 虚拟列表的格子结构(`div[data-testid="cellInnerDiv"]`)和推文
+  `/status/` 永久链接;X 改版需跟进。注入卡的会话计数在页面刷新后归零。
 - API 地址写死 `127.0.0.1:8787`,与本机默认一致;不支持配置。

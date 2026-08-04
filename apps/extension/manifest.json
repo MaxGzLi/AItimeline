@@ -9,6 +9,12 @@
       "js": ["content.js"],
       "css": ["content.css"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://x.com/*", "https://twitter.com/*"],
+      "js": ["lib/injectCore.js", "inject.js"],
+      "css": ["inject.css"],
+      "run_at": "document_idle"
     }
   ],
   "background": {

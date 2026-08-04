@@ -40,6 +40,56 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return true;
 });
 
+// ---- 注入面(inject.js)的消息:拉可注入的卡 + 转发行为信号。 ----
+// 单独一个 listener,不动上面剪藏的代码;不认识的消息返回 undefined 让别的 listener 接。
+
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (!message || (message.type !== "AITL_FETCH_INJECT_CARDS" && message.type !== "AITL_SEND_SIGNAL")) {
+    return undefined;
+  }
+
+  const task =
+    message.type === "AITL_FETCH_INJECT_CARDS" ? fetchInjectCards() : sendInteractionSignal(message.signal);
+
+  task.then(sendResponse, (error) => {
+    sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) });
+  });
+
+  // Keep the message channel open for the async response.
+  return true;
+});
+
+async function fetchInjectCards() {
+  const response = await fetch(`${API_BASE}/api/inject/cards`);
+  const payload = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    throw new Error(payload && payload.error ? payload.error : `AITimeline API responded ${response.status}.`);
+  }
+
+  return { ok: true, cards: Array.isArray(payload && payload.cards) ? payload.cards : [] };
+}
+
+async function sendInteractionSignal(signal) {
+  const response = await fetch(`${API_BASE}/api/signals`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      generatedAt: new Date().toISOString(),
+      signal,
+      sourceCandidates: []
+    })
+  });
+
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+
+    throw new Error(payload && payload.error ? payload.error : `AITimeline API responded ${response.status}.`);
+  }
+
+  return { ok: true };
+}
+
 async function saveTweet(tweet) {
   const response = await fetch(`${API_BASE}/api/captures/source`, {
     method: "POST",
