@@ -57,6 +57,7 @@ export async function handleAgentAsk(body, userId, persistenceStore, client, sea
       memory,
       userSignals: toUserSignals(snapshot.interactionSignals),
       previousTurns: getPreviousTurns(snapshot, userId, threadId),
+      conceptAliases: snapshot.conceptAliases,
       now
     },
     { client, contentLanguage }

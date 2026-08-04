@@ -7,9 +7,17 @@ import {
   type KnowledgeBoundaryView,
   type KnowledgeBoundaryZone
 } from "../graph/knowledgeBoundary.js";
-import { slugConcept } from "../graph/conceptAliases.js";
+import { createConceptAliasResolver, slugConcept, type ConceptAliasResolver } from "../graph/conceptAliases.js";
+import { buildConceptSurfaceForms, textMentionsSurfaceForm } from "../graph/conceptSurfaceForms.js";
 import { planDiscoveryQueries } from "../discovery/sourceDiscovery.js";
-import type { InteractionSignal, KnowledgePost, SourceRegistry, UserMemory, UserSignal } from "../types.js";
+import type {
+  ConceptAliasRecord,
+  InteractionSignal,
+  KnowledgePost,
+  SourceRegistry,
+  UserMemory,
+  UserSignal
+} from "../types.js";
 import type { AgentTurnRecord } from "../storage/persistenceStore.js";
 
 export type AgentTurnIntent = "grounded_qa" | "boundary_probe" | "discovery_proposal" | "idea_observation";
@@ -77,6 +85,7 @@ export interface ConversationTurnInput {
   memory?: UserMemory;
   userSignals?: UserSignal[];
   previousTurns?: AgentTurnRecord[];
+  conceptAliases?: ConceptAliasRecord[];
   now?: string | Date;
 }
 
@@ -102,11 +111,12 @@ export async function runConversationTurn(
   const boundary = buildKnowledgeBoundary({
     cards: input.posts,
     signals: input.userSignals,
-    memory: input.memory
+    memory: input.memory,
+    conceptAliases: input.conceptAliases
   });
-  const matchedConcepts = extractConceptsFromQuestion(question, input.posts, input.memory);
+  const matchedConcepts = extractConceptsFromQuestion(question, input.posts, input.memory, input.conceptAliases);
   const targetPost = resolveTargetPost(input.posts, input.postId, matchedConcepts);
-  const zone = resolveTurnZone(boundary, matchedConcepts);
+  const zone = resolveTurnZone(boundary, matchedConcepts, input.conceptAliases);
   const nearestPosts = zone === "dark" ? findNearestPosts(question, input.posts) : [];
   const notes: string[] = [];
   const contentLanguage = options.contentLanguage ?? "zh";
@@ -164,9 +174,9 @@ export async function runConversationTurn(
 function extractConceptsFromQuestion(
   question: string,
   posts: KnowledgePost[],
-  memory: UserMemory | undefined
+  memory: UserMemory | undefined,
+  conceptAliases: ConceptAliasRecord[] | undefined
 ): string[] {
-  const loweredQuestion = question.toLowerCase();
   const vocabulary = new Map<string, string>();
   const addTerm = (term: string) => {
     const trimmed = term.trim();
@@ -186,10 +196,59 @@ function extractConceptsFromQuestion(
   (memory?.knowledge.savedConcepts ?? []).forEach(addTerm);
   (memory?.profile.interests ?? []).forEach(addTerm);
 
+  const resolver = createConceptAliasResolver(conceptAliases ?? []);
+  const labelsByCanonicalSlug = collectAliasLabels(conceptAliases, resolver);
+
   return Array.from(vocabulary.values())
-    .filter((term) => loweredQuestion.includes(term.toLowerCase()))
+    .filter((term) =>
+      collectSurfaceForms(term, labelsByCanonicalSlug.get(resolver.slugConcept(term))).some((form) =>
+        textMentionsSurfaceForm(question, form)
+      )
+    )
     .sort((left, right) => right.length - left.length)
     .slice(0, 5);
+}
+
+/**
+ * Every way this concept can legitimately be written: its own name, whatever
+ * the user merged into it, and the abbreviations / Chinese wordings derived
+ * from each. The concept string itself is never rewritten — only recognised.
+ */
+function collectSurfaceForms(term: string, aliasLabels: string[] | undefined): string[] {
+  const forms = new Set<string>();
+
+  for (const label of [term, ...(aliasLabels ?? [])]) {
+    forms.add(label);
+
+    for (const derived of buildConceptSurfaceForms(label)) {
+      forms.add(derived);
+    }
+  }
+
+  return Array.from(forms);
+}
+
+function collectAliasLabels(
+  conceptAliases: ConceptAliasRecord[] | undefined,
+  resolver: ConceptAliasResolver
+): Map<string, string[]> {
+  const labelsByCanonicalSlug = new Map<string, string[]>();
+
+  for (const record of conceptAliases ?? []) {
+    const slug = resolver.slugConcept(record.canonical);
+
+    if (!slug) {
+      continue;
+    }
+
+    labelsByCanonicalSlug.set(slug, [
+      ...(labelsByCanonicalSlug.get(slug) ?? []),
+      record.canonical,
+      ...record.aliases
+    ]);
+  }
+
+  return labelsByCanonicalSlug;
 }
 
 function resolveTargetPost(
@@ -227,12 +286,18 @@ function resolveTargetPost(
   return best?.post;
 }
 
-function resolveTurnZone(boundary: KnowledgeBoundaryView, matchedConcepts: string[]): KnowledgeBoundaryZone {
+function resolveTurnZone(
+  boundary: KnowledgeBoundaryView,
+  matchedConcepts: string[],
+  conceptAliases: ConceptAliasRecord[] | undefined
+): KnowledgeBoundaryZone {
   if (!matchedConcepts.length) {
     return "dark";
   }
 
-  const zones = matchedConcepts.map((concept) => classifyConceptZone(boundary, concept));
+  // The boundary view keys zones by resolved concept, so classification has to
+  // resolve through the same alias records or every merged concept reads dark.
+  const zones = matchedConcepts.map((concept) => classifyConceptZone(boundary, concept, { conceptAliases }));
 
   // The expansion opportunity dominates: a question touching the frontier is a
   // frontier question even when it also mentions mastered concepts.
