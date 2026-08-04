@@ -1,0 +1,206 @@
+/* 知识周报 W32 · 设计系统(六页共用)
+   纸色 #FAFAF6,墨 #1C1B18,accent 暖红 #B3402A(每页 ≤1 处)。
+   字体三面:黄油体(中文标题)/ 思源黑 Light(中文正文)/ 得意黑(西文数字);
+   文楷只做 ≤16px 灰注。三档字级:导语 26 / 正文 22 / 注 16。 */
+
+@font-face {
+  font-family: "Huangyou";
+  src: url("file:///Users/guanzhang/.claude/skills/max-xhs-design-skill/fonts/ZCOOLQingKeHuangYou-Regular.ttf");
+}
+@font-face {
+  font-family: "SourceLight";
+  src: url("file:///Users/guanzhang/.claude/skills/max-xhs-design-skill/fonts/SourceHanSansCN-Light.otf");
+}
+@font-face {
+  font-family: "SourceHeavy";
+  src: url("file:///Users/guanzhang/.claude/skills/max-xhs-design-skill/fonts/SourceHanSansCN-Heavy.otf");
+}
+@font-face {
+  font-family: "Smiley";
+  src: url("file:///Users/guanzhang/.claude/skills/max-xhs-design-skill/fonts/SmileySans-Oblique.ttf");
+}
+@font-face {
+  font-family: "Wenkai";
+  src: url("file:///Users/guanzhang/.claude/skills/max-xhs-design-skill/fonts/LXGWWenKai-Regular.ttf");
+}
+
+/* 西文面统一走得意黑:同名族 + unicode-range 只接管 ASCII */
+@font-face {
+  font-family: "Huangyou";
+  src: url("file:///Users/guanzhang/.claude/skills/max-xhs-design-skill/fonts/SmileySans-Oblique.ttf");
+  unicode-range: U+0020-007E;
+}
+@font-face {
+  font-family: "SourceLight";
+  src: url("file:///Users/guanzhang/.claude/skills/max-xhs-design-skill/fonts/SmileySans-Oblique.ttf");
+  unicode-range: U+0020-007E;
+}
+@font-face {
+  font-family: "SourceHeavy";
+  src: url("file:///Users/guanzhang/.claude/skills/max-xhs-design-skill/fonts/SmileySans-Oblique.ttf");
+  unicode-range: U+0020-007E;
+}
+@font-face {
+  font-family: "Wenkai";
+  src: url("file:///Users/guanzhang/.claude/skills/max-xhs-design-skill/fonts/SmileySans-Oblique.ttf");
+  unicode-range: U+0020-007E;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  width: 1080px;
+  height: 1440px;
+  background: #FAFAF6;
+  color: #1C1B18;
+  font-family: "SourceLight", sans-serif;
+  overflow: hidden;
+}
+
+/* 纸感噪点:感觉到而非看到 */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.05;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/></filter><rect width='240' height='240' filter='url(%23n)' opacity='0.6'/></svg>");
+}
+
+.page {
+  width: 1080px;
+  height: 1440px;
+  padding: 64px 72px 56px;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+/* 页眉:刊头 + 页码,六页固定 */
+.masthead {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  border-bottom: 3px solid #1C1B18;
+  padding-bottom: 14px;
+}
+.masthead .brand {
+  font-family: "Smiley";
+  font-size: 24px;
+  letter-spacing: 0.06em;
+}
+.masthead .brand b {
+  font-family: "Huangyou";
+  font-weight: normal;
+  font-size: 26px;
+  margin-left: 10px;
+  letter-spacing: 0;
+}
+.masthead .pageno {
+  font-family: "Smiley";
+  font-size: 24px;
+  color: #6B6A66;
+}
+
+/* 栏目行 */
+.kicker {
+  margin-top: 34px;
+  font-family: "SourceHeavy";
+  font-size: 22px;
+  letter-spacing: 0.28em;
+  color: #6B6A66;
+}
+.kicker span.en {
+  font-family: "Smiley";
+  letter-spacing: 0.08em;
+  color: #B3402A;
+  margin-right: 14px;
+}
+
+h1 {
+  font-family: "Huangyou";
+  font-weight: normal;
+  font-size: 68px;
+  line-height: 1.18;
+  letter-spacing: -0.02em;
+  margin-top: 16px;
+}
+
+.en, .num {
+  font-family: "Smiley";
+  font-weight: normal;
+}
+
+/* 正文三档 */
+.lede { font-size: 26px; line-height: 1.7; }
+.body-text { font-size: 22px; line-height: 1.75; color: #2B2A26; }
+.note {
+  font-family: "Wenkai";
+  font-size: 16px;
+  line-height: 1.6;
+  color: #8A8880;
+}
+
+/* 黑底反白划重点(每页 ≤1 处) */
+.hl {
+  background: #1C1B18;
+  color: #FAFAF6;
+  padding: 2px 10px 3px;
+}
+
+/* 结论红字(accent,每页 ≤1 处) */
+.accent { color: #B3402A; }
+
+/* 引文块:2px 黑框,原文上版 */
+.quote-block {
+  border: 2px solid #1C1B18;
+  padding: 30px 34px 24px;
+  background: #FFFFFF;
+}
+.quote-block .q-body {
+  font-size: 25px;
+  line-height: 1.72;
+}
+.quote-block .q-src {
+  margin-top: 18px;
+  font-family: "Wenkai";
+  font-size: 16px;
+  color: #8A8880;
+}
+
+/* 序列编号(真序列:01 原文 → 02 解读) */
+.seq {
+  font-family: "Smiley";
+  font-size: 30px;
+  color: #B3402A;
+  margin-right: 12px;
+}
+.seq-label {
+  font-family: "SourceHeavy";
+  font-size: 24px;
+  letter-spacing: 0.2em;
+}
+
+/* 底部过渡区:细线 + 左侧遗留问题 + 右侧下一页 */
+.transition {
+  margin-top: auto;
+  border-top: 1.5px solid #C9C7BF;
+  padding-top: 18px;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 40px;
+}
+.transition .q {
+  font-family: "Wenkai";
+  font-size: 19px;
+  color: #6B6A66;
+  max-width: 640px;
+  line-height: 1.55;
+}
+.transition .next {
+  font-family: "SourceHeavy";
+  font-size: 19px;
+  white-space: nowrap;
+}
+.transition .next .en { color: #B3402A; }
