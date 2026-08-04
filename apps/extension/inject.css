@@ -1,18 +1,33 @@
-/* 注入卡:外观贴 X 原生帖(D1 实测色值),身份一眼是「你自己存的知识回来了」。
-   字体继承页面;分隔线 rgb(47,51,54);次要文字 rgb(113,118,123);
-   链接蓝 rgb(29,155,240);头像位 40px 圆形;内边距 12px 16px。 */
+/* 注入卡:外观贴 X 原生帖,身份一眼是「你自己存的知识回来了」。
+   字体继承页面;文字色 inherit 天然跟随主题;分隔线/次要文字/链接蓝按
+   data-aitl-theme(由 injectCore.classifyXTheme 按 body 背景色判定)切换:
+   纯黑(默认,D1 实测值)/ 暗蓝 Dim / 亮色。 */
 
 .aitl-inject {
+  --aitl-border: rgb(47, 51, 54);
+  --aitl-secondary: rgb(113, 118, 123);
+  --aitl-accent: rgb(29, 155, 240);
+
   display: flex;
   gap: 12px;
   padding: 12px 16px;
-  border-bottom: 1px solid rgb(47, 51, 54);
+  border-bottom: 1px solid var(--aitl-border);
   font-family: inherit;
   font-size: 15px;
   line-height: 20px;
   color: inherit;
   cursor: pointer;
   box-sizing: border-box;
+}
+
+.aitl-inject[data-aitl-theme="dim"] {
+  --aitl-border: rgb(56, 68, 77);
+  --aitl-secondary: rgb(139, 152, 165);
+}
+
+.aitl-inject[data-aitl-theme="light"] {
+  --aitl-border: rgb(239, 243, 244);
+  --aitl-secondary: rgb(83, 100, 113);
 }
 
 .aitl-inject:hover {
@@ -25,7 +40,7 @@
   height: 40px;
   border-radius: 9999px;
   background-color: rgba(29, 155, 240, 0.12);
-  color: rgb(29, 155, 240);
+  color: var(--aitl-accent);
   font-size: 18px;
   font-weight: 700;
   display: flex;
@@ -49,19 +64,28 @@
 
 .aitl-inject-meta,
 .aitl-inject-source {
-  color: rgb(113, 118, 123);
+  color: var(--aitl-secondary);
   font-size: 13px;
 }
 
+/* 标题/摘要行数钳制:模型生成的长文本不能把卡撑得比前后推文高一截。 */
 .aitl-inject-title {
   font-weight: 700;
   margin-bottom: 2px;
   overflow-wrap: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .aitl-inject-summary {
   overflow-wrap: break-word;
   margin-bottom: 6px;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .aitl-inject-source {
@@ -72,6 +96,6 @@
 }
 
 .aitl-inject-open {
-  color: rgb(29, 155, 240);
+  color: var(--aitl-accent);
   font-size: 13px;
 }
