@@ -1,40 +1,67 @@
-/* 知识周报 W32 · 设计系统(六页共用)
-   版式命来自 max-xhs-design-skill 模板 e-editorial-grid:
-   一种字重、三档字号,信息块像棋子散在灰纸上——块与块从不对齐成线,块内永远左对齐,留白是棋盘本身。
-   纸 #E0E0E2 / 墨 #050505;全刊只有思源黑 Light 一种字重(西文数字同面);
-   无第二字重、无色彩(仅封面地图红点一处,模板自带材质)、无居中、无框线装饰——仅日期下细线与角标括号。 */
+/* 知识周报 W32 · 设计系统 v3(六页共用)
+   小红书原生家族:封面走亮黄大字报(黄油体大字+红划重点+虚线清单),
+   内页走彩块干货卡(奶白纸+圆角彩卡+黑胶囊导航条)。
+   同一套色系与器件把两种版式缝成一个家族:
+   墨 #17150F / 红 #E8342A / 亮黄 #FFDE4D;四色粉彩卡配深色同系文字;
+   字体三面:黄油体(大字与编号)/ 思源黑 Heavy(标题关键词)/ 思源黑 Light(正文注文)。
+   纪律:黄色划重点条每页 ≤1;引文逐字上版;标点全半角逐行统一。 */
 
-@font-face {
-  font-family: "SH Light";
-  src: url("file:///Users/guanzhang/.claude/skills/max-xhs-design-skill/fonts/SourceHanSansCN-Light.otf");
-}
+@font-face { font-family: "Huangyou"; src: url("file:///Users/guanzhang/.claude/skills/max-xhs-design-skill/fonts/ZCOOLQingKeHuangYou-Regular.ttf"); }
+@font-face { font-family: "SourceHeavy"; src: url("file:///Users/guanzhang/.claude/skills/max-xhs-design-skill/fonts/SourceHanSansCN-Heavy.otf"); }
+@font-face { font-family: "SourceLight"; src: url("file:///Users/guanzhang/.claude/skills/max-xhs-design-skill/fonts/SourceHanSansCN-Light.otf"); }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
-:root { --paper: #E0E0E2; --ink: #050505; }
-body {
-  width: 1080px; height: 1440px;
-  background: var(--paper); color: var(--ink);
-  font-family: "SH Light", sans-serif;
-  overflow: hidden; position: relative;
+:root {
+  --ink: #17150F; --red: #E8342A; --yellow: #FFDE4D;
+  --paper: #FDFBF7;
+  --or-bg: #FFE9D9; --or-fg: #A03D08;
+  --bl-bg: #E3F0FF; --bl-fg: #1F5FA8;
+  --gr-bg: #E9F7E4; --gr-fg: #2E6B2F;
+  --pu-bg: #F3E9FF; --pu-fg: #633AAD;
 }
-.v { writing-mode: vertical-rl; }
+body {
+  width: 1080px; height: 1440px; overflow: hidden; position: relative;
+  background: var(--paper); color: var(--ink);
+  font-family: "SourceHeavy", sans-serif;
+  padding: 60px 64px;
+}
 
-/* 顶部左:三行刊头 */
-.tl { position: absolute; left: 26px; top: 18px; font-size: 46px; line-height: 1.3; letter-spacing: 2px; }
+/* 页头:黑胶囊刊名 + 页码 */
+.head { display: flex; align-items: center; justify-content: space-between; }
+.badge { background: var(--ink); color: var(--yellow); border-radius: 999px; padding: 12px 30px; font-size: 26px; letter-spacing: 2px; }
+.pgno { font-size: 24px; letter-spacing: 2px; }
 
-/* 顶部右:日期 + 细线 + 英文段 */
-.date { position: absolute; left: 640px; top: 24px; font-size: 64px; letter-spacing: 1px; font-variant-numeric: tabular-nums; }
-.date .to { display: block; text-align: right; font-size: 44px; margin-top: 2px; }
-.rule { position: absolute; left: 640px; top: 172px; width: 414px; height: 2px; background: var(--ink); }
-.enp { position: absolute; left: 640px; top: 190px; font-size: 22px; line-height: 1.32; letter-spacing: .5px; }
+/* 栏目章 + 页标题 */
+.kicker { margin-top: 44px; display: inline-block; border-radius: 999px; padding: 10px 26px; font-size: 26px; letter-spacing: 1px; }
+.title { margin-top: 26px; font-size: 78px; line-height: 1.25; letter-spacing: 1px; }
+.title .red { color: var(--red); }
 
-/* 内页页码(封面用 ✻ 标记占同位) */
-.pgno { position: absolute; right: 30px; top: 250px; font-size: 22px; letter-spacing: 2px; text-align: right; }
-.mark { position: absolute; right: 30px; top: 250px; font-size: 40px; }
+/* 彩块卡 */
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 26px; }
+.card { border-radius: 30px; padding: 34px 36px 36px; }
+.card .chip { display: inline-block; background: rgba(255,255,255,.85); border-radius: 999px; padding: 6px 20px; font-size: 22px; }
+.card .kw { margin-top: 20px; font-size: 42px; line-height: 1.3; }
+.card .d { margin-top: 14px; font-family: "SourceLight"; font-size: 26px; line-height: 1.55; }
+.c-or { background: var(--or-bg); color: var(--or-fg); }
+.c-bl { background: var(--bl-bg); color: var(--bl-fg); }
+.c-gr { background: var(--gr-bg); color: var(--gr-fg); }
+.c-pu { background: var(--pu-bg); color: var(--pu-fg); }
 
-/* 角标括号 */
-.cnr { position: absolute; font-size: 30px; }
+/* 引文卡:白纸卡,逐字上版 */
+.qcard { background: #FFFFFF; border-radius: 30px; padding: 34px 38px 32px; box-shadow: 0 6px 18px rgba(23,21,15,.06); }
+.qcard .lab { font-size: 22px; color: #8A8578; }
+.qcard .q-body { margin-top: 14px; font-family: "SourceLight"; font-size: 28px; line-height: 1.7; color: var(--ink); }
+.qcard .q-src { margin-top: 14px; font-family: "SourceLight"; font-size: 22px; color: #8A8578; }
 
-/* 底部小字通用 */
-.fc { font-size: 17px; line-height: 1.45; }
-.fc .lab { display: block; font-size: 14px; letter-spacing: 1px; margin-bottom: 2px; }
+/* 黄色划重点条(每页至多一条) */
+.strip { background: var(--yellow); border-radius: 22px; padding: 26px 36px; font-size: 38px; line-height: 1.4; }
+
+/* 灰注 */
+.note-sm { font-family: "SourceLight"; font-size: 22px; line-height: 1.6; color: #8A8578; }
+
+/* 底部黑条:页间问题链 */
+.bar { position: absolute; left: 64px; right: 64px; bottom: 56px;
+  background: var(--ink); color: #FFFFFF; border-radius: 999px; padding: 24px 44px;
+  display: flex; align-items: baseline; justify-content: space-between; gap: 30px; }
+.bar .q { font-family: "SourceLight"; font-size: 26px; color: #D8D4C8; }
+.bar .next { font-size: 28px; letter-spacing: 1px; white-space: nowrap; }

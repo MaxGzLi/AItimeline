@@ -4,70 +4,46 @@
 <meta charset="utf-8">
 <link rel="stylesheet" href="shared.css">
 <style>
-  /* 硬核页:671B 与 37B 做两级大字,概念做竖排簇 */
-  .big1 { position: absolute; left: 26px; top: 358px; font-size: 152px; letter-spacing: 4px; line-height: 1; font-variant-numeric: tabular-nums; }
-  .en1 { position: absolute; left: 520px; top: 372px; font-size: 64px; letter-spacing: 1px; line-height: 1; }
-  .sub1 { position: absolute; left: 520px; top: 466px; font-size: 34px; line-height: 1.3; letter-spacing: .5px; }
-  .vert1 { position: absolute; left: 1002px; top: 372px; font-size: 52px; letter-spacing: 3px; }
-
-  .midl { position: absolute; left: 26px; top: 620px; font-size: 46px; line-height: 1.35; }
-  .big2 { position: absolute; left: 282px; top: 598px; font-size: 132px; letter-spacing: 2px; line-height: 1; font-variant-numeric: tabular-nums; }
-  .q1 { position: absolute; left: 866px; top: 606px; font-size: 46px; letter-spacing: 6px; }
-  .q2 { position: absolute; left: 806px; top: 640px; font-size: 46px; letter-spacing: 6px; }
-  .q3 { position: absolute; left: 746px; top: 614px; font-size: 46px; letter-spacing: 6px; }
-  .q4 { position: absolute; left: 686px; top: 656px; font-size: 46px; letter-spacing: 6px; }
-
-  .r1 { position: absolute; left: 26px; top: 902px; font-size: 46px; line-height: 1.35; }
-  .r2 { position: absolute; left: 306px; top: 902px; font-size: 46px; line-height: 1.35; }
-  .r3 { position: absolute; left: 754px; top: 980px; font-size: 46px; line-height: 1.35; }
-
-  .tech { position: absolute; left: 26px; top: 1180px; width: 560px; font-size: 17px; line-height: 1.6; }
-  .tech .lab { display: block; font-size: 14px; letter-spacing: 1px; margin-bottom: 6px; }
-  .tech .src { display: block; margin-top: 12px; font-size: 14px; letter-spacing: 1px; }
-  .trans { position: absolute; left: 26px; top: 1382px; font-size: 15px; letter-spacing: 1px; }
-
-  .brv { position: absolute; left: 866px; top: 1246px; font-size: 34px; letter-spacing: 0; }
-  .brs { position: absolute; left: 926px; top: 1250px; font-size: 24px; line-height: 1.3; letter-spacing: .5px; font-variant-numeric: tabular-nums; }
-  .brv2 { position: absolute; left: 1046px; top: 1246px; font-size: 13px; letter-spacing: 1px; height: 168px; }
-  .cnr1 { left: 668px; top: 1240px; }
-  .cnr2 { left: 1048px; top: 1382px; }
+  .kicker { background: var(--bl-bg); color: var(--bl-fg); }
+  .hero { margin-top: 40px; display: flex; align-items: baseline; gap: 28px; font-family: "Huangyou"; }
+  .hero .a { font-size: 190px; line-height: 1; }
+  .hero .arrow { font-size: 80px; color: var(--red); }
+  .hero .b { font-size: 190px; line-height: 1; color: var(--red); }
+  .hero-cap { margin-top: 14px; font-family: "SourceLight"; font-size: 28px; color: #55524A; }
+  .grid2 { margin-top: 36px; }
+  .tech { margin-top: 26px; }
 </style>
 </head>
 <body>
-<div class="tl">硬核<br>模型架构<br>跟进卡转述</div>
-
-<div class="date">2026.08.04</div>
-<div class="rule"></div>
-<div class="enp">MIXTURE OF EXPERTS<br>TOTAL 671B PARAMETERS<br>ONLY 37B ACTIVE PER TOKEN<br>FROM DEEPSEEK V3 REPORT</div>
-<div class="pgno">03 / 06</div>
-
-<div class="big1">671B</div>
-<div class="en1">TOTAL</div>
-<div class="sub1">DEEPSEEK V3<br>TOTAL PARAMETER<br>COUNT</div>
-<div class="vert1 v">SPARSE MOE</div>
-
-<div class="midl">每个 token<br>只激活</div>
-<div class="big2">37B</div>
-<div class="q1 v">专家</div>
-<div class="q2 v">稀疏</div>
-<div class="q3 v">激活</div>
-<div class="q4 v">均衡</div>
-
-<div class="r1">养一群专家<br>来活只叫醒<br>其中几个</div>
-<div class="r2">训练用了<br>2.788M<br>GPU 小时</div>
-<div class="r3">密集同规模<br>估计超 10M</div>
-
-<div class="tech">
-  <span class="lab">配套技术</span>
-  MLA / 压缩 KV 缓存的注意力变体<br>无辅助损失的负载均衡策略
-  <span class="src">出处 / AITimeline 跟进卡 / 转述 DeepSeek-V3 技术报告</span>
+<div class="head">
+  <div class="badge">AI 知识周报</div>
+  <div class="pgno">03 / 06</div>
 </div>
-<div class="trans">一家的账算完了；这条赛道上全球都有谁在跑？→ 04 版图</div>
 
-<div class="brv v">稀疏激活</div>
-<div class="brs">671B<br>37B<br>2.788M<br>03 / 06</div>
-<div class="brv2 v">MIXTURE OF EXPERTS</div>
-<div class="cnr cnr1">&#8988;</div>
-<div class="cnr cnr2">&#8991;</div>
+<div><span class="kicker">硬核 / 模型架构</span></div>
+<div class="title" style="font-size:72px;">总参数很大，<br>每次只用<span class="red">一小撮</span></div>
+
+<div class="hero"><span class="a">671B</span><span class="arrow">→</span><span class="b">37B</span></div>
+<div class="hero-cap">DeepSeek-V3 的总参数，与每个 token 实际激活的参数量</div>
+
+<div class="grid2">
+  <div class="card c-gr">
+    <span class="chip">机制</span>
+    <div class="kw">养一群专家<br>来活只叫醒几个</div>
+    <div class="d">能力按 671B 算，算力按 37B 花——这就是 MoE 的稀疏激活</div>
+  </div>
+  <div class="card c-pu">
+    <span class="chip">训练账</span>
+    <div class="kw">2.788M<br>GPU 小时</div>
+    <div class="d">V3 预训练的 H800 用量；训练同规模密集模型，估计要超过 10M</div>
+  </div>
+</div>
+
+<div class="tech note-sm">配套技术：MLA（压缩 KV 缓存的注意力变体）与无辅助损失的负载均衡策略<br>出处：AITimeline 跟进卡 / 转述 DeepSeek-V3 技术报告</div>
+
+<div class="bar">
+  <div class="q">一家的账算完了；这条赛道上全球都有谁在跑？</div>
+  <div class="next">下一页 → 04</div>
+</div>
 </body>
 </html>

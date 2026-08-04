@@ -4,72 +4,52 @@
 <meta charset="utf-8">
 <link rel="stylesheet" href="shared.css">
 <style>
-  /* 落地页:三步流程是三枚斜落的棋子,真序列 01-03 */
-  .big1 { position: absolute; left: 26px; top: 358px; font-size: 152px; letter-spacing: 10px; line-height: 1; }
-  .en1 { position: absolute; left: 520px; top: 372px; font-size: 64px; letter-spacing: 1px; line-height: 1; }
-  .sub1 { position: absolute; left: 520px; top: 466px; font-size: 34px; line-height: 1.3; letter-spacing: .5px; }
-  .vert1 { position: absolute; left: 1002px; top: 372px; font-size: 52px; letter-spacing: 3px; }
-
-  .step { position: absolute; }
-  .step .t { font-size: 46px; letter-spacing: 2px; }
-  .step .t .no { font-variant-numeric: tabular-nums; margin-right: 18px; }
-  .step .d { margin-top: 10px; font-size: 24px; line-height: 1.5; letter-spacing: .5px; }
-  .s1 { left: 26px; top: 616px; }
-  .s2 { left: 400px; top: 790px; }
-  .s3 { left: 26px; top: 964px; }
-  .takeaway { position: absolute; left: 700px; top: 986px; font-size: 46px; line-height: 1.35; }
-
-  .quote { position: absolute; left: 26px; top: 1160px; width: 566px; }
-  .quote .lab { font-size: 14px; letter-spacing: 1px; }
-  .quote .q-body { margin-top: 10px; font-size: 20px; line-height: 1.75; }
-  .quote .q-src { margin-top: 10px; font-size: 14px; letter-spacing: 1px; }
-  .trans { position: absolute; left: 26px; top: 1382px; font-size: 15px; letter-spacing: 1px; }
-
-  .brv { position: absolute; left: 866px; top: 1246px; font-size: 34px; letter-spacing: 0; }
-  .brs { position: absolute; left: 926px; top: 1250px; font-size: 24px; line-height: 1.3; letter-spacing: .5px; }
-  .brv2 { position: absolute; left: 1046px; top: 1246px; font-size: 13px; letter-spacing: 1px; height: 168px; }
-  .cnr1 { left: 668px; top: 1240px; }
-  .cnr2 { left: 1048px; top: 1382px; }
+  .kicker { background: var(--pu-bg); color: var(--pu-fg); }
+  .steps { margin-top: 30px; display: flex; flex-direction: column; gap: 14px; }
+  .step { display: flex; align-items: baseline; gap: 28px; border-radius: 26px; padding: 20px 34px; }
+  .step .no { font-family: "Huangyou"; font-size: 50px; }
+  .step .t { font-size: 38px; }
+  .step .d { display: block; margin-top: 8px; font-family: "SourceLight"; font-size: 25px; line-height: 1.5; }
+  .qcard { margin-top: 20px; }
+  .qcard .q-body { font-size: 26px; }
+  .strip { margin-top: 18px; font-size: 32px; padding: 22px 32px; }
 </style>
 </head>
 <body>
-<div class="tl">落地<br>教育现场<br>剪藏自 X</div>
-
-<div class="date">2026.08.04</div>
-<div class="rule"></div>
-<div class="enp">AI GRADES HOMEWORK<br>IN CHINESE CLASSROOMS<br>SCAN SCORE PRINT BACK<br>ERRORS HIGHLIGHTED</div>
-<div class="pgno">05 / 06</div>
-
-<div class="big1">批改</div>
-<div class="en1">GRADING</div>
-<div class="sub1">SCAN THE NOTEBOOK<br>SCORE THE WORK<br>PRINT THE FEEDBACK</div>
-<div class="vert1 v">CLASSROOM</div>
-
-<div class="step s1">
-  <div class="t"><span class="no">01</span>扫描笔记本</div>
-  <div class="d">纸面作业直接进系统<br>不用学生誊录，不用老师拍照</div>
+<div class="head">
+  <div class="badge">AI 知识周报</div>
+  <div class="pgno">05 / 06</div>
 </div>
-<div class="step s2">
-  <div class="t"><span class="no">02</span>自动评分</div>
-  <div class="d">批改任务由 AI 完成<br>老师从重复劳动里退出来</div>
-</div>
-<div class="step s3">
-  <div class="t"><span class="no">03</span>打印反馈</div>
-  <div class="d">结果落回纸面<br>错在哪里直接标给学生看</div>
-</div>
-<div class="takeaway">串成流水线<br>才是新闻</div>
 
-<div class="quote">
-  <span class="lab">剪藏原文 / 中译</span>
+<div><span class="kicker">落地 / 教育现场</span></div>
+<div class="title" style="font-size:72px;">AI 批改作业，<br>从<span class="red">扫描到反馈</span></div>
+
+<div class="steps">
+  <div class="step c-or">
+    <span class="no">01</span>
+    <div><span class="t">扫描笔记本</span><span class="d">纸面作业直接进系统，不用学生誊录、不用老师拍照</span></div>
+  </div>
+  <div class="step c-bl">
+    <span class="no">02</span>
+    <div><span class="t">自动评分</span><span class="d">批改任务由 AI 完成，老师从重复劳动里退出来</span></div>
+  </div>
+  <div class="step c-gr">
+    <span class="no">03</span>
+    <div><span class="t">打印反馈</span><span class="d">结果落回纸面，错在哪里直接标给学生看</span></div>
+  </div>
+</div>
+
+<div class="qcard">
+  <div class="lab">剪藏原文 / 中译</div>
   <div class="q-body">在中国学校里，人工智能现在通过扫描笔记本来批改作业，自动评分任务，并打印出反馈，突出显示错误。</div>
   <div class="q-src">@Rainmaker1973 / X / 2026.08.04</div>
 </div>
-<div class="trans">刷了一周、存了一沓；这些东西都记在哪？→ 06 数字备忘</div>
 
-<div class="brv v">教室先跑</div>
-<div class="brs">SCAN<br>SCORE<br>PRINT<br>05 / 06</div>
-<div class="brv2 v">AI GRADES HOMEWORK</div>
-<div class="cnr cnr1">&#8988;</div>
-<div class="cnr cnr2">&#8991;</div>
+<div class="strip">单看每一步都不新鲜，串成流水线才是新闻</div>
+
+<div class="bar">
+  <div class="q">刷了一周、存了一沓；这些东西都记在哪？</div>
+  <div class="next">下一页 → 06</div>
+</div>
 </body>
 </html>

@@ -4,82 +4,49 @@
 <meta charset="utf-8">
 <link rel="stylesheet" href="shared.css">
 <style>
-  /* 封面:模板原几何,换内容不换关系 */
-  .big1 { position: absolute; left: 26px; top: 358px; font-size: 152px; letter-spacing: 10px; line-height: 1; }
-  .en1 { position: absolute; left: 520px; top: 372px; font-size: 64px; letter-spacing: 1px; line-height: 1; }
-  .sub1 { position: absolute; left: 520px; top: 466px; font-size: 34px; line-height: 1.3; letter-spacing: .5px; }
-  .vert1 { position: absolute; left: 1002px; top: 372px; font-size: 52px; letter-spacing: 3px; }
-
-  .midl { position: absolute; left: 26px; top: 620px; font-size: 46px; line-height: 1.35; }
-  .big2 { position: absolute; left: 262px; top: 598px; font-size: 132px; letter-spacing: 6px; line-height: 1; }
-  .q1 { position: absolute; left: 866px; top: 606px; font-size: 46px; letter-spacing: 6px; }
-  .q2 { position: absolute; left: 806px; top: 640px; font-size: 46px; letter-spacing: 6px; }
-  .q3 { position: absolute; left: 746px; top: 614px; font-size: 46px; letter-spacing: 6px; }
-  .q4 { position: absolute; left: 686px; top: 656px; font-size: 46px; letter-spacing: 6px; }
-
-  .r1 { position: absolute; left: 26px; top: 902px; font-size: 46px; line-height: 1.35; }
-  .r2 { position: absolute; left: 306px; top: 902px; font-size: 46px; line-height: 1.35; }
-  .r2 .lat { font-size: 48px; letter-spacing: 1px; }
-  .r3 { position: absolute; left: 790px; top: 980px; font-size: 46px; line-height: 1.35; }
-
-  .foot { position: absolute; left: 26px; top: 1258px; display: flex; gap: 34px; }
-  .map { width: 92px; height: 92px; border: 1.5px solid var(--ink); position: relative;
-    background: linear-gradient(var(--ink) 1px, transparent 1px) 0 22px / 100% 30px,
-                linear-gradient(90deg, var(--ink) 1px, transparent 1px) 20px 0 / 34px 100%; }
-  .map .dot { position: absolute; left: 40px; top: 34px; width: 12px; height: 12px;
-    background: #C8281E; border-radius: 50%; }
-  .mapc { font-size: 12px; margin-top: 4px; text-align: center; }
-
-  .br { position: absolute; left: 700px; top: 1246px; font-size: 17px; line-height: 1.4; }
-  .br .cn { font-size: 15px; }
-  .brv { position: absolute; left: 866px; top: 1246px; font-size: 34px; letter-spacing: 0; height: 180px; }
-  .brs { position: absolute; left: 926px; top: 1250px; font-size: 24px; line-height: 1.3; letter-spacing: .5px; }
-  .brc { position: absolute; left: 926px; top: 1388px; font-size: 15px; letter-spacing: 1px; }
-  .brv2 { position: absolute; left: 1046px; top: 1246px; font-size: 13px; letter-spacing: 1px; height: 168px; }
-  .trans { position: absolute; left: 26px; top: 1180px; font-size: 15px; letter-spacing: 1px; }
-  .cnr1 { left: 668px; top: 1240px; }
-  .cnr2 { left: 1048px; top: 1382px; }
+  /* 封面:亮黄大字报。黄油体大字 + 红划重点 + 虚线清单 */
+  body { background: var(--yellow); }
+  .badge { color: var(--yellow); }
+  .issue { font-size: 26px; letter-spacing: 1px; }
+  .cover-title { margin-top: 56px; font-family: "Huangyou"; font-size: 150px; line-height: 1.16; letter-spacing: 2px; }
+  .cover-title .hl { position: relative; display: inline-block; }
+  .cover-title .hl::after { content: ""; position: absolute; left: -4px; right: -4px; bottom: 6px; height: 20px;
+    background: var(--red); border-radius: 10px; transform: skewX(-12deg); }
+  .cover-title .num { color: var(--red); }
+  .pills { margin-top: 56px; display: flex; gap: 22px; }
+  .pill { border: 4px solid var(--ink); border-radius: 999px; padding: 14px 30px; font-size: 30px; background: #FFF6C9; }
+  .list { margin-top: 52px; }
+  .row { display: flex; align-items: baseline; gap: 26px; padding: 24px 0; border-bottom: 4px dashed var(--ink); }
+  .row:first-child { border-top: 4px dashed var(--ink); }
+  .row .no { font-family: "Huangyou"; font-size: 44px; color: var(--red); }
+  .row .t { font-size: 40px; letter-spacing: 1px; }
+  .foot { position: absolute; left: 64px; right: 64px; bottom: 56px; display: flex; align-items: center; justify-content: space-between; }
+  .swipe { background: var(--ink); color: #FFFFFF; border-radius: 18px; padding: 22px 40px; font-size: 34px; letter-spacing: 2px; }
+  .src { font-family: "SourceLight"; font-size: 24px; }
 </style>
 </head>
 <body>
-<div class="tl">AI 知识周报<br>刷推捞卡实录<br>第一期连载中</div>
-
-<div class="date">2026.08.03<span class="to">&#8990; 08.09</span></div>
-<div class="rule"></div>
-<div class="enp">SIXTEEN KNOWLEDGE CARDS<br>CLIPPED WHILE SCROLLING X<br>NINE STRAIGHT FROM TWEETS<br>EVERY CLAIM WITH A SOURCE<br>AITIMELINE WEEKLY NO.01</div>
-<div class="mark">&#10059;</div>
-
-<div class="big1">摸鱼</div>
-<div class="en1">SCROLL</div>
-<div class="sub1">SCROLLING TURNS<br>INTO KNOWLEDGE<br>CARDS THIS WEEK</div>
-<div class="vert1 v">AITIMELINE</div>
-
-<div class="midl">刷 X<br>顺手存</div>
-<div class="big2">捞知识</div>
-<div class="q1 v">协议</div>
-<div class="q2 v">稀疏</div>
-<div class="q3 v">版图</div>
-<div class="q4 v">批改</div>
-
-<div class="r1">本周新攒<br>16 张知识卡<br>剪藏占 9 张</div>
-<div class="r2">逐字引文<br>出处可查<br><span class="lat">GROUNDED</span></div>
-<div class="r3">剪自<br>X 时间线</div>
-
-<div class="trans">先从这周开源圈吵得最凶的一条说起 → 02 协议</div>
-
-<div class="foot">
-  <div class="fc"><span class="lab">采集:</span>X 剪藏<br><span class="lab" style="margin-top:10px">CAPTURE:</span>BROWSER CLIP</div>
-  <div class="fc"><span class="lab">整理:</span>观察员成卡<br><span class="lab" style="margin-top:10px">AGENT:</span>AITIMELINE</div>
-  <div class="fc"><span class="lab">周期:</span>每周一期<br><span class="lab" style="margin-top:10px">SCHEDULE:</span>WEEKLY</div>
-  <div class="fc"><div class="map"><div class="dot"></div></div><div class="mapc">剪藏 / 卡片 / 周报</div></div>
+<div class="head">
+  <div class="badge" style="font-size:32px; padding:16px 36px;">AI 知识周报</div>
+  <div class="issue">VOL.01 / 2026.W32</div>
 </div>
 
-<div class="br"><span class="cn">剪藏成卡<br>出处可查<br>本周</span><br><br>2026 W32<br>SIXTEEN CARDS<br>NINE CLIPS</div>
-<div class="brv v">摸鱼捞知识</div>
-<div class="brs">2026<br>W32<br>NO.01<br>@Maximax</div>
-<div class="brc">出处见各页</div>
-<div class="brv2 v">AITIMELINE WEEKLY REPORT</div>
-<div class="cnr cnr1">&#8988;</div>
-<div class="cnr cnr2">&#8991;</div>
+<div class="cover-title">这周<span class="hl">摸鱼</span>刷X<br>捞回<span class="num">16张</span><br>知识卡</div>
+
+<div class="pills">
+  <div class="pill">9 张来自剪藏</div>
+  <div class="pill">全部带出处</div>
+</div>
+
+<div class="list">
+  <div class="row"><span class="no">01</span><span class="t">MiniMax「开源」协议，先读再用</span></div>
+  <div class="row"><span class="no">02</span><span class="t">671B 参数，为何只激活 37B</span></div>
+  <div class="row"><span class="no">03</span><span class="t">AI 批改作业，教室里先跑起来了</span></div>
+</div>
+
+<div class="foot">
+  <div class="src">刷推顺手存，观察员整理成卡</div>
+  <div class="swipe">左滑 6 页 →</div>
+</div>
 </body>
 </html>
