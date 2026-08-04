@@ -123,3 +123,64 @@ describe("import_source quality gate by intake lane", () => {
     expect(record.result?.sourceImport?.posts).toEqual([]);
   });
 });
+
+describe("import_source lead media attachment", () => {
+  function buildImageAsset(candidate: BackgroundSourceCandidate) {
+    return {
+      id: `${candidate.source.id}-image-lead`,
+      sourceId: candidate.source.id,
+      kind: "image" as const,
+      url: "/media/article-x-com-alice-status-42/lead.jpg",
+      caption: candidate.source.title,
+      figureLabel: "",
+      createdAt
+    };
+  }
+
+  async function runImportJobWithMedia(leadMediaOrigin?: "article" | "video") {
+    const candidate = buildCandidate("browser_share");
+
+    return executeBackgroundCurationJob(buildImportJobRecord(candidate), {
+      sourceImportWorker: createSourceImportWorker(),
+      ingestSourceCandidate: (ingestCandidate) => ({
+        assets: [buildImageAsset(ingestCandidate)],
+        chunks: buildChunks(ingestCandidate),
+        recommendedBecause: `Saved from the browser: ${ingestCandidate.reason}`,
+        ...(leadMediaOrigin ? { leadMediaOrigin } : {})
+      })
+    });
+  }
+
+  it("attaches an ingested image asset to the first card with the given origin", async () => {
+    const record = await runImportJobWithMedia("video");
+    const posts = record.result?.sourceImport?.posts ?? [];
+
+    expect(posts.length).toBeGreaterThanOrEqual(1);
+    expect(posts[0]?.media).toEqual([
+      {
+        assetId: "article-x-com-alice-status-42-image-lead",
+        caption: "Alice (@alice) on X",
+        origin: "video"
+      }
+    ]);
+    // 首图只挂第一张卡,其余卡不带 media。
+    for (const post of posts.slice(1)) {
+      expect(post.media ?? []).toEqual([]);
+    }
+  });
+
+  it("defaults the origin to article when ingestion does not name one", async () => {
+    const record = await runImportJobWithMedia();
+    const posts = record.result?.sourceImport?.posts ?? [];
+
+    expect(posts[0]?.media?.[0]?.origin).toBe("article");
+  });
+
+  it("keeps cards media-free when ingestion produced no image asset", async () => {
+    const record = await runImportJob(buildCandidate("browser_share"));
+    const posts = record.result?.sourceImport?.posts ?? [];
+
+    expect(posts.length).toBeGreaterThanOrEqual(1);
+    expect(posts[0]?.media).toBeUndefined();
+  });
+});

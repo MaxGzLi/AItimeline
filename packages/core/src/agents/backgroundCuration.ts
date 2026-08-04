@@ -25,6 +25,15 @@ export type BackgroundCurationJobKind =
   | "ask_clarifying_question"
   | "cooldown_topic";
 
+// Media references captured client-side alongside capturedText: tweet photos
+// and video poster frames. Only URLs travel here — the import pipeline
+// downloads the lead image server-side into the media library.
+export interface CapturedMediaItem {
+  kind: "image" | "video";
+  url: string;
+  posterUrl?: string;
+}
+
 export interface BackgroundSourceCandidate {
   id: string;
   source: Source;
@@ -40,6 +49,8 @@ export interface BackgroundSourceCandidate {
   // fetching the URL — login-walled pages like x.com cannot be fetched
   // server-side, so the capture is the only copy of the content.
   capturedText?: string;
+  // Photos / video posters clipped with the text; see CapturedMediaItem.
+  capturedMedia?: CapturedMediaItem[];
   // Intake lane the candidate arrived through, mirrored from the persisted
   // SourceCandidateRecord when the import job is queued. Mirrors
   // SourceCandidateIntakeKind in ../storage/persistenceStore.ts (that module

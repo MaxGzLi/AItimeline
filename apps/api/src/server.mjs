@@ -197,11 +197,11 @@ export function createApiServer(options = {}) {
   const security = createBindingSecurity(bindingHost, authToken);
   const corsOrigins = resolveCorsOrigins(options.corsOrigins, process.env.AITIMELINE_CORS_ORIGINS);
   const guardedFetchImpl = options.guardedFetch ?? createGuardedFetch(options.guardedFetchOptions);
-  const ingestSource = (candidate) => ingestSourceCandidate(candidate, guardedFetchImpl);
   const dataPath = options.dataPath ?? process.env.AITIMELINE_DATA_PATH ?? defaultDataPath;
   const curationDataPath =
     options.curationDataPath ?? process.env.AITIMELINE_CURATION_DATA_PATH ?? defaultCurationDataPath;
   const mediaRootDir = resolve(options.mediaRootDir ?? process.env.AITIMELINE_MEDIA_ROOT ?? defaultMediaRoot);
+  const ingestSource = (candidate) => ingestSourceCandidate(candidate, guardedFetchImpl, { mediaRootDir });
   const enableFixtures = options.enableFixtures ?? process.env.AITIMELINE_ENABLE_FIXTURES === "1";
   const ownerId = options.ownerId ?? randomUUID();
   const workerId = `${hostname()}:${process.pid}:${ownerId}`;

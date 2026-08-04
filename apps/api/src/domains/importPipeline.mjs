@@ -1,6 +1,7 @@
 // @ts-check
 
 import {
+  cacheLeadImageAsset,
   createAutomaticConceptAliases,
   createConnectionNoteForImport,
   createSourcePostReleasePlan,
@@ -366,29 +367,54 @@ export function splitCapturedTextIntoParagraphs(text) {
   );
 }
 
-export async function ingestSourceCandidate(candidate, fetchImpl) {
+export async function ingestSourceCandidate(candidate, fetchImpl, options = {}) {
   // A candidate that carries its own captured body (browser clipping) never
   // needs a fetch — login-walled pages like x.com only exist as the capture.
   if (typeof candidate.capturedText === "string" && candidate.capturedText.trim()) {
     const paragraphs = splitCapturedTextIntoParagraphs(candidate.capturedText);
+    /** @type {import("../../../../packages/core/dist/index.js").SourceAsset[]} */
+    const assets = [
+      {
+        id: `${candidate.source.id}-text`,
+        sourceId: candidate.source.id,
+        kind: "text",
+        content: paragraphs.join("\n\n"),
+        createdAt: candidate.discoveredAt
+      }
+    ];
+    // 剪藏随文带的配图:取首图(没有图就用视频 poster)下载进媒体库。
+    // cacheLeadImageAsset 任何失败都返回 undefined,配图缺失不阻塞出卡。
+    const leadMedia =
+      (candidate.capturedMedia ?? []).find((item) => item.kind === "image") ??
+      (candidate.capturedMedia ?? []).find((item) => item.kind === "video" && item.posterUrl);
+    let leadMediaOrigin;
+
+    if (leadMedia && options.mediaRootDir) {
+      const imageAsset = await cacheLeadImageAsset({
+        mediaRootDir: options.mediaRootDir,
+        fetch: fetchImpl,
+        sourceId: candidate.source.id,
+        imageUrl: leadMedia.kind === "image" ? leadMedia.url : leadMedia.posterUrl,
+        caption: candidate.source.title ?? "",
+        createdAt: candidate.discoveredAt
+      });
+
+      if (imageAsset) {
+        assets.push(imageAsset);
+        leadMediaOrigin = leadMedia.kind === "video" ? "video" : "article";
+      }
+    }
 
     return {
-      assets: [
-        {
-          id: `${candidate.source.id}-text`,
-          sourceId: candidate.source.id,
-          kind: "text",
-          content: paragraphs.join("\n\n"),
-          createdAt: candidate.discoveredAt
-        }
-      ],
+      assets,
       chunks: paragraphs.map((paragraph, index) => ({
         id: `${candidate.source.id}-chunk-${index + 1}`,
         sourceId: candidate.source.id,
         content: paragraph,
         conceptHints: candidate.conceptIds
       })),
-      recommendedBecause: `Saved from the browser: ${candidate.reason}`
+      recommendedBecause: `Saved from the browser: ${candidate.reason}`,
+      ...(leadMediaOrigin ? { leadMediaOrigin } : {})
     };
   }
 

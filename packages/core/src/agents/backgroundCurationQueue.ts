@@ -13,10 +13,13 @@ import type {
   DeepReadArticleRecord,
   KnowledgeChunk,
   KnowledgePost,
+  KnowledgePostMediaOrigin,
   SourceAsset,
+  SourceImageAsset,
   SourceQualityVerdict,
   SourceRegistry
 } from "../types.js";
+import { attachLeadMediaToFirstCard } from "../transform/mediaAssets.js";
 import { normalizeConceptKey } from "../graph/conceptAliases.js";
 import { getDayKey } from "../time/calendarKeys.js";
 import {
@@ -143,6 +146,9 @@ export interface SourceCandidateIngestionResult {
   chunks: KnowledgeChunk[];
   sourceRegistry?: SourceRegistry;
   recommendedBecause?: string;
+  // 当 assets 里带了 ingest 阶段缓存好的首图(如剪藏的推文配图)时,产卡后
+  // 挂到首卡上用的 origin 标注(图=article、视频 poster=video)。
+  leadMediaOrigin?: KnowledgePostMediaOrigin;
 }
 
 export interface BackgroundCurationExecutionHandlers {
@@ -874,7 +880,7 @@ async function runImportSourceJob(
   }
 
   const ingested = await handlers.ingestSourceCandidate(job.sourceCandidate, job);
-  const sourceImport = await handlers.sourceImportWorker.run({
+  let sourceImport = await handlers.sourceImportWorker.run({
     source: job.sourceCandidate.source,
     assets: ingested.assets,
     chunks: ingested.chunks,
@@ -896,6 +902,19 @@ async function runImportSourceJob(
     // violations. Citations and verbatim quotes stay hard everywhere.
     lenientGrounding: job.sourceCandidate.intakeKind === "browser_share"
   });
+
+  // ingest 阶段缓存好的首图(剪藏配图)挂到首卡:worker 只搬运 assets,
+  // 卡与图的关联在这里补上;没有图片资产时原样返回。
+  const leadImage = (ingested.assets ?? []).find(
+    (asset): asset is SourceImageAsset => asset.kind === "image"
+  );
+
+  if (leadImage && sourceImport.posts.length) {
+    sourceImport = {
+      ...sourceImport,
+      posts: attachLeadMediaToFirstCard(sourceImport.posts, leadImage, ingested.leadMediaOrigin ?? "article")
+    };
+  }
 
   if (sourceImport.qualityGate?.verdict === "reject") {
     if (job.nextAction === "continue_deeper") {

@@ -23,9 +23,58 @@ import {
 import { normalizeUrlKey } from "./subscriptions.mjs";
 
 const agentCaptureRunLimit = 3;
+const capturedMediaImageLimit = 4;
+const capturedMediaVideoLimit = 1;
+
+function isHttpUrl(value) {
+  if (typeof value !== "string") {
+    return false;
+  }
+
+  try {
+    const parsed = new URL(value);
+
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+// 剪藏随文提交的图片/视频 poster 引用。只收 http(s) URL,图最多 4、视频最多
+// 1;收口后原样存在候选记录上,导入管线取首图下载进媒体库。
+export function sanitizeCapturedMedia(input) {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+
+  const media = [];
+  let images = 0;
+  let videos = 0;
+
+  for (const item of input) {
+    if (typeof item !== "object" || item === null) {
+      continue;
+    }
+
+    if (item.kind === "image" && images < capturedMediaImageLimit && isHttpUrl(item.url)) {
+      images += 1;
+      media.push({ kind: "image", url: item.url });
+    } else if (item.kind === "video" && videos < capturedMediaVideoLimit && isHttpUrl(item.url)) {
+      videos += 1;
+      media.push({
+        kind: "video",
+        url: item.url,
+        ...(isHttpUrl(item.posterUrl) ? { posterUrl: item.posterUrl } : {})
+      });
+    }
+  }
+
+  return media;
+}
 
 function createAgentCaptureCandidateRecord(body, now) {
   const capturedText = typeof body.capturedText === "string" && body.capturedText.trim() ? body.capturedText : undefined;
+  const capturedMedia = sanitizeCapturedMedia(body.capturedMedia);
   const candidate = normalizeSourceCandidate(
     {
       url: body.url,
@@ -49,7 +98,12 @@ function createAgentCaptureCandidateRecord(body, now) {
 
   return {
     id,
-    candidate: { ...candidate, id, ...(capturedText ? { capturedText } : {}) },
+    candidate: {
+      ...candidate,
+      id,
+      ...(capturedText ? { capturedText } : {}),
+      ...(capturedMedia.length ? { capturedMedia } : {})
+    },
     status: "pending",
     // browser_share marks captures that arrive from the browser extension with
     // their body text attached; everything else stays on the agent_capture lane.
