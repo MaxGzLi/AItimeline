@@ -2070,24 +2070,29 @@ const youtubeImport = await transformYouTubeUrl("https://www.youtube.com/watch?v
 
     if (requestedUrl.includes("/api/timedtext")) {
       return new Response(
+        // 真实字幕轴是三四十个字符的半句话,不是整段。切块必须先攒成段落,
+        // 否则来源质检的首/中/尾取样只看得到三条碎轴。
         JSON.stringify({
           events: [
-            {
-              tStartMs: 0,
-              dDurationMs: 4200,
-              segs: [{ utf8: "AI Agent systems turn source material into durable knowledge with citations." }]
-            },
-            {
-              tStartMs: 4300,
-              dDurationMs: 5000,
-              segs: [
-                {
-                  utf8:
-                    "The timeline can use Memory and Knowledge Graph signals to recommend review and related ideas."
-                }
-              ]
-            }
-          ]
+            "AI Agent systems turn source material",
+            "into durable knowledge with citations",
+            "attached to every claim they make",
+            "so a reader can always check the source",
+            "the timeline then uses Memory signals",
+            "together with a Knowledge Graph",
+            "to decide when a card should come back",
+            "and Recommendation scores rank the feed",
+            "so Evaluation of what stuck",
+            "happens without extra bookkeeping",
+            "and the review queue stays honest",
+            "because every card keeps its citation",
+            "back to the exact transcript window",
+            "where the claim was actually spoken"
+          ].map((utf8, index) => ({
+            tStartMs: index * 4000,
+            dDurationMs: 4000,
+            segs: [{ utf8 }]
+          }))
         }),
         {
           status: 200,
@@ -2103,7 +2108,17 @@ const youtubeImport = await transformYouTubeUrl("https://www.youtube.com/watch?v
 
 assert.equal(youtubeImport.source.title, "Real transcript smoke video", "real YouTube import should read title");
 assert.equal(youtubeImport.track.languageCode, "en", "real YouTube import should select transcript language");
-assert.equal(youtubeImport.chunks.length, 2, "real YouTube import should create transcript chunks");
+assert.equal(youtubeImport.chunks.length, 2, "real YouTube import should merge 14 caption cues into paragraphs");
+assert.ok(
+  youtubeImport.chunks[0].content.length >= 200,
+  "merged transcript chunks must be paragraph-sized so the source quality gate can judge them"
+);
+assert.equal(youtubeImport.chunks[0].startTimeSeconds, 0, "merged chunk should keep the first cue's start time");
+assert.equal(
+  youtubeImport.chunks[1].endTimeSeconds,
+  56,
+  "merged chunk should keep the last cue's end time so citations still deep-link"
+);
 assert.equal(youtubeImport.cards.length, 2, "real YouTube import should produce cards from transcript segments");
 assert.equal(youtubeImport.importRecord.status, "ready", "real YouTube import should be ready");
 

@@ -33,8 +33,46 @@ export interface TranscriptTransformOptions {
   contentLanguage?: ContentLanguage;
 }
 
+// 字幕轴一条只有三四十个字符(半句话),直接当 chunk 会让来源质检的
+// 首/中/尾取样只看到一百来个字符,判成「内容密度极低」。先攒成段落体量。
+const transcriptChunkTargetLength = 320;
+
+export function mergeTranscriptSegments(segments: TranscriptSegment[]): TranscriptSegment[] {
+  const merged: TranscriptSegment[] = [];
+  let current: TranscriptSegment | null = null;
+
+  for (const segment of segments) {
+    const text = segment.text.trim();
+
+    if (!text) {
+      continue;
+    }
+
+    if (!current) {
+      current = { ...segment, text };
+      continue;
+    }
+
+    const next: string = `${current.text} ${text}`;
+
+    if (next.length >= transcriptChunkTargetLength) {
+      merged.push(current);
+      current = { ...segment, text };
+      continue;
+    }
+
+    current = { startTimeSeconds: current.startTimeSeconds, endTimeSeconds: segment.endTimeSeconds, text: next };
+  }
+
+  if (current) {
+    merged.push(current);
+  }
+
+  return merged;
+}
+
 export function buildTranscriptChunks(source: Source, segments: TranscriptSegment[]): KnowledgeChunk[] {
-  return segments.map((segment, index) => ({
+  return mergeTranscriptSegments(segments).map((segment, index) => ({
     id: `${source.id}-chunk-${index + 1}`,
     sourceId: source.id,
     content: segment.text,
