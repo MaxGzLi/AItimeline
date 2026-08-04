@@ -60,7 +60,13 @@ function createAgentCaptureCandidateRecord(body, now) {
   };
 }
 
-function createAgentCaptureImportJob(candidate, now, contentLanguage) {
+function createAgentCaptureImportJob(record, now, contentLanguage) {
+  // Stamp the intake lane onto the embedded candidate so the core import job
+  // can tell browser_share (user clipped it by hand; skips the source quality
+  // gate) apart from agent_capture (still gated). Reading it off the record
+  // here also covers pending records created before the lane was stamped.
+  const candidate = { ...record.candidate, intakeKind: record.intakeKind };
+
   return {
     id: `agent-capture-import-${hashText(candidate.id)}`,
     kind: "import_source",
@@ -94,7 +100,7 @@ function queueAgentCaptureCandidates({ persistenceStore, curationStore, records,
 
   const snapshot = persistenceStore.getSnapshot();
   const rawPlan = createSingleJobPlan(
-    records.map((record) => createAgentCaptureImportJob(record.candidate, now, contentLanguage)),
+    records.map((record) => createAgentCaptureImportJob(record, now, contentLanguage)),
     now
   );
   const budgetResult = applyDailyAutoJobBudget({

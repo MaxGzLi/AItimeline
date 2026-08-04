@@ -40,6 +40,13 @@ export interface BackgroundSourceCandidate {
   // fetching the URL — login-walled pages like x.com cannot be fetched
   // server-side, so the capture is the only copy of the content.
   capturedText?: string;
+  // Intake lane the candidate arrived through, mirrored from the persisted
+  // SourceCandidateRecord when the import job is queued. Mirrors
+  // SourceCandidateIntakeKind in ../storage/persistenceStore.ts (that module
+  // already imports types from this file, so importing it back would create a
+  // cycle). Only browser_share changes behavior: the user clipped the content
+  // by hand, so the source quality gate is skipped for it.
+  intakeKind?: "user_paste" | "browser_share" | "agent_discovery" | "manual" | "subscription" | "agent_capture";
 }
 
 export interface BackgroundCurationJob {
