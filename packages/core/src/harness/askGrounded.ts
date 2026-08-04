@@ -118,7 +118,14 @@ async function buildModelAnswer(
         minOverlap: 1,
         minimumSharedTokens: 2,
         checkProperNouns: true,
-        allowBeyondSource: false
+        allowBeyondSource: false,
+        // An answer to a learner's question is paraphrase by nature, the same
+        // genre as a card — it restates the excerpt in the reader's words. The
+        // ordered word-order gate only accepts near-quotation, so it rejected
+        // every real answer and the feature always replied "not enough
+        // evidence". Anchor mode still traces every technical term, symbol and
+        // number back to the cited excerpts; only the connecting prose is free.
+        supportMode: "anchors"
       }
     );
 
@@ -184,6 +191,7 @@ export function getAskSystemPrompt(language: ContentLanguage = "zh"): string {
   return `You are the AITimeline study assistant.
 
 Answer the learner's question using only the numbered source excerpts provided. Do not use outside knowledge. Cite the excerpts you used by their number. If the excerpts do not contain the answer, say you cannot find it in the source instead of guessing.
+Write the answer as statements the excerpts support, and nothing else. Do not describe the excerpts themselves: no opening like "according to the material provided", no closing like "this answer is based on excerpts [1] and [2]", and no remarks about what the excerpts leave out. The numbers you put in citedExcerpts are the citation; they must not appear in the answer text. If the excerpts genuinely cannot answer the question, make that the entire answer rather than appending it to one.
 Write mathematical formulas in LaTeX: inline \`$...$\`, display \`$$...$$\`; do not flatten them into Unicode subscripts/superscripts.
 
 ${getGroundedAnswerLanguagePolicy(language).join("\n")}
