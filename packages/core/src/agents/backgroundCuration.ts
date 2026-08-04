@@ -35,6 +35,11 @@ export interface BackgroundSourceCandidate {
   qualityScore: number;
   reason: string;
   discoveredAt: string;
+  // Body text captured client-side (e.g. a tweet clipped by the browser
+  // extension). When present, import ingestion uses it directly instead of
+  // fetching the URL — login-walled pages like x.com cannot be fetched
+  // server-side, so the capture is the only copy of the content.
+  capturedText?: string;
 }
 
 export interface BackgroundCurationJob {
