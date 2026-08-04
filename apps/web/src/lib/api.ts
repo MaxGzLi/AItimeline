@@ -1,6 +1,12 @@
 import { t } from "./i18n";
 
-export const apiBaseUrl = (import.meta.env.VITE_AITIMELINE_API_URL ?? "http://127.0.0.1:8787").replace(/\/$/, "");
+declare global {
+  interface Window {
+    readonly aitimelineDesktop?: Readonly<{ apiOrigin: string }>;
+  }
+}
+
+export const apiBaseUrl = (window.aitimelineDesktop?.apiOrigin ?? import.meta.env.VITE_AITIMELINE_API_URL ?? "http://127.0.0.1:8787").replace(/\/$/, "");
 export const sampleSourceUrl = `${apiBaseUrl}/fixtures/article`;
 
 /** HTTP error with the response status, so callers can tell business 4xx from outages. */
