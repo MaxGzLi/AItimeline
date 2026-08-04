@@ -90,21 +90,26 @@ if (!hasSingleInstanceLock) {
     }
   });
 
-  await app.whenReady();
+  // Electron holds the "ready" event until the ESM entry module finishes its
+  // top-level evaluation, so a top-level `await app.whenReady()` deadlocks.
+  void bootstrap();
+}
 
-  if (!allowQuit) {
-    startupPromise = startApplication();
-    try {
-      await startupPromise;
-    } catch (error) {
-      if (shutdownPromise) {
-        console.error("[aitimeline] desktop startup stopped during shutdown", error);
-      } else {
-        handleFatalStartupError(error);
-      }
-    } finally {
-      startupPromise = null;
+async function bootstrap() {
+  await app.whenReady();
+  if (allowQuit) return;
+
+  startupPromise = startApplication();
+  try {
+    await startupPromise;
+  } catch (error) {
+    if (shutdownPromise) {
+      console.error("[aitimeline] desktop startup stopped during shutdown", error);
+    } else {
+      handleFatalStartupError(error);
     }
+  } finally {
+    startupPromise = null;
   }
 }
 
