@@ -1,0 +1,77 @@
+/* 注入卡:外观贴 X 原生帖(D1 实测色值),身份一眼是「你自己存的知识回来了」。
+   字体继承页面;分隔线 rgb(47,51,54);次要文字 rgb(113,118,123);
+   链接蓝 rgb(29,155,240);头像位 40px 圆形;内边距 12px 16px。 */
+
+.aitl-inject {
+  display: flex;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid rgb(47, 51, 54);
+  font-family: inherit;
+  font-size: 15px;
+  line-height: 20px;
+  color: inherit;
+  cursor: pointer;
+  box-sizing: border-box;
+}
+
+.aitl-inject:hover {
+  background-color: rgba(29, 155, 240, 0.03);
+}
+
+.aitl-inject-avatar {
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  border-radius: 9999px;
+  background-color: rgba(29, 155, 240, 0.12);
+  color: rgb(29, 155, 240);
+  font-size: 18px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+}
+
+.aitl-inject-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.aitl-inject-header {
+  margin-bottom: 2px;
+}
+
+.aitl-inject-name {
+  font-weight: 700;
+}
+
+.aitl-inject-meta,
+.aitl-inject-source {
+  color: rgb(113, 118, 123);
+  font-size: 13px;
+}
+
+.aitl-inject-title {
+  font-weight: 700;
+  margin-bottom: 2px;
+  overflow-wrap: break-word;
+}
+
+.aitl-inject-summary {
+  overflow-wrap: break-word;
+  margin-bottom: 6px;
+}
+
+.aitl-inject-source {
+  margin-bottom: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.aitl-inject-open {
+  color: rgb(29, 155, 240);
+  font-size: 13px;
+}

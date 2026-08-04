@@ -698,6 +698,104 @@ try {
     );
     assert.deepEqual(secondDue.due, firstDue.due, "second due request should not duplicate backfilled review states");
     assert.equal(secondSnapshot.reviewStates.length, 3, "review backfill should be idempotent");
+
+    // 注入面取卡端点:复习到期优先、连接播报卡除名、limit 生效、字段精简。
+    const injectCards = await requestJsonFromServer(
+      backfillServer,
+      "/api/inject/cards?now=2026-06-10T00:00:00.000Z&limit=10"
+    );
+
+    assert.deepEqual(
+      injectCards.cards.map((card) => card.id).sort(),
+      backfillPosts.map((post) => post.id).sort(),
+      "inject cards should serve the due review posts and never the connection note"
+    );
+    assert.ok(
+      injectCards.cards.every((card) => card.reviewDueAt),
+      "review-due cards should carry reviewDueAt so the extension can tell why they came back"
+    );
+
+    const [firstInjectCard] = injectCards.cards;
+
+    assert.equal(firstInjectCard.topicId, "legacy-review", "inject card topicId should be the slug of the first concept");
+    assert.deepEqual(firstInjectCard.conceptIds, ["Legacy Review"], "inject card should carry concept ids for signals");
+    assert.ok(
+      firstInjectCard.title && firstInjectCard.summary && firstInjectCard.sourceTitle && firstInjectCard.sourceUrl,
+      "inject card should carry the render fields (title/summary/source)"
+    );
+    assert.equal(firstInjectCard.savedAt, "2026-06-01T00:00:00.000Z", "inject card savedAt should be the post createdAt");
+
+    const limitedInjectCards = await requestJsonFromServer(
+      backfillServer,
+      "/api/inject/cards?now=2026-06-10T00:00:00.000Z&limit=2"
+    );
+
+    assert.equal(limitedInjectCards.cards.length, 2, "inject cards should honor the limit parameter");
+
+    // 注入卡的三段信号(纯曝光 / 累计停留 / 点开)必须被信号端点原样接住。
+    const injectPostId = firstInjectCard.id;
+    const injectSignalBase = {
+      postId: injectPostId,
+      topicId: firstInjectCard.topicId,
+      conceptIds: firstInjectCard.conceptIds,
+      impression: true,
+      dwellTimeMs: 0,
+      openedThread: false,
+      liked: false,
+      saved: false,
+      askedQuestion: false,
+      reviewed: false,
+      skippedQuickly: false
+    };
+    const injectImpression = await requestJsonFromServer(backfillServer, "/api/signals", {
+      method: "POST",
+      body: {
+        generatedAt: "2026-06-10T01:00:00.000Z",
+        signal: { ...injectSignalBase, createdAt: "2026-06-10T01:00:00.000Z" },
+        sourceCandidates: []
+      }
+    });
+
+    assert.equal(injectImpression.idempotentReplay, false, "inject impression should be accepted as a fresh signal");
+    assert.equal(
+      injectImpression.records.length,
+      0,
+      "inject impression must stay pure exposure and trigger no curation records"
+    );
+
+    const injectDwell = await requestJsonFromServer(backfillServer, "/api/signals", {
+      method: "POST",
+      body: {
+        generatedAt: "2026-06-10T01:01:00.000Z",
+        signal: { ...injectSignalBase, dwellTimeMs: 4200, createdAt: "2026-06-10T01:01:00.000Z" },
+        sourceCandidates: []
+      }
+    });
+
+    assert.ok(injectDwell.feedback, "inject dwell signal should produce learning feedback");
+
+    const injectOpen = await requestJsonFromServer(backfillServer, "/api/signals", {
+      method: "POST",
+      body: {
+        generatedAt: "2026-06-10T01:02:00.000Z",
+        signal: { ...injectSignalBase, openedThread: true, dwellTimeMs: 9000, createdAt: "2026-06-10T01:02:00.000Z" },
+        sourceCandidates: []
+      }
+    });
+
+    assert.ok(injectOpen.feedback, "inject open signal should produce learning feedback");
+
+    const injectSignalSnapshot = await requestJsonFromServer(backfillServer, "/api/snapshot");
+    const injectSignalRecords = injectSignalSnapshot.interactionSignals.filter(
+      (record) => record.signal.postId === injectPostId && record.createdAt.startsWith("2026-06-10T01:")
+    );
+
+    assert.equal(injectSignalRecords.length, 3, "all three inject signals should be persisted");
+    assert.equal(
+      Math.max(...injectSignalRecords.map((record) => record.signal.dwellTimeMs)),
+      9000,
+      "cumulative dwell should resolve to the max dwell across inject signals"
+    );
   } finally {
     await closeServer(backfillServer);
   }

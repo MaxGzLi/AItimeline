@@ -133,6 +133,7 @@ import {
   createSafeSourceImportWorker,
   executeCurationRun
 } from "./domains/curationRun.mjs";
+import { getInjectCardsResponse } from "./domains/injectFeed.mjs";
 import {
   getDismissedPostsResponse,
   getEvidenceLedgerResponse,
@@ -681,6 +682,22 @@ export function createApiServer(options = {}) {
             ...timeline,
             workerStatus: getWorkerStatus()
           }
+        );
+        return;
+      }
+
+      // 注入面(浏览器插件)拉卡:复习到期优先、时间线排名补位的精简卡列表。纯读。
+      if (request.method === "GET" && url.pathname === "/api/inject/cards") {
+        sendJson(
+          response,
+          200,
+          getInjectCardsResponse(
+            persistenceStore.getSnapshot(),
+            url.searchParams.get("now"),
+            url.searchParams.get("userId") ?? "local-user",
+            resolveContentLanguage(persistenceStore, process.env),
+            url.searchParams.get("limit")
+          )
         );
         return;
       }
