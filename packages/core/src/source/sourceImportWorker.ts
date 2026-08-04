@@ -1,5 +1,5 @@
 import { createModelKnowledgePostRunner, type CreateModelKnowledgePostRunnerOptions } from "../harness/modelRunner.js";
-import { deterministicKnowledgePostRunner } from "../harness/runner.js";
+import { defaultAgentHarnessConfig, deterministicKnowledgePostRunner } from "../harness/runner.js";
 import type { ContentLanguage } from "../harness/contentLanguage.js";
 import {
   createOpenAICompatibleModelClientFromEnv,
@@ -46,6 +46,8 @@ export interface SourceImportWorkerInput {
   sourceQualityVerdicts?: SourceQualityVerdict[];
   qualityGateConceptHints?: string[];
   skipQualityGate?: boolean;
+  /** See AgentHarnessConfig.lenientGrounding — set for browser-clipped sources. */
+  lenientGrounding?: boolean;
 }
 
 export interface SourceImportWorkerResult {
@@ -176,7 +178,9 @@ export async function runSourceImport(
       createdAt,
       recommendedBecause: input.recommendedBecause,
       contentLanguage,
-      config: input.config,
+      config: input.lenientGrounding
+        ? { ...(input.config ?? defaultAgentHarnessConfig), lenientGrounding: true }
+        : input.config,
       userContext: input.userContext
     });
     const acceptedPosts = collectAcceptedHarnessPosts(harnessResult);

@@ -25,9 +25,13 @@ import { normalizeUrlKey } from "./subscriptions.mjs";
 const agentCaptureRunLimit = 3;
 
 function createAgentCaptureCandidateRecord(body, now) {
+  const capturedText = typeof body.capturedText === "string" && body.capturedText.trim() ? body.capturedText : undefined;
   const candidate = normalizeSourceCandidate(
     {
       url: body.url,
+      title: typeof body.title === "string" && body.title.trim() ? body.title.trim() : undefined,
+      author: typeof body.author === "string" && body.author.trim() ? body.author.trim() : undefined,
+      publishedAt: typeof body.publishedAt === "string" && body.publishedAt.trim() ? body.publishedAt : undefined,
       conceptIds: typeof body.topic === "string" && body.topic.trim() ? [body.topic.trim()] : [],
       relevanceScore: 0.7,
       noveltyScore: 0.6,
@@ -35,7 +39,9 @@ function createAgentCaptureCandidateRecord(body, now) {
       reason:
         typeof body.reason === "string" && body.reason.trim()
           ? body.reason.trim()
-          : "Captured from a learning conversation."
+          : capturedText
+            ? "Captured from the browser."
+            : "Captured from a learning conversation."
     },
     now
   );
@@ -43,24 +49,38 @@ function createAgentCaptureCandidateRecord(body, now) {
 
   return {
     id,
-    candidate: { ...candidate, id },
+    candidate: { ...candidate, id, ...(capturedText ? { capturedText } : {}) },
     status: "pending",
-    intakeKind: "agent_capture",
+    // browser_share marks captures that arrive from the browser extension with
+    // their body text attached; everything else stays on the agent_capture lane.
+    intakeKind: body.intakeKind === "browser_share" ? "browser_share" : "agent_capture",
     createdAt: now,
     updatedAt: now,
     notes: typeof body.topic === "string" && body.topic.trim() ? body.topic.trim() : undefined
   };
 }
 
-function createAgentCaptureImportJob(candidate, now, contentLanguage) {
+function createAgentCaptureImportJob(record, now, contentLanguage) {
+  // Stamp the intake lane onto the embedded candidate so the core import job
+  // can tell browser_share (user clipped it by hand; skips the source quality
+  // gate) apart from agent_capture (still gated). Reading it off the record
+  // here also covers pending records created before the lane was stamped.
+  const candidate = { ...record.candidate, intakeKind: record.intakeKind };
+
   return {
     id: `agent-capture-import-${hashText(candidate.id)}`,
     kind: "import_source",
-    topicId: candidate.topicId ?? candidate.conceptIds[0],
+    // Same fallback as the supply-refill lane: browser captures often arrive
+    // without a topic, and a job with an undefined topicId fails queue
+    // validation on reload.
+    topicId: candidate.topicId ?? candidate.conceptIds[0] ?? candidate.source.title,
     conceptIds: candidate.conceptIds,
     priority: 0.66,
-    reason:
-      contentLanguage === "en"
+    reason: candidate.capturedText
+      ? contentLanguage === "en"
+        ? `Browser capture: ${candidate.reason}`
+        : `浏览器剪藏的来源:${candidate.reason}`
+      : contentLanguage === "en"
         ? `Learning conversation capture: ${candidate.reason}`
         : `学习对话采集的来源:${candidate.reason}`,
     createdAt: now,
@@ -80,7 +100,7 @@ function queueAgentCaptureCandidates({ persistenceStore, curationStore, records,
 
   const snapshot = persistenceStore.getSnapshot();
   const rawPlan = createSingleJobPlan(
-    records.map((record) => createAgentCaptureImportJob(record.candidate, now, contentLanguage)),
+    records.map((record) => createAgentCaptureImportJob(record, now, contentLanguage)),
     now
   );
   const budgetResult = applyDailyAutoJobBudget({
@@ -113,7 +133,11 @@ function queueAgentCaptureCandidates({ persistenceStore, curationStore, records,
 export function queueDueAgentCaptures({ persistenceStore, curationStore, contentLanguage, now }) {
   const snapshot = persistenceStore.getSnapshot();
   const pending = snapshot.sourceCandidates
-    .filter((record) => record.intakeKind === "agent_capture" && record.status === "pending")
+    .filter(
+      (record) =>
+        (record.intakeKind === "agent_capture" || record.intakeKind === "browser_share") &&
+        record.status === "pending"
+    )
     .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime())
     .slice(0, agentCaptureRunLimit);
 

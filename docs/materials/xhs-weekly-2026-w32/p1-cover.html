@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="shared.css">
+<style>
+  /* 封面:亮黄大字报。黄油体大字 + 红划重点 + 虚线清单 */
+  body { background: var(--yellow); }
+  .badge { color: var(--yellow); }
+  .issue { font-size: 26px; letter-spacing: 1px; }
+  .cover-title { margin-top: 56px; font-family: "Huangyou"; font-size: 150px; line-height: 1.16; letter-spacing: 2px; }
+  .cover-title .hl { position: relative; display: inline-block; }
+  .cover-title .hl::after { content: ""; position: absolute; left: -4px; right: -4px; bottom: 6px; height: 20px;
+    background: var(--red); border-radius: 10px; transform: skewX(-12deg); }
+  .cover-title .num { color: var(--red); }
+  .pills { margin-top: 56px; display: flex; gap: 22px; }
+  .pill { border: 4px solid var(--ink); border-radius: 999px; padding: 14px 30px; font-size: 30px; background: #FFF6C9; }
+  .list { margin-top: 52px; }
+  .row { display: flex; align-items: baseline; gap: 26px; padding: 24px 0; border-bottom: 4px dashed var(--ink); }
+  .row:first-child { border-top: 4px dashed var(--ink); }
+  .row .no { font-family: "Huangyou"; font-size: 44px; color: var(--red); }
+  .row .t { font-size: 40px; letter-spacing: 1px; }
+  .foot { position: absolute; left: 64px; right: 64px; bottom: 56px; display: flex; align-items: center; justify-content: space-between; }
+  .swipe { background: var(--ink); color: #FFFFFF; border-radius: 18px; padding: 22px 40px; font-size: 34px; letter-spacing: 2px; }
+  .src { font-family: "SourceLight"; font-size: 24px; }
+</style>
+</head>
+<body>
+<div class="head">
+  <div class="badge" style="font-size:32px; padding:16px 36px;">AI 知识周报</div>
+  <div class="issue">VOL.01 / 2026.W32</div>
+</div>
+
+<div class="cover-title">这周<span class="hl">摸鱼</span>刷X<br>捞回<span class="num">16张</span><br>知识卡</div>
+
+<div class="pills">
+  <div class="pill">9 张来自剪藏</div>
+  <div class="pill">全部带出处</div>
+</div>
+
+<div class="list">
+  <div class="row"><span class="no">01</span><span class="t">MiniMax「开源」协议，先读再用</span></div>
+  <div class="row"><span class="no">02</span><span class="t">671B 参数，为何只激活 37B</span></div>
+  <div class="row"><span class="no">03</span><span class="t">AI 批改作业，教室里先跑起来了</span></div>
+</div>
+
+<div class="foot">
+  <div class="src">刷推顺手存，观察员整理成卡</div>
+  <div class="swipe">左滑 6 页 →</div>
+</div>
+</body>
+</html>

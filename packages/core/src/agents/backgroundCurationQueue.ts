@@ -44,6 +44,8 @@ export type BackgroundCurationJobStatus = "queued" | "running" | "succeeded" | "
 
 export interface BackgroundCurationJobResult {
   kind: BackgroundCurationJobKind;
+  /** 结算完成时被 compactTerminalCurationResult 瘦身的时间戳;有值即大血包已剥离。 */
+  compactedAt?: string;
   message?: string;
   sourceImport?: SourceImportWorkerResult;
   sourceImports?: SourceImportWorkerResult[];
@@ -106,6 +108,7 @@ export interface BackgroundCurationJobStore {
   enqueueRetry(jobId: string, retriedAt: string | Date): BackgroundCurationJobRecord;
   updateTerminalResult(jobId: string, result: BackgroundCurationJobResult): BackgroundCurationJobRecord;
   markMaterialized(jobIds: string[], at: string | Date): BackgroundCurationJobRecord[];
+  compactMaterializedResults(before: string | Date): number;
   flushMigration(savedAt?: string | Date): boolean;
   close(): void;
 }
@@ -234,12 +237,19 @@ export function createPersistentBackgroundCurationJobStore(
   reportLoadIssues(initialDecoded.issues);
   let snapshot = initialDecoded.snapshot;
   let needsFlushMigration = initialDecoded.needsFlushMigration;
+  // 解码缓存:与主快照店同一手法——序列化串未变就复用解码结果,提交成功后
+  // 用内存里的新值播种,避免任务队列文件(可达几十 MB)被逐次整读整解。
+  let decodeMemo: { serialized: string; snapshot: BackgroundCurationJobStoreSnapshot } | null = initialRaw
+    ? { serialized: initialRaw, snapshot: initialDecoded.snapshot }
+    : null;
 
   const readLatest = (): BackgroundCurationJobStoreSnapshot => {
     const raw = storage.read();
     if (!raw) return deepClone(snapshot);
+    if (decodeMemo && decodeMemo.serialized === raw) return decodeMemo.snapshot;
     const decoded = decodeBackgroundCurationJobStoreSnapshot(raw, { timeZone: options.timeZone });
     reportLoadIssues(decoded.issues);
+    decodeMemo = { serialized: raw, snapshot: decoded.snapshot };
     return decoded.snapshot;
   };
   const commit = (
@@ -252,7 +262,11 @@ export function createPersistentBackgroundCurationJobStore(
       compareAndSwap: storage.compareAndSwap.bind(storage)
     });
     snapshot = result.value;
-    if (result.committed) needsFlushMigration = false;
+    if (result.committed) {
+      needsFlushMigration = false;
+      const written = storage.read();
+      if (written) decodeMemo = { serialized: written, snapshot: result.value };
+    }
     return deepClone(snapshot);
   };
 
@@ -445,6 +459,31 @@ export function createPersistentBackgroundCurationJobStore(
         return changed ? { ...base, records } : undefined;
       });
       return jobIds.map((id) => cloneRecord(requireRecord(next.records, id)));
+    },
+    compactMaterializedResults(before) {
+      // 延迟一拍的清扫:只压「早于 before」结算的记录。刚结算的记录保留完整
+      // result 一轮——run 响应的消费方与结算后崩溃恢复的验收都依赖它;下一轮
+      // 运行或下次启动再把它压成摘要,稳态下大血包最多存活一个周期。
+      const beforeIso = normalizeDate(before).toISOString();
+      let compacted = 0;
+      commit((base) => {
+        compacted = 0;
+        const records = base.records.map((record) => {
+          if (
+            !isTerminalStatus(record.status) ||
+            !record.materializedAt ||
+            record.materializedAt >= beforeIso ||
+            !record.result ||
+            record.result.compactedAt
+          ) {
+            return record;
+          }
+          compacted += 1;
+          return { ...record, result: compactTerminalCurationResult(record.result, record.materializedAt) };
+        });
+        return compacted > 0 ? { ...base, records } : undefined;
+      });
+      return compacted;
     },
     flushMigration() {
       if (!needsFlushMigration) return false;
@@ -845,7 +884,17 @@ async function runImportSourceJob(
     recommendedBecause: ingested.recommendedBecause ?? job.reason,
     userContext: await handlers.loadSourceQualityUserContext?.(),
     qualityGateConceptHints: mergeUnique(job.conceptIds, job.sourceCandidate.conceptIds),
-    sourceQualityVerdicts: await handlers.loadSourceQualityVerdicts?.()
+    sourceQualityVerdicts: await handlers.loadSourceQualityVerdicts?.(),
+    // browser_share = the user clipped this content by hand, and that explicit
+    // save is the quality signal, so the depth/quality gate is skipped (D1
+    // decision, 2026-08-04). Every other lane still runs the gate, and the
+    // anchor grounding gate on generated cards applies to all lanes.
+    skipQualityGate: job.sourceCandidate.intakeKind === "browser_share",
+    // D2 decision, 2026-08-04: the clip lane also runs the grounding gate in
+    // the lenient profile (claim checks warn instead of block) — a clipped
+    // tweet is one short chunk, so paraphrase false-kills dominate genuine
+    // violations. Citations and verbatim quotes stay hard everywhere.
+    lenientGrounding: job.sourceCandidate.intakeKind === "browser_share"
   });
 
   if (sourceImport.qualityGate?.verdict === "reject") {
@@ -987,6 +1036,56 @@ function recoverExpiredRecords(
     return { ...rest, status: "queued" as const, updatedAt: now };
   });
   return { records: recovered, recoveredIds, changed: recoveredIds.length > 0 };
+}
+
+/**
+ * 把单个 sourceImport 结果压成骨架。保留的字段都有明确的结算后读取方:
+ * - source / qualityGate / posts 的 id 列表:classifyTerminalImportSource
+ *   (apps/api 僵尸候选修复)据此复算候选归宿;
+ * - importRecord:队列解码器的必填骨架,亦是导入历史的最小元数据;
+ * - errorMessage:失败原因展示。
+ * 剥掉的是 chunks / assets / sourceRegistry 正文 / posts 全文 / harnessRun——
+ * 它们在结算时已写入主快照对应集合,留在队列里只是死重。
+ */
+function compactSourceImportResult(sourceImport: SourceImportWorkerResult): SourceImportWorkerResult {
+  const registry = sourceImport.sourceRegistry as { id?: unknown } | null | undefined;
+
+  return {
+    importRecord: sourceImport.importRecord,
+    source: sourceImport.source,
+    assets: [],
+    chunks: [],
+    sourceRegistry: (registry && typeof registry === "object"
+      ? { id: registry.id }
+      : {}) as SourceImportWorkerResult["sourceRegistry"],
+    posts: (sourceImport.posts ?? []).map((post) => ({ id: post.id })) as SourceImportWorkerResult["posts"],
+    validation: [],
+    ...(sourceImport.qualityGate ? { qualityGate: sourceImport.qualityGate } : {}),
+    ...(sourceImport.errorMessage ? { errorMessage: sourceImport.errorMessage } : {})
+  };
+}
+
+/**
+ * 终结任务结算完成后的 result 瘦身。materializationPlan 在结算时已全部应用,
+ * 重放路径只认 !materializedAt 的记录,不会再读它;conceptBrief、
+ * deepReadArticle 与 discoveredSourceCandidates 保留(体积小,且 run 响应的
+ * 消费方直读它们:网页端读刚生成的深读文章,smoke 契约读发现的候选)。
+ * 幂等:对已压缩的 result 再压只更新 compactedAt。
+ */
+export function compactTerminalCurationResult(
+  result: BackgroundCurationJobResult,
+  compactedAt: string
+): BackgroundCurationJobResult {
+  const { materializationPlan: _plan, ...rest } = result;
+
+  return {
+    ...rest,
+    ...(result.sourceImport ? { sourceImport: compactSourceImportResult(result.sourceImport) } : {}),
+    ...(result.sourceImports
+      ? { sourceImports: result.sourceImports.map((item) => compactSourceImportResult(item)) }
+      : {}),
+    compactedAt
+  };
 }
 
 function assertActiveOwner(

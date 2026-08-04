@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="shared.css">
+<style>
+  .kicker { background: var(--bl-bg); color: var(--bl-fg); }
+  .hero { margin-top: 40px; display: flex; align-items: baseline; gap: 28px; font-family: "Huangyou"; }
+  .hero .a { font-size: 190px; line-height: 1; }
+  .hero .arrow { font-size: 80px; color: var(--red); }
+  .hero .b { font-size: 190px; line-height: 1; color: var(--red); }
+  .hero-cap { margin-top: 14px; font-family: "SourceLight"; font-size: 28px; color: #55524A; }
+  .grid2 { margin-top: 36px; }
+  .tech { margin-top: 26px; }
+</style>
+</head>
+<body>
+<div class="head">
+  <div class="badge">AI 知识周报</div>
+  <div class="pgno">03 / 06</div>
+</div>
+
+<div><span class="kicker">硬核 / 模型架构</span></div>
+<div class="title" style="font-size:72px;">总参数很大，<br>每次只用<span class="red">一小撮</span></div>
+
+<div class="hero"><span class="a">671B</span><span class="arrow">→</span><span class="b">37B</span></div>
+<div class="hero-cap">DeepSeek-V3 的总参数，与每个 token 实际激活的参数量</div>
+
+<div class="grid2">
+  <div class="card c-gr">
+    <span class="chip">机制</span>
+    <div class="kw">养一群专家<br>来活只叫醒几个</div>
+    <div class="d">能力按 671B 算，算力按 37B 花——这就是 MoE 的稀疏激活</div>
+  </div>
+  <div class="card c-pu">
+    <span class="chip">训练账</span>
+    <div class="kw">2.788M<br>GPU 小时</div>
+    <div class="d">V3 预训练的 H800 用量；训练同规模密集模型，估计要超过 10M</div>
+  </div>
+</div>
+
+<div class="tech note-sm">配套技术：MLA（压缩 KV 缓存的注意力变体）与无辅助损失的负载均衡策略<br>出处：AITimeline 跟进卡 / 转述 DeepSeek-V3 技术报告</div>
+
+<div class="bar">
+  <div class="q">一家的账算完了；这条赛道上全球都有谁在跑？</div>
+  <div class="next">下一页 → 04</div>
+</div>
+</body>
+</html>

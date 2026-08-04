@@ -188,6 +188,10 @@ export async function executeCurationRun(
     }
   });
 
+  // 清扫此前轮次已结算的终结记录(见 compactMaterializedResults 注释);放在
+  // materialize 之前,镜像同步会把压缩后的队列一并带进主快照。
+  curationStore.compactMaterializedResults(runNow);
+
   const materializedRecords = materializeCurationJobRecords(
     persistenceStore,
     curationStore,

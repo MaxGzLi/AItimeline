@@ -92,6 +92,7 @@ import {
   handleIdeaResearchRequest
 } from "./domains/research.mjs";
 import { handlePostReply, handleUserNote } from "./domains/notes.mjs";
+import { handlePreferenceChat } from "./domains/preferences.mjs";
 import {
   backfillLegacyReviewStates,
   buildReviewCompletionRecordId,
@@ -133,6 +134,7 @@ import {
   createSafeSourceImportWorker,
   executeCurationRun
 } from "./domains/curationRun.mjs";
+import { getInjectCardsResponse } from "./domains/injectFeed.mjs";
 import {
   getDismissedPostsResponse,
   getEvidenceLedgerResponse,
@@ -681,6 +683,22 @@ export function createApiServer(options = {}) {
             ...timeline,
             workerStatus: getWorkerStatus()
           }
+        );
+        return;
+      }
+
+      // 注入面(浏览器插件)拉卡:复习到期优先、时间线排名补位的精简卡列表。纯读。
+      if (request.method === "GET" && url.pathname === "/api/inject/cards") {
+        sendJson(
+          response,
+          200,
+          getInjectCardsResponse(
+            persistenceStore.getSnapshot(),
+            url.searchParams.get("now"),
+            url.searchParams.get("userId") ?? "local-user",
+            resolveContentLanguage(persistenceStore, process.env),
+            url.searchParams.get("limit")
+          )
         );
         return;
       }
@@ -1410,6 +1428,22 @@ export function createApiServer(options = {}) {
         const body = await readJsonBody(request);
         const userId = typeof body.userId === "string" && body.userId.trim() ? body.userId : "local-user";
         const result = handleAgentConfirm(
+          body,
+          userId,
+          persistenceStore,
+          curationStore,
+          resolveContentLanguage(persistenceStore, process.env)
+        );
+
+        sendJson(response, 200, result);
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/agent/preferences") {
+        const body = await readJsonBody(request);
+        requireString(body.text, "text");
+        const userId = typeof body.userId === "string" && body.userId.trim() ? body.userId : "local-user";
+        const result = handlePreferenceChat(
           body,
           userId,
           persistenceStore,

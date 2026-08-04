@@ -310,14 +310,24 @@ function validateClaimGrounding(
       )
     );
 
+    // Concepts are prompted in English, so a Latin concept label can never
+    // appear verbatim in CJK-only evidence. When every resolved span is
+    // cross-script with the concept, the miss is a translation artifact, not a
+    // grounding violation — downgrade to a warning (same split #152 applied to
+    // fact anchors). A same-script miss still fails closed.
+    const crossLanguageOnly =
+      !supported && evidence.length > 0 && evidence.every((span) => isCrossScriptPair(claim.claim, span.quote));
+
     return buildClaimCheck(
       claim,
-      supported ? "passed" : options.sameSourceFollowup ? "warning" : "failed",
+      supported ? "passed" : crossLanguageOnly || options.sameSourceFollowup ? "warning" : "failed",
       evidenceChunkIds,
       supported ? 1 : 0,
       supported
         ? "Concept appears in cited evidence text."
-        : "Concept does not appear in cited evidence text."
+        : crossLanguageOnly
+          ? "Concept is cross-language with all cited evidence; accepted with a warning."
+          : "Concept does not appear in cited evidence text."
     );
   }
 
@@ -1165,8 +1175,12 @@ function hasNegation(value: string): boolean {
 // statement written with a positive verb; a faithful restatement ("生成时就不用
 // 重算") reads as negated and used to fail the polarity check. Both sides use the
 // same list, so a claim that invents an avoidance still needs evidence for it.
+// Prohibition verbs belong here for the same reason: "禁止直接使用" is negative
+// meaning behind a positive verb, and a faithful restatement ("不能直接使用")
+// reads as negated. Shared list on both sides keeps invented prohibitions
+// checkable against the evidence.
 const avoidancePattern =
-  /\b(?:avoids?|avoided|avoiding|prevents?|prevented|preventing|eliminates?|eliminated|eliminating)\b|避免|无需|免去|省去/u;
+  /\b(?:avoids?|avoided|avoiding|prevents?|prevented|preventing|eliminates?|eliminated|eliminating|prohibits?|prohibited|prohibiting|forbids?|forbade|forbidden|forbidding|bans?|banned|banning)\b|避免|无需|免去|省去|禁止|严禁|禁用|不准/u;
 
 // A hypothesis ("如果 X 无法 Y 会怎样") belongs to the quiz or scenario block, not
 // to the source: its direction and negation are the question's own, so neither is

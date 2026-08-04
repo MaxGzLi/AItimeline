@@ -309,7 +309,7 @@ export function validateHarnessPosts(
     const mediaIssues = sourceRegistry ? validatePostMedia(post, sourceRegistry) : [];
     const grounding = sourceRegistry
       ? validateGrounding(post, sourceRegistry, {
-          sameSourceFollowup: config.objective === "followup_generation"
+          sameSourceFollowup: config.objective === "followup_generation" || config.lenientGrounding === true
         })
       : undefined;
     const groundingIssues = grounding?.issues ?? [];
