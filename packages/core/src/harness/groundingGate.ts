@@ -1175,8 +1175,12 @@ function hasNegation(value: string): boolean {
 // statement written with a positive verb; a faithful restatement ("生成时就不用
 // 重算") reads as negated and used to fail the polarity check. Both sides use the
 // same list, so a claim that invents an avoidance still needs evidence for it.
+// Prohibition verbs belong here for the same reason: "禁止直接使用" is negative
+// meaning behind a positive verb, and a faithful restatement ("不能直接使用")
+// reads as negated. Shared list on both sides keeps invented prohibitions
+// checkable against the evidence.
 const avoidancePattern =
-  /\b(?:avoids?|avoided|avoiding|prevents?|prevented|preventing|eliminates?|eliminated|eliminating)\b|避免|无需|免去|省去/u;
+  /\b(?:avoids?|avoided|avoiding|prevents?|prevented|preventing|eliminates?|eliminated|eliminating|prohibits?|prohibited|prohibiting|forbids?|forbade|forbidden|forbidding|bans?|banned|banning)\b|避免|无需|免去|省去|禁止|严禁|禁用|不准/u;
 
 // A hypothesis ("如果 X 无法 Y 会怎样") belongs to the quiz or scenario block, not
 // to the source: its direction and negation are the question's own, so neither is

@@ -6,6 +6,7 @@ import {
   validateClaimSupport,
   validateGrounding
 } from "./groundingGate.js";
+import { defaultAgentHarnessConfig, validateHarnessPosts } from "./runner.js";
 
 const source = {
   id: "source-1",
@@ -229,6 +230,39 @@ describe("grounding validation", () => {
     expect(result.checks.find((check) => check.fieldPath === "$.concepts[0]")?.status).toBe("failed");
     expect(result.valid).toBe(false);
   });
+
+  it("lenientGrounding config downgrades claim-level grounding failures to warnings", () => {
+    const evidence = "RAG improves retrieval quality.";
+    const post = {
+      ...makePost(evidence),
+      summary: "训练用了 32 块 GPU",
+      thread: [
+        {
+          id: "thread-1",
+          kind: "user_comment",
+          title: evidence,
+          body: evidence,
+          grounded: true,
+          citations: [
+            { sourceId: source.id, sourceTitle: source.title, chunkId: "chunk-1", quote: evidence }
+          ]
+        }
+      ]
+    };
+    const registry = makeRegistry(evidence);
+
+    // Drop the required thread kinds — this test isolates the grounding
+    // severity switch, not the thread policy.
+    const baseConfig = {
+      ...defaultAgentHarnessConfig,
+      threadPolicy: { ...defaultAgentHarnessConfig.threadPolicy, requiredKinds: [] }
+    };
+    const strict = validateHarnessPosts([post], baseConfig, registry);
+    const lenient = validateHarnessPosts([post], { ...baseConfig, lenientGrounding: true }, registry);
+
+    expect(strict[0]?.valid).toBe(false);
+    expect(lenient[0]?.valid).toBe(true);
+  });
 });
 
 describe("concept word-form tolerance", () => {
@@ -442,6 +476,23 @@ describe("anchor-style claim support", () => {
   });
 
   // --- must still be rejected ---
+
+  it("accepts a 不能 restatement of 禁止 evidence (prohibition is negative meaning)", () => {
+    expect(
+      validateClaimSupport(
+        "这意味着这些地区的用户不能直接使用",
+        ["MiniMax H3 的开源协议禁止了美国、欧盟、英国、韩国地区直接使用。"],
+        sourceFactOptions
+      ).supported
+    ).toBe(true);
+  });
+
+  it("still rejects a prohibition the evidence never states", () => {
+    expect(
+      validateClaimSupport("这些地区的用户不能直接使用", ["该协议允许所有地区直接使用。"], sourceFactOptions)
+        .supported
+    ).toBe(false);
+  });
 
   it("rejects a Chinese claim whose number contradicts the evidence", () => {
     expect(
