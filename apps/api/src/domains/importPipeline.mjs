@@ -342,7 +342,53 @@ function filterDuplicateFollowupSourceImport(sourceImport, knownTitles, warn) {
   };
 }
 
+// Mirrors the article chunking defaults in packages/core/src/transform/articleImport.ts
+// so captured text and fetched articles feed the same-shaped chunks downstream.
+const capturedTextMaxChunks = 24;
+const capturedTextMinParagraphLength = 80;
+
+// Split client-captured body text (e.g. a clipped tweet) into chunk paragraphs.
+// Tweets are often shorter than one article paragraph, so when no blank-line
+// paragraph clears the minimum length the whole text becomes a single chunk.
+export function splitCapturedTextIntoParagraphs(text) {
+  const paragraphs = text
+    .split(/\n\s*\n/)
+    .map((paragraph) => paragraph.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  const substantial = paragraphs.filter((paragraph) => paragraph.length >= capturedTextMinParagraphLength);
+
+  return (substantial.length ? substantial : [paragraphs.join(" ").trim()].filter(Boolean)).slice(
+    0,
+    capturedTextMaxChunks
+  );
+}
+
 export async function ingestSourceCandidate(candidate, fetchImpl) {
+  // A candidate that carries its own captured body (browser clipping) never
+  // needs a fetch — login-walled pages like x.com only exist as the capture.
+  if (typeof candidate.capturedText === "string" && candidate.capturedText.trim()) {
+    const paragraphs = splitCapturedTextIntoParagraphs(candidate.capturedText);
+
+    return {
+      assets: [
+        {
+          id: `${candidate.source.id}-text`,
+          sourceId: candidate.source.id,
+          kind: "text",
+          content: paragraphs.join("\n\n"),
+          createdAt: candidate.discoveredAt
+        }
+      ],
+      chunks: paragraphs.map((paragraph, index) => ({
+        id: `${candidate.source.id}-chunk-${index + 1}`,
+        sourceId: candidate.source.id,
+        content: paragraph,
+        conceptHints: candidate.conceptIds
+      })),
+      recommendedBecause: `Saved from the browser: ${candidate.reason}`
+    };
+  }
+
   if (candidate.source.type === "article" || candidate.source.type === "blog" || candidate.source.type === "news") {
     const fetched = await fetchArticle(candidate.source.url, { fetch: fetchImpl });
 
