@@ -38,6 +38,7 @@ import {
   Compass,
   GitBranch,
   Home,
+  Newspaper,
   Pause,
   PenLine,
   Play,
@@ -51,6 +52,7 @@ import type { SupplyRefillState } from "./components/SupplyDroughtCard";
 import { buildWikilinkAutocompleteCandidates } from "./components/WikilinkAutocomplete";
 import { DiscoverView } from "./views/DiscoverView";
 import { AgentView } from "./views/AgentView";
+import { BaseView } from "./views/BaseView";
 import { DeepReadView } from "./views/DeepReadView";
 import { GraphView } from "./views/GraphView";
 import { NotificationsView } from "./views/NotificationsView";
@@ -135,12 +137,13 @@ import type {
   WorkerStatus
 } from "./lib/types";
 
-type ViewKey = "timeline" | "discover" | "graph" | "review" | "notifications" | "agent" | "settings" | "deepread";
+type ViewKey = "base" | "timeline" | "discover" | "graph" | "review" | "notifications" | "agent" | "settings" | "deepread";
 
 const languageStorageKey = "aitl-language";
 
 const navItems: Array<{ key: ViewKey; labelKey: string; icon: typeof Home }> = [
-  { key: "timeline", labelKey: "nav.timeline", icon: Home },
+  { key: "base", labelKey: "nav.base", icon: Home },
+  { key: "timeline", labelKey: "nav.timeline", icon: Newspaper },
   { key: "discover", labelKey: "nav.discover", icon: Compass },
   { key: "graph", labelKey: "nav.graph", icon: GitBranch },
   { key: "review", labelKey: "nav.review", icon: Brain },
@@ -150,6 +153,7 @@ const navItems: Array<{ key: ViewKey; labelKey: string; icon: typeof Home }> = [
 ];
 
 const viewTitleKeys: Record<ViewKey, { title: string; sub?: string }> = {
+  base: { title: "nav.base", sub: "nav.baseSub" },
   timeline: { title: "nav.timeline" },
   discover: { title: "nav.discover", sub: "nav.discoverSub" },
   graph: { title: "nav.graph", sub: "nav.graphSub" },
@@ -239,7 +243,8 @@ export function App() {
   const [learningGoalMessage, setLearningGoalMessage] = useState(() => t("goals.message.default"));
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
   const [conceptView, setConceptView] = useState<string | null>(null);
-  const [activeView, setActiveView] = useState<ViewKey>("timeline");
+  // 基地是默认首屏:先看 agent 替你干了什么,信息流退居导航里的一个标签页。
+  const [activeView, setActiveView] = useState<ViewKey>("base");
   const [graphRequestedTab, setGraphRequestedTab] = useState<"graph" | "boundary" | "skillTree">("graph");
   const [feedTab, setFeedTab] = useState<"foryou" | "latest" | "saved">("foryou");
   const [topicFilter, setTopicFilter] = useState<TopicFilterKey>("all");
@@ -2593,7 +2598,7 @@ export function App() {
         <button
           className="x-logo"
           onClick={() => {
-            setActiveView("timeline");
+            setActiveView("base");
             setSelectedCardId(null);
           }}
           title="AITimeline"
@@ -2778,6 +2783,23 @@ export function App() {
         </header>
 
         {scoutLedger}
+
+        {activeView === "base" ? (
+          <BaseView
+            linkedGraph={linkedGraph}
+            onOpenCardId={handleOpenCardId}
+            onOpenConcept={handleOpenConcept}
+            onOpenGraph={() => {
+              setGraphRequestedTab("graph");
+              setActiveView("graph");
+            }}
+            onOpenImports={() => openAgentSection("import")}
+            onOpenReview={() => setActiveView("review")}
+            reviewCardsById={reviewCardsById}
+            reviewQueue={reviewQueue}
+            sourceImports={sourceImports}
+          />
+        ) : null}
 
         {activeView === "discover" ? (
           <DiscoverView
