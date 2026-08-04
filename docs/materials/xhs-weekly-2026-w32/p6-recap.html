@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="shared.css">
+<style>
+  /* 尾页:数字备忘(可截图收藏) + 一段来历 + 评论钩 */
+  .memo { margin-top: 40px; border-top: 3px solid #1C1B18; }
+  .memo-row {
+    display: flex;
+    align-items: baseline;
+    gap: 34px;
+    padding: 26px 6px 22px;
+    border-bottom: 1.5px solid #C9C7BF;
+  }
+  .memo-row .num {
+    font-family: "Smiley";
+    font-size: 58px;
+    letter-spacing: -0.02em;
+    width: 300px;
+    flex-shrink: 0;
+    text-align: right;
+  }
+  .memo-row .cap {
+    font-size: 22px;
+    line-height: 1.65;
+    color: #2B2A26;
+  }
+  .memo-row .cap .src {
+    font-family: "Wenkai";
+    font-size: 16px;
+    color: #8A8880;
+    display: block;
+    margin-top: 4px;
+  }
+  .origin {
+    margin-top: 34px;
+    font-size: 23px;
+    line-height: 1.75;
+    color: #2B2A26;
+  }
+  .hook {
+    margin-top: 30px;
+    font-family: "SourceHeavy";
+    font-size: 28px;
+    line-height: 1.55;
+  }
+  .promo {
+    margin-top: auto;
+    border-top: 1.5px solid #C9C7BF;
+    padding-top: 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+  }
+  .promo .p-l {
+    font-family: "Smiley";
+    font-size: 20px;
+    color: #6B6A66;
+    letter-spacing: 0.05em;
+  }
+  .promo .p-r {
+    font-family: "Wenkai";
+    font-size: 17px;
+    color: #8A8880;
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="masthead">
+    <div class="brand"><span>AITIMELINE</span><b>知识周报</b></div>
+    <div class="pageno">06 / 06</div>
+  </div>
+
+  <div class="kicker"><span class="en">RECAP</span>收藏 · 本周数字备忘</div>
+  <h1>存这一页就够了</h1>
+
+  <div class="memo">
+    <div class="memo-row">
+      <div class="num">671B→37B</div>
+      <div class="cap">DeepSeek-V3 总参数与单 token 激活量，MoE 稀疏激活的教科书样本
+        <span class="src">出处：DeepSeek-V3 技术报告（跟进卡转述）</span>
+      </div>
+    </div>
+    <div class="memo-row">
+      <div class="num">2.788M</div>
+      <div class="cap">V3 预训练的 H800 GPU 小时；同规模密集模型估计要超过 10M
+        <span class="src">出处：同上</span>
+      </div>
+    </div>
+    <div class="memo-row">
+      <div class="num">9650 亿</div>
+      <div class="cap">推文里 Anthropic 的美元估值，配的担忧是：新人是冲着钱来，还是认同使命
+        <span class="src">出处：@_FORAB / X / 2026-08-04</span>
+      </div>
+    </div>
+    <div class="memo-row">
+      <div class="num">4 个地区</div>
+      <div class="cap">被 MiniMax H3 协议挡在「直接使用」之外：美国、欧盟、英国、韩国
+        <span class="src">出处：@yvbbrjdr / X / 2026-08-03</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="origin">这页备忘不是手打的。刷 X 看到有货的推，点一下「保存」，观察员把它变成带出处的知识卡，到点提醒复习——你现在看的，就是这套流程一周攒下的 <span class="num">16</span> 张卡。</div>
+
+  <div class="hook">评论区聊聊：你这周刷到过最值得存下来的一条推是什么？</div>
+
+  <div class="promo">
+    <div class="p-l">AITIMELINE · 把刷掉的时间捞回来</div>
+    <div class="p-r">开源项目，本机运行，数据归你</div>
+  </div>
+</div>
+</body>
+</html>

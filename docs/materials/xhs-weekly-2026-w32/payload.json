@@ -1,0 +1,426 @@
+{
+  "weekStart": "2026-08-02",
+  "exportedAt": "2026-08-04T06:10:36.651Z",
+  "cardCount": 16,
+  "cards": [
+    {
+      "id": "followup-mixture-of-experts-ea58df10-post-1",
+      "createdAt": "2026-08-03T07:57:22.777Z",
+      "title": "MoE 的稀疏激活：671B 参数为何只激活 37B？",
+      "thesis": "MoE 通过稀疏激活，让每个 token 只使用一小部分参数，从而在保持大模型能力的同时大幅降低计算成本。",
+      "keyTakeaway": "MoE 的核心是稀疏激活：总参数大，但每个 token 只激活一小部分，从而在能力与成本之间取得平衡。",
+      "summary": "DeepSeek-V3 是一个 MoE 语言模型，总参数 671B，每个 token 激活 37B。它采用 MLA 和 DeepSeekMoE 架构，并引入辅助损失自由的负载均衡策略和多 token 预测训练目标。在 14.8T 高质量 token 上预训练，训练仅需 2.788M H800 GPU 小时，且过程稳定无回滚。评估显示其性能超越其他开源模型，与领先闭源模型相当。",
+      "concepts": [
+        "Mixture-of-Experts",
+        "Multi-head Latent Attention",
+        "DeepSeekMoE",
+        "Auxiliary-loss-free Load Balancing",
+        "Multi-Token Prediction"
+      ],
+      "source": {
+        "title": "Follow-up: Mixture-of-Experts",
+        "url": "https://aitimeline.local/followups/post-overview-article-ad446c87-continue_deeper-2026-08-02t01-54-37-488z-discover-sources",
+        "author": null
+      },
+      "quotes": [
+        "DeepSeek-V3 是一个 Mixture-of-Experts (MoE) 语言模型，总参数 671B，每个 token 激活 37B。",
+        "它采用 Multi-head Latent Attention (MLA) 和 DeepSeekMoE 架构",
+        "训练一个 671B 参数的密集模型可能需要超过 10M GPU 小时。",
+        "引入了辅助损失自由的负载均衡策略",
+        "总参数 671B，每个 token 激活 37B。"
+      ]
+    },
+    {
+      "id": "deepseekmoe-applications-713f1f7d",
+      "createdAt": "2026-08-03T07:58:31.798Z",
+      "title": "DeepSeekMoE 不止于语言：从 V3 到扩散模型的通用架构",
+      "thesis": "DeepSeekMoE 是一个通用架构，通过细粒度专家、共享专家、辅助损失无关负载均衡和硬件-软件协同设计，在语言、视觉-语言、代码和扩散模型等多种任务中实现参数效率和计算效率的突破。",
+      "keyTakeaway": "DeepSeekMoE 不是语言模型专属，而是一个可迁移到视觉、代码和生成任务的通用稀疏架构。",
+      "summary": "DeepSeekMoE 是一个通用架构，已成功应用于语言、视觉-语言、代码和扩散模型等多种任务。其核心创新包括细粒度专家分割、共享专家、辅助损失无关负载均衡以及硬件-软件协同设计。这些创新使得模型在保持稀疏激活的同时，实现了极高的参数效率和计算效率。",
+      "concepts": [
+        "Mixture-of-Experts",
+        "DeepSeekMoE",
+        "DeepSeek-V2",
+        "DeepSeek-V3",
+        "VL2",
+        "Coder-V2",
+        "Diffusion Models",
+        "Mechanism",
+        "Prerequisite"
+      ],
+      "source": {
+        "title": "Follow-up: Mixture-of-Experts",
+        "url": "https://aitimeline.local/followups/post-deepseekmoe-4-continue_deeper-2026-08-02t01-54-37-489z-discover-sources",
+        "author": null
+      },
+      "quotes": [
+        "DeepSeekMoE架构是DeepSeek-V2、DeepSeek-V3、VL2、Coder-V2以及扩散模型适配版本的基础，在多种任务中实现了参数效率和计算效率的突破。",
+        "DeepSeek-V3采用了DeepSeekMoE架构，结合Multi-head Latent Attention和Multi-Token Prediction训练目标，在保持稀疏激活的同时实现了极高的参数效率。",
+        "传统密集模型所有参数对每个token都激活，计算成本高。DeepSeekMoE通过稀疏激活，虽然总参数量巨大，但每个token只激活一小部分专家，计算量远低于同等参数量的密集模型。",
+        "DeepSeekMoE的成功也得益于硬件-软件协同设计，包括针对MoE的通信优化、负载均衡策略和内核融合，使得大规模稀疏模型在GPU集群上高效训练和推理。",
+        "DeepSeekMoE通过稀疏激活，虽然总参数量巨大，但每个token只激活一小部分专家，计算量远低于同等参数量的密集模型。"
+      ]
+    },
+    {
+      "id": "followup-deepseek-v3-97c42ef-post-1",
+      "createdAt": "2026-08-03T08:05:07.229Z",
+      "title": "MLA：唯一声称既省KV缓存又提性能的注意力变体",
+      "thesis": "MLA通过低秩分解将KV头压缩为潜在向量，再为每个Q头解压出独特的K、V头，从而在减少KV缓存的同时避免GQA/MQA的性能损失。",
+      "keyTakeaway": "MLA用低秩分解把KV头压成潜在向量，再为每个Q头解压出独特K、V头，是唯一声称既省缓存又提性能的注意力变体。",
+      "summary": "本文讲解MLA（Multi-head Latent Attention）如何通过低秩分解压缩KV缓存，并与GQA、MQA对比，说明其声称的性能优势来源。",
+      "concepts": [
+        "Multi-head Latent Attention",
+        "low-rank factorization",
+        "DeepSeek-v3",
+        "KV cache",
+        "GQA",
+        "MQA"
+      ],
+      "source": {
+        "title": "Follow-up: Multi-head Latent Attention",
+        "url": "https://aitimeline.local/followups/daily-goal-followup-b2d93f51",
+        "author": null
+      },
+      "quotes": [
+        "MLA则压缩KV头为潜在向量，再为每个Q头解压出独特的K、V头。",
+        "假设8个头，GQA用2组则KV缓存减半，MQA减为1/8，MLA通过低秩分解可减至1/4左右且性能更优。",
+        "GQA和MQA通过共享KV头减少缓存，但被视为性能权衡。MLA则使用低秩因子化投影，为每个Q头解压出独特的K、V头，DeepSeek声称这既减少内存又提升模型表现。",
+        "低秩分解保留了更多信息，解耦RoPE提供了更灵活的位置编码，可能使模型更容易学习。",
+        "哪种方法声称在减少KV缓存的同时提升模型表现？A) GQA B) MQA C) MLA 答案：C"
+      ]
+    },
+    {
+      "id": "deepseekmoe-finegrained-shared-experts-54877040",
+      "createdAt": "2026-08-03T08:10:36.885Z",
+      "title": "DeepSeekMoE：细粒度专家与共享专家如何平衡专业化与知识共享",
+      "thesis": "DeepSeekMoE 通过细粒度专家划分和共享专家机制，在专家专业化和知识共享之间取得更好的平衡。",
+      "keyTakeaway": "DeepSeekMoE 用细粒度专家保专业化，用共享专家促知识共享，两者结合破解了 MoE 的 trade-off。",
+      "summary": "DeepSeekMoE 是 DeepSeek-V3 系列中的关键架构创新，它改进了传统的 Mixture-of-Experts (MoE) 设计，旨在解决专家专业化与知识共享之间的 trade-off。通过细粒度专家和共享专家机制，在保持专家专业化的同时促进知识共享。",
+      "concepts": [
+        "DeepSeekMoE",
+        "Mixture-of-Experts (MoE)",
+        "Fine-grained Experts",
+        "Shared Experts",
+        "Auxiliary-loss-free Load Balancing"
+      ],
+      "source": {
+        "title": "Follow-up: Auxiliary-loss-free Load Balancing",
+        "url": "https://aitimeline.local/followups/daily-goal-followup-6cfb99ea",
+        "author": null
+      },
+      "quotes": [
+        "DeepSeekMoE 通过细粒度专家和共享专家机制，在保持专家专业化的同时促进知识共享。",
+        "MoE 就像厨房里的多位厨师（专家），每个厨师擅长不同菜系。门控网络（router）决定每道菜由哪位厨师负责。DeepSeekMoE 则引入共享厨师（共享专家）处理通用任务，同时保留特色厨师（细粒度专家）处理专业任务。",
+        "传统 MoE 通常使用少量粗粒度专家（如 8 个），每个专家覆盖广泛知识，导致专业化不足。DeepSeekMoE 采用更多细粒度专家（如 256 个），并加入共享专家，使得每个 token 可以同时激活多个细粒度专家和一个共享专家，兼顾专业化和知识共享。",
+        "DeepSeekMoE 还搭配了 Auxiliary-loss-free Load Balancing 技术，避免传统 MoE 中因负载不均而需要额外损失函数。这进一步提升了训练效率和模型性能。",
+        "DeepSeekMoE 通过细粒度专家和共享专家机制，在保持专家专业化的同时促进知识共享。"
+      ]
+    },
+    {
+      "id": "article-mitsloan-mit-edu-ideas-made-to-matter-agentic-ai-explained-post-1",
+      "createdAt": "2026-08-04T04:35:13.265Z",
+      "title": "AI Agent 如何自主感知、推理与行动",
+      "thesis": "AI Agent 是半自主或全自主的系统，能感知、推理并行动，与聊天机器人不同，它集成其他软件系统独立完成任务。",
+      "keyTakeaway": "AI Agent 的关键在于自主行动，而不仅仅是生成内容。",
+      "summary": "AI Agent 是半自主或全自主的 AI 系统，能够感知、推理并行动，与聊天机器人不同，它集成其他软件系统独立完成任务。",
+      "concepts": [
+        "AI Agent",
+        "agentic AI",
+        "chatbots",
+        "generative AI"
+      ],
+      "source": {
+        "title": "Agentic AI, explained",
+        "url": "https://mitsloan.mit.edu/ideas-made-to-matter/agentic-ai-explained",
+        "author": null
+      },
+      "quotes": [
+        "AI agents or agentic AI, a new breed of AI systems that are semi- or fully autonomous and thus able to perceive, reason, and act on their own.",
+        "companies such as JPMorgan Chase are exploring the use of AI agents to detect fraud",
+        "While generative AI automates the creation of complex text, images, and video based on human language interaction, AI agents go further, acting and making decisions in a way a human might",
+        "rapid evolution could also propel organizations to adopt agentic AI without fully understanding its capabilities or having created a formal strategy and risk management framework.",
+        "AI agents can provide value in situations where there are information asymmetries, like shopping for insurance or a used car online, by continuously monitoring myriad information sources"
+      ]
+    },
+    {
+      "id": "article-mitsloan-mit-edu-ideas-made-to-matter-agentic-ai-explained-post-4",
+      "createdAt": "2026-08-04T04:35:13.265Z",
+      "title": "Agentic AI 与 AI Agent：是同一个概念吗？",
+      "thesis": "Agentic AI 通常指多个 AI Agent 协同完成任务，而 AI Agent 是单个自主系统。",
+      "keyTakeaway": "Agentic AI 强调多 agent 协同，AI Agent 强调单个自主性。",
+      "summary": "Agentic AI 是多个 AI Agent 协同的系统，而 AI Agent 是单个自主系统。",
+      "concepts": [
+        "AI Agent",
+        "agentic AI"
+      ],
+      "source": {
+        "title": "Agentic AI, explained",
+        "url": "https://mitsloan.mit.edu/ideas-made-to-matter/agentic-ai-explained",
+        "author": null
+      },
+      "quotes": [
+        "He defines agentic AI as systems that incorporate multiple, different agents that are orchestrating a task together — for example, a marketplace of agents representing both the buy and sell side during a negotiation or transaction.",
+        "a marketplace of agents representing both the buy and sell side during a negotiation or transaction.",
+        "systems that incorporate multiple, different agents that are orchestrating a task together",
+        "systems that incorporate multiple, different agents that are orchestrating a task together",
+        "agentic AI as systems that incorporate multiple, different agents that are orchestrating a task together"
+      ]
+    },
+    {
+      "id": "anthropic-mission-vs-money-965b-post-1",
+      "createdAt": "2026-08-04T05:07:22.821Z",
+      "title": "Anthropic 老板的担忧：人才是冲着钱来，还是认同使命？",
+      "thesis": "Anthropic 老板担心新人才加入公司是冲着钱来，而不是认同公司的使命，这反映了高估值阶段组织文化面临的真实挑战。",
+      "keyTakeaway": "高估值和上市计划可能吸引逐利人才，Anthropic 老板的担忧提醒我们：使命认同是 AI 公司长期发展的根基。",
+      "summary": "该知识帖基于一条 X 帖子，指出 Anthropic 在估值达 9650 亿美元并计划上市后，老板担心新人才加入是冲着钱而不是认同公司使命。这涉及 AI 公司高增长阶段的组织文化与人才动机问题。",
+      "concepts": [
+        "Anthropic",
+        "Claude",
+        "9650 亿美元",
+        "使命",
+        "人才"
+      ],
+      "source": {
+        "title": "AB Kuai.Dong (@_FORAB) · X",
+        "url": "https://x.com/_FORAB/status/2084462111300997150",
+        "author": null
+      },
+      "quotes": [
+        "随着公司估值到达 9650 亿美元，计划冲击上市后。 Claude 背后的 Anthropic 老板曾表达担忧，担心新人才加入公司是冲着钱来，而不是认同公司的使命",
+        "随着公司估值到达 9650 亿美元，计划冲击上市后。 Claude 背后的 Anthropic 老板曾表达担忧，担心新人才加入公司是冲着钱来，而不是认同公司的使命",
+        "担心新人才加入公司是冲着钱来，而不是认同公司的使命",
+        "担心新人才加入公司是冲着钱来，而不是认同公司的使命",
+        "担心新人才加入公司是冲着钱来，而不是认同公司的使命"
+      ]
+    },
+    {
+      "id": "minimax-h3-open-source-license-restrictions-1",
+      "createdAt": "2026-08-04T05:08:01.365Z",
+      "title": "MiniMax H3 的开源协议：地域限制与额外协议",
+      "thesis": "MiniMax H3 的开源协议不仅包含 Kimi K3 的 revenue 歧视条款，还禁止美国、欧盟、英国、韩国地区直接使用，需要额外协议。",
+      "keyTakeaway": "开源协议可能包含地域限制，使用前需仔细审查。",
+      "summary": "MiniMax H3 的开源协议包含地域限制，禁止美国、欧盟、英国、韩国直接使用，并需与 MiniMax 签额外协议。",
+      "concepts": [
+        "MiniMax H3",
+        "Kimi K3",
+        "revenue 歧视条款",
+        "开源协议"
+      ],
+      "source": {
+        "title": "yv (@yvbbrjdr) · X",
+        "url": "https://x.com/yvbbrjdr/status/2084337464668467567",
+        "author": null
+      },
+      "quotes": [
+        "MiniMax H3的“开源协议”真nb，不仅有Kimi K3的revenue歧视条款，还禁止了美国、欧盟、英国、韩国地区直接使用。。需要跟MiniMax签额外的协议才可以用。。",
+        "禁止了美国、欧盟、英国、韩国地区直接使用。。需要跟MiniMax签额外的协议才可以用。。",
+        "不仅有Kimi K3的revenue歧视条款，还禁止了美国、欧盟、英国、韩国地区直接使用",
+        "不仅有Kimi K3的revenue歧视条款，还禁止了美国、欧盟、英国、韩国地区直接使用",
+        "禁止了美国、欧盟、英国、韩国地区直接使用。。需要跟MiniMax签额外的协议才可以用。。"
+      ]
+    },
+    {
+      "id": "llm-global-landscape-2026-08-04-post-1",
+      "createdAt": "2026-08-04T05:13:15.483Z",
+      "title": "全球 LLM 版图：美国、中国、法国与韩国的模型竞赛",
+      "thesis": "全球 LLM 竞赛已形成多极格局，美国、中国、法国各有代表性模型，韩国势头也很猛，理解这一版图有助于把握技术生态的多样性。",
+      "keyTakeaway": "全球 LLM 竞赛已形成多极格局，美国、中国、法国各有代表模型，韩国势头也很猛。",
+      "summary": "该来源列举了全球主要国家的 LLM 代表模型，并指出韩国近期势头强劲。",
+      "concepts": [
+        "LLM",
+        "Claude",
+        "GPT",
+        "Gemini",
+        "Grok",
+        "Muse",
+        "DeepSeek",
+        "Kimi",
+        "GLM",
+        "Qwen",
+        "Seed",
+        "Mistral"
+      ],
+      "source": {
+        "title": "Gorden Sun (@Gorden_Sun) · X",
+        "url": "https://x.com/Gorden_Sun/status/2084475155913519199",
+        "author": null
+      },
+      "quotes": [
+        "世界各国的LLM，韩国最近的势头也很猛 美国模型：Claude（Anthropic）、GPT（OpenAI）、Gemini（Google）、Grok（SpaceX）、Muse（Meta）等； 中国：DeepSeek（DeepSeek）、Kimi（月之暗面）、GLM（智谱）、Qwen（千问）、Seed（字节）等； 法国：Mistral（Mistral），最大675B",
+        "法国：Mistral（Mistral），最大675B",
+        "美国模型：Claude（Anthropic）、GPT（OpenAI）、Gemini（Google）、Grok（SpaceX）、Muse（Meta）等； 中国：DeepSeek（DeepSeek）、Kimi（月之暗面）、GLM（智谱）、Qwen（千问）、Seed（字节）等",
+        "世界各国的LLM，韩国最近的势头也很猛",
+        "法国：Mistral（Mistral），最大675B"
+      ]
+    },
+    {
+      "id": "llm-global-landscape-2026-08-04-post-2",
+      "createdAt": "2026-08-04T05:13:15.483Z",
+      "title": "从 Claude 到 Mistral：LLM 命名的背后",
+      "thesis": "LLM 的命名往往反映其背后的公司或研究机构，理解命名规则有助于快速识别模型来源。",
+      "keyTakeaway": "LLM 的命名通常直接关联其背后的公司，记住公司就能快速定位模型。",
+      "summary": "该来源列出了各 LLM 与其所属公司的对应关系。",
+      "concepts": [
+        "Claude",
+        "GPT",
+        "Gemini",
+        "Grok",
+        "Muse",
+        "DeepSeek",
+        "Kimi",
+        "GLM",
+        "Qwen",
+        "Seed",
+        "Mistral"
+      ],
+      "source": {
+        "title": "Gorden Sun (@Gorden_Sun) · X",
+        "url": "https://x.com/Gorden_Sun/status/2084475155913519199",
+        "author": null
+      },
+      "quotes": [
+        "美国模型：Claude（Anthropic）、GPT（OpenAI）、Gemini（Google）、Grok（SpaceX）、Muse（Meta）等",
+        "中国：DeepSeek（DeepSeek）、Kimi（月之暗面）、GLM（智谱）、Qwen（千问）、Seed（字节）等",
+        "美国模型：Claude（Anthropic）、GPT（OpenAI）、Gemini（Google）、Grok（SpaceX）、Muse（Meta）等； 中国：DeepSeek（DeepSeek）、Kimi（月之暗面）、GLM（智谱）、Qwen（千问）、Seed（字节）等； 法国：Mistral（Mistral）",
+        "世界各国的LLM，韩国最近的势头也很猛",
+        "Gemini（Google）"
+      ]
+    },
+    {
+      "id": "llm-global-landscape-2026-08-04-post-3",
+      "createdAt": "2026-08-04T05:13:15.483Z",
+      "title": "韩国 LLM 的崛起：为什么值得关注？",
+      "thesis": "来源指出韩国最近的势头也很猛，意味着韩国正在成为 LLM 竞赛中不可忽视的力量。",
+      "keyTakeaway": "韩国 LLM 正在快速崛起，值得持续关注。",
+      "summary": "该来源强调韩国 LLM 近期势头强劲，但未提供具体模型名称。",
+      "concepts": [
+        "LLM"
+      ],
+      "source": {
+        "title": "Gorden Sun (@Gorden_Sun) · X",
+        "url": "https://x.com/Gorden_Sun/status/2084475155913519199",
+        "author": null
+      },
+      "quotes": [
+        "世界各国的LLM，韩国最近的势头也很猛",
+        "韩国最近的势头也很猛",
+        "世界各国的LLM，韩国最近的势头也很猛",
+        "韩国最近的势头也很猛",
+        "韩国最近的势头也很猛"
+      ]
+    },
+    {
+      "id": "llm-global-landscape-2026-08-04-post-4",
+      "createdAt": "2026-08-04T05:13:15.483Z",
+      "title": "675B 参数：Mistral 的规模意味着什么？",
+      "thesis": "Mistral 的最大规模达到 675B，这标志着法国在超大参数模型上的投入，也反映了全球 LLM 竞赛的规模竞争。",
+      "keyTakeaway": "Mistral 的最大规模达到 675B，是法国 LLM 竞赛的重要标志。",
+      "summary": "该来源提供了 Mistral 的最大参数规模为 675B。",
+      "concepts": [
+        "Mistral",
+        "675B"
+      ],
+      "source": {
+        "title": "Gorden Sun (@Gorden_Sun) · X",
+        "url": "https://x.com/Gorden_Sun/status/2084475155913519199",
+        "author": null
+      },
+      "quotes": [
+        "法国：Mistral（Mistral），最大675B",
+        "最大675B",
+        "最大675B",
+        "最大675B",
+        "最大675B"
+      ]
+    },
+    {
+      "id": "connection-note-b05f8ea8",
+      "createdAt": "2026-08-04T05:14:25.861Z",
+      "title": "连接播报",
+      "thesis": "你 29 天前学过的《RAG：让LLM拥有实时外部知识检索能力》和刚导入的《全球 LLM 版图：美国、中国、法国与韩国的模型竞赛》连上了:美国模型：Claude（Anthropic）、GPT（OpenAI）、Gemini（Google）、Grok（SpaceX）、Muse（Meta）等",
+      "keyTakeaway": "你 29 天前学过的《RAG：让LLM拥有实时外部知识检索能力》和刚导入的《全球 LLM 版图：美国、中国、法国与韩国的模型竞赛》连上了:美国模型：Claude（Anthropic）、GPT（OpenAI）、Gemini（Google）、Grok（SpaceX）、Muse（Meta）等",
+      "summary": "你 29 天前学过的《RAG：让LLM拥有实时外部知识检索能力》和刚导入的《全球 LLM 版图：美国、中国、法国与韩国的模型竞赛》连上了:美国模型：Claude（Anthropic）、GPT（OpenAI）、Gemini（Google）、Grok（SpaceX）、Muse（Meta）等",
+      "concepts": [
+        "LLM",
+        "Claude"
+      ],
+      "source": null,
+      "quotes": []
+    },
+    {
+      "id": "ai-homework-grading-china-001",
+      "createdAt": "2026-08-04T05:14:42.617Z",
+      "title": "AI 批改作业：从扫描到反馈的自动化闭环",
+      "thesis": "在中国学校里，人工智能通过扫描笔记本来批改作业、自动评分并打印反馈，形成完整的自动化闭环。",
+      "keyTakeaway": "AI 批改作业的核心是扫描、评分、反馈的自动化闭环，能显著提升效率。",
+      "summary": "该知识帖基于一条来源信息，介绍 AI 在中国学校中批改作业的流程：扫描笔记本、自动评分、打印反馈并突出显示错误。",
+      "concepts": [
+        "人工智能",
+        "扫描笔记本",
+        "自动评分",
+        "反馈"
+      ],
+      "source": {
+        "title": "Massimo (@Rainmaker1973) · X",
+        "url": "https://x.com/Rainmaker1973/status/2084259279087812653",
+        "author": null
+      },
+      "quotes": [
+        "在中国学校里，人工智能现在通过扫描笔记本来批改作业，自动评分任务，并打印出反馈，突出显示错误。",
+        "在中国学校里，人工智能现在通过扫描笔记本来批改作业，自动评分任务，并打印出反馈，突出显示错误。",
+        "在中国学校里，人工智能现在通过扫描笔记本来批改作业，自动评分任务，并打印出反馈，突出显示错误。",
+        "在中国学校里，人工智能现在通过扫描笔记本来批改作业，自动评分任务，并打印出反馈，突出显示错误。",
+        "在中国学校里，人工智能现在通过扫描笔记本来批改作业，自动评分任务，并打印出反馈，突出显示错误。"
+      ]
+    },
+    {
+      "id": "cursor-design-app-praise-maxktz-2026-08-04",
+      "createdAt": "2026-08-04T05:18:58.177Z",
+      "title": "Cursor 为何被称作“人类打造的最出色设计应用”",
+      "thesis": "Cursor 之所以被赞为“人类打造的最出色设计应用”，是因为它把 AI 能力融入设计流程，让开发者体验到“下一个级别”的创作自由。",
+      "keyTakeaway": "Cursor 被开发者视为“人类打造的最出色设计应用”，其“下一个级别”的体验源于对设计流程的深度重构。",
+      "summary": "Max Katz 在 X 上发帖，盛赞 Cursor 为“人类打造的最出色设计应用”，并称已说了 3 次，认为它“简直是下一个级别”。该帖发布于 2026-08-03，反映了开发者对 Cursor 设计的高度认可。",
+      "concepts": [
+        "Cursor",
+        "设计应用"
+      ],
+      "source": {
+        "title": "Max Katz (@maxktz) · X",
+        "url": "https://x.com/maxktz/status/2084332641105437149",
+        "author": null
+      },
+      "quotes": [
+        "Cursor 是人类打造的最出色设计应用 我已经说了 3 次，但就是停不下来，它简直是下一个级别",
+        "Cursor 是人类打造的最出色设计应用 我已经说了 3 次，但就是停不下来，它简直是下一个级别",
+        "Cursor 是人类打造的最出色设计应用 我已经说了 3 次，但就是停不下来，它简直是下一个级别",
+        "Cursor 是人类打造的最出色设计应用 我已经说了 3 次，但就是停不下来，它简直是下一个级别",
+        "Cursor 是人类打造的最出色设计应用 我已经说了 3 次，但就是停不下来，它简直是下一个级别"
+      ]
+    },
+    {
+      "id": "cloud-fluid-pile-up-2084454536262091117-post-1",
+      "createdAt": "2026-08-04T05:36:18.519Z",
+      "title": "云朵更流动、能堆叠：一次游戏开发中的视觉迭代",
+      "thesis": "视觉迭代是渐进逼近目标的过程，每次改动都让效果更接近理想，但往往需要多轮调整。",
+      "keyTakeaway": "视觉效果的改进是渐进式的，每次调整都更接近目标，但“还没完全到位”是常态。",
+      "summary": "独立游戏开发者 Christoph Wallura 在 X 上发布状态，提到云朵效果变得更流动且能堆叠，但仍未完全满意。这反映了视觉开发中持续迭代、逐步逼近目标的过程。",
+      "concepts": [
+        "Clouds",
+        "fluid",
+        "pile up"
+      ],
+      "source": {
+        "title": "Christoph Wallura - Solo Game Dev (@chris_wallura) · X",
+        "url": "https://x.com/chris_wallura/status/2084454536262091117",
+        "author": null
+      },
+      "quotes": [
+        "Clouds are now more fluid and can pile up. Still not quite there yet.",
+        "Clouds are now more fluid and can pile up. Still not quite there yet.",
+        "Clouds are now more fluid and can pile up. Still not quite there yet.",
+        "Clouds are now more fluid and can pile up. Still not quite there yet.",
+        "Clouds are now more fluid and can pile up. Still not quite there yet."
+      ]
+    }
+  ]
+}
