@@ -39,13 +39,15 @@
    * - 单次会话最多 sessionMax 张(分配表条目数即会话计数);
    * - 当前可见窗口里,任意两张注入卡至少隔 spacing 条推文;
    * - 第一张卡不早于第 firstIndex 个锚点,避免顶着信息流开头;
+   * - 新分配不早于第 minIndex 个锚点(调用方传视口下缘的位置,额度不浪费在
+   *   已经滚过、用户不会再看到的位置);
    * - 卡按 cardIds 顺序用,不重复。
    *
    * @param {{ anchors: string[], assignments: Record<string, string>, cardIds: string[],
-   *           spacing?: number, sessionMax?: number, firstIndex?: number }} input
+   *           spacing?: number, sessionMax?: number, firstIndex?: number, minIndex?: number }} input
    * @returns {Record<string, string>}
    */
-  function planInjections({ anchors, assignments, cardIds, spacing = 8, sessionMax = 3, firstIndex = 3 }) {
+  function planInjections({ anchors, assignments, cardIds, spacing = 8, sessionMax = 3, firstIndex = 3, minIndex = 0 }) {
     const next = { ...assignments };
     const assignedCardIds = new Set(Object.values(next));
     const pendingCardIds = cardIds.filter((cardId) => !assignedCardIds.has(cardId));
@@ -69,6 +71,10 @@
 
         // 只有全会话第一张卡才受 firstIndex 约束;之后靠 spacing 控距。
         if (Object.keys(next).length === 0 && index < firstIndex) {
+          continue;
+        }
+
+        if (index < minIndex) {
           continue;
         }
 
@@ -178,6 +184,96 @@
     throw new Error(`Unknown inject signal kind: ${kind}`);
   }
 
+  /**
+   * 按页面背景色判定 X 当前主题。X 桌面版三种主题的底色:
+   * 亮色 rgb(255,255,255)、暗蓝(Dim)rgb(21,32,43)、纯黑 rgb(0,0,0)。
+   * 用亮度区分亮色,用「蓝分量明显高于红分量」区分暗蓝与纯黑;
+   * 解析不了的输入退回纯黑(现有样式的底色,最保守)。
+   *
+   * @param {string} backgroundColor getComputedStyle(document.body).backgroundColor
+   * @returns {"light" | "dim" | "dark"}
+   */
+  function classifyXTheme(backgroundColor) {
+    const match = /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/.exec(String(backgroundColor ?? ""));
+
+    if (!match) {
+      return "dark";
+    }
+
+    const red = Number(match[1]);
+    const green = Number(match[2]);
+    const blue = Number(match[3]);
+    const luminance = 0.299 * red + 0.587 * green + 0.114 * blue;
+
+    if (luminance > 128) {
+      return "light";
+    }
+
+    return blue - red >= 10 ? "dim" : "dark";
+  }
+
+  /**
+   * 「知识回来找你」的资格过滤:复习到期的卡永远可注入;没到期的卡必须存了
+   * 至少 minAgeMs(默认 24 小时)才回来——防止当场剪藏的新卡几十秒后就以
+   * 「今天存的」身份复读给用户。savedAt 解析不了按老卡放行(宁多勿漏)。
+   *
+   * @param {Array<{ savedAt?: string, reviewDueAt?: string }>} cards
+   * @param {string} nowIso
+   * @param {number} [minAgeMs]
+   */
+  function filterReturnableCards(cards, nowIso, minAgeMs = 24 * 60 * 60 * 1000) {
+    const now = Date.parse(nowIso);
+
+    return cards.filter((card) => {
+      if (card.reviewDueAt) {
+        return true;
+      }
+
+      const savedAt = Date.parse(card.savedAt ?? "");
+
+      if (!Number.isFinite(savedAt) || !Number.isFinite(now)) {
+        return true;
+      }
+
+      return now - savedAt >= minAgeMs;
+    });
+  }
+
+  /**
+   * 复习是否到期(卡面「 · 该复习了」小字的显示条件)。
+   *
+   * @param {string | undefined} reviewDueAtIso
+   * @param {string} nowIso
+   */
+  function isReviewDue(reviewDueAtIso, nowIso) {
+    const due = Date.parse(reviewDueAtIso ?? "");
+    const now = Date.parse(nowIso);
+
+    return Number.isFinite(due) && Number.isFinite(now) && due <= now;
+  }
+
+  /**
+   * 同一条推文被多人转推时,时间线上会出现多个格子指向同一锚点;逐格处理会
+   * 让卡在格子间来回搬家(每轮扫描闪烁一次)。按视觉顺序只保留每个锚点
+   * 最靠上的条目。
+   *
+   * @template {{ anchor: string }} T
+   * @param {T[]} entries 已按几何位置(top)升序排列
+   * @returns {T[]}
+   */
+  function uniqueByAnchor(entries) {
+    const seen = new Set();
+
+    return entries.filter((entry) => {
+      if (seen.has(entry.anchor)) {
+        return false;
+      }
+
+      seen.add(entry.anchor);
+      return true;
+    });
+  }
+
   /** 「N 天前存的」标签,今天/昨天单独说。输入非法时退回「之前存的」。 */
   function formatSavedAgo(savedAtIso, nowIso) {
     const savedAt = Date.parse(savedAtIso);
@@ -210,7 +306,11 @@
     currentDwellMs,
     dwellReportDue,
     buildInjectSignal,
-    formatSavedAgo
+    formatSavedAgo,
+    classifyXTheme,
+    filterReturnableCards,
+    isReviewDue,
+    uniqueByAnchor
   };
 
   if (typeof module !== "undefined" && module.exports) {

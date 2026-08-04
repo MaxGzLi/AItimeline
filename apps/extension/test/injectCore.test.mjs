@@ -233,3 +233,124 @@ describe("formatSavedAgo", () => {
     expect(formatSavedAgo("not-a-date", "2026-08-04T12:00:00.000Z")).toBe("之前存的");
   });
 });
+
+const { classifyXTheme, filterReturnableCards, isReviewDue, uniqueByAnchor } = core;
+
+describe("planInjections minIndex", () => {
+  it("new assignments never land above minIndex (viewport bottom)", () => {
+    const next = planInjections({
+      anchors: anchorList(17),
+      assignments: {},
+      cardIds: ["card-a"],
+      spacing: 8,
+      sessionMax: 3,
+      firstIndex: 3,
+      minIndex: 6
+    });
+
+    expect(next).toEqual({ "/user6/status/6": "card-a" });
+  });
+
+  it("existing assignments above minIndex survive untouched", () => {
+    const existing = { "/user2/status/2": "card-a" };
+    const next = planInjections({
+      anchors: anchorList(17),
+      assignments: existing,
+      cardIds: ["card-a", "card-b"],
+      spacing: 8,
+      sessionMax: 3,
+      firstIndex: 3,
+      minIndex: 9
+    });
+
+    expect(next["/user2/status/2"]).toBe("card-a");
+    expect(next["/user10/status/10"]).toBe("card-b");
+  });
+
+  it("minIndex beyond the anchor list assigns nothing new", () => {
+    const next = planInjections({
+      anchors: anchorList(5),
+      assignments: {},
+      cardIds: ["card-a"],
+      minIndex: 5
+    });
+
+    expect(next).toEqual({});
+  });
+});
+
+describe("classifyXTheme", () => {
+  it("maps the three X desktop themes by body background color", () => {
+    expect(classifyXTheme("rgb(255, 255, 255)")).toBe("light");
+    expect(classifyXTheme("rgb(21, 32, 43)")).toBe("dim");
+    expect(classifyXTheme("rgb(0, 0, 0)")).toBe("dark");
+  });
+
+  it("tolerates rgba and falls back to dark on unparsable input", () => {
+    expect(classifyXTheme("rgba(255, 255, 255, 1)")).toBe("light");
+    expect(classifyXTheme("transparent")).toBe("dark");
+    expect(classifyXTheme(undefined)).toBe("dark");
+  });
+});
+
+describe("filterReturnableCards", () => {
+  const now = "2026-08-04T12:00:00.000Z";
+
+  it("keeps review-due cards regardless of save age", () => {
+    const cards = [{ savedAt: "2026-08-04T11:00:00.000Z", reviewDueAt: "2026-08-04T10:00:00.000Z" }];
+
+    expect(filterReturnableCards(cards, now)).toHaveLength(1);
+  });
+
+  it("drops cards saved within 24h that are not review-due", () => {
+    const cards = [
+      { savedAt: "2026-08-04T11:30:00.000Z" },
+      { savedAt: "2026-08-03T11:00:00.000Z" }
+    ];
+
+    expect(filterReturnableCards(cards, now)).toEqual([{ savedAt: "2026-08-03T11:00:00.000Z" }]);
+  });
+
+  it("keeps cards with unparsable savedAt (conservative)", () => {
+    expect(filterReturnableCards([{ savedAt: "not-a-date" }], now)).toHaveLength(1);
+    expect(filterReturnableCards([{}], now)).toHaveLength(1);
+  });
+
+  it("boundary: exactly 24h old passes", () => {
+    expect(filterReturnableCards([{ savedAt: "2026-08-03T12:00:00.000Z" }], now)).toHaveLength(1);
+  });
+});
+
+describe("isReviewDue", () => {
+  const now = "2026-08-04T12:00:00.000Z";
+
+  it("true when due time reached, false otherwise", () => {
+    expect(isReviewDue("2026-08-04T12:00:00.000Z", now)).toBe(true);
+    expect(isReviewDue("2026-08-04T09:00:00.000Z", now)).toBe(true);
+    expect(isReviewDue("2026-08-05T00:00:00.000Z", now)).toBe(false);
+  });
+
+  it("false for missing or invalid input", () => {
+    expect(isReviewDue(undefined, now)).toBe(false);
+    expect(isReviewDue("nope", now)).toBe(false);
+  });
+});
+
+describe("uniqueByAnchor", () => {
+  it("keeps only the topmost cell per anchor (repost duplicates)", () => {
+    const entries = [
+      { anchor: "/a/status/1", top: 100 },
+      { anchor: "/b/status/2", top: 200 },
+      { anchor: "/a/status/1", top: 300 }
+    ];
+
+    expect(uniqueByAnchor(entries)).toEqual([
+      { anchor: "/a/status/1", top: 100 },
+      { anchor: "/b/status/2", top: 200 }
+    ]);
+  });
+
+  it("empty input stays empty", () => {
+    expect(uniqueByAnchor([])).toEqual([]);
+  });
+});

@@ -22,6 +22,13 @@
   const CARD_ATTR = "data-aitl-inject-card";
   const SPACING = 8;
   const SESSION_MAX = 3;
+  const FETCH_RETRY_INTERVAL_MS = 60000;
+
+  /** 只在主时间线注入。通知页/搜索/书签/个人主页同样有 cellInnerDiv + status
+   *  锚点,插进去既突兀又破「像 X 原生帖」的伪装。 */
+  function onHomeTimeline() {
+    return location.pathname === "/home" || location.pathname === "/";
+  }
 
   /** @type {Array<{id: string, title: string, summary: string, sourceTitle: string, sourceUrl: string, savedAt: string, topicId: string, conceptIds: string[]}>} */
   let cards = [];
@@ -70,6 +77,8 @@
 
     node.setAttribute(CARD_ATTR, card.id);
     node.className = "aitl-inject";
+    // 配色跟随 X 当前主题(亮/暗蓝/纯黑),按 body 背景色判定。
+    node.dataset.aitlTheme = core.classifyXTheme(getComputedStyle(document.body).backgroundColor);
 
     const avatar = document.createElement("div");
 
@@ -90,9 +99,11 @@
     name.textContent = "你的知识库";
 
     const meta = document.createElement("span");
+    const nowIso = new Date().toISOString();
+    const dueSuffix = core.isReviewDue(card.reviewDueAt, nowIso) ? " · 该复习了" : "";
 
     meta.className = "aitl-inject-meta";
-    meta.textContent = ` · ${core.formatSavedAgo(card.savedAt, new Date().toISOString())}`;
+    meta.textContent = ` · ${core.formatSavedAgo(card.savedAt, nowIso)}${dueSuffix}`;
 
     header.append(name, meta);
 
@@ -243,7 +254,7 @@
   }
 
   function scan() {
-    if (cards.length === 0) {
+    if (cards.length === 0 || !onHomeTimeline()) {
       return;
     }
 
@@ -254,7 +265,7 @@
     }
 
     // 虚拟列表的 DOM 顺序不保证等于视觉顺序,按几何位置排。
-    const entries = [];
+    let entries = [];
 
     for (const cell of cells) {
       const anchor = extractAnchor(cell);
@@ -265,13 +276,26 @@
     }
 
     entries.sort((a, b) => a.top - b.top);
+    // 热推被多人转推会出现多个格子同锚点,只认最靠上的那个,防卡片来回搬家。
+    entries = core.uniqueByAnchor(entries);
+
+    // 新分配只落在视口下缘以下:滚过的位置用户不会再看到,别浪费会话额度。
+    let minIndex = entries.length;
+
+    for (let index = 0; index < entries.length; index += 1) {
+      if (entries[index].top > window.innerHeight) {
+        minIndex = index;
+        break;
+      }
+    }
 
     assignments = core.planInjections({
       anchors: entries.map((entry) => entry.anchor),
       assignments,
       cardIds: cards.map((card) => card.id),
       spacing: SPACING,
-      sessionMax: SESSION_MAX
+      sessionMax: SESSION_MAX,
+      minIndex
     });
 
     for (const entry of entries) {
@@ -317,19 +341,67 @@
     scan();
   }
 
-  chrome.runtime.sendMessage({ type: "AITL_FETCH_INJECT_CARDS" }, (response) => {
-    if (chrome.runtime.lastError || !response || !response.ok || !Array.isArray(response.cards)) {
-      return;
-    }
+  // ---------- 拉卡与重试 ----------
+  // 「先开 x.com、后起本机 API」是最常见的顺序:一次拉不到就每 60 秒重试,
+  // 切回标签页时也补拉一次,拿到卡即停。拉不到卡绝不注入(不造假卡)。
 
-    cards = response.cards.filter((card) => card && card.id && card.title);
+  let started = false;
+  let retryTimer = null;
 
-    for (const card of cards) {
-      cardById.set(card.id, card);
+  function stopRetrying() {
+    if (retryTimer !== null) {
+      window.clearInterval(retryTimer);
+      retryTimer = null;
     }
+    document.removeEventListener("visibilitychange", onVisibilityRetry);
+  }
 
-    if (cards.length > 0) {
-      start();
+  function onVisibilityRetry() {
+    if (!document.hidden && !started) {
+      fetchCards();
     }
-  });
+  }
+
+  function fetchCards() {
+    try {
+      chrome.runtime.sendMessage({ type: "AITL_FETCH_INJECT_CARDS" }, (response) => {
+        if (chrome.runtime.lastError || !response || !response.ok || !Array.isArray(response.cards)) {
+          return;
+        }
+
+        const usable = core.filterReturnableCards(
+          response.cards.filter((card) => card && card.id && card.title),
+          new Date().toISOString()
+        );
+
+        // 扩展图标 badge 显示可注入卡数,上台/使用前一眼确认注入就位。
+        sendMessage({ type: "AITL_SET_BADGE", count: usable.length });
+
+        if (usable.length === 0 || started) {
+          return;
+        }
+
+        started = true;
+        stopRetrying();
+        cards = usable;
+
+        for (const card of cards) {
+          cardById.set(card.id, card);
+        }
+
+        start();
+      });
+    } catch {
+      // 扩展上下文失效(重载/更新)时静默放弃,刷新页面后恢复。
+      stopRetrying();
+    }
+  }
+
+  retryTimer = window.setInterval(() => {
+    if (!started) {
+      fetchCards();
+    }
+  }, FETCH_RETRY_INTERVAL_MS);
+  document.addEventListener("visibilitychange", onVisibilityRetry);
+  fetchCards();
 })();
