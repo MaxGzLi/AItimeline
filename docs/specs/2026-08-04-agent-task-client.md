@@ -85,9 +85,23 @@ Codex 客户端样式:**左边任务列表,右边任务详情里是会话流**�
 
 `conversationAgent.ts:190` 用问题原文**字面匹配**概念名判断"库里有没有",而概念被钉死成英文。中文问 "MoE 是什么" 匹配不到 `Mixture-of-Experts`,直接掉进"库里没有,要不要我先去找来源"。快照里已有 `conceptAliases` 集合,本期接上它做匹配扩展(不改概念本体)。
 
-### 卡顿
+### 卡顿(已不成立,2026-08-04 复测)
 
-`POST /api/agent/preferences` 实测 ~17 秒,因为一次要把 19MB 快照整写三遍(`App.tsx:2369` 注释)。对话变频繁后这是首要体感问题,派活链路上先合并成一次写。
+原以为 `POST /api/agent/preferences` 要 ~17 秒(一次把 19MB 快照整写三遍,`App.tsx:2369` 注释)。**#162 的快照读路径缓存已经把它解决了**:拿真数据(19MB 快照 / 596 条队列记录)复测,调喜好那条 1.30 秒、提问那条 1.58 秒,任务列表 0.30 秒。不用再去合并写入。
+
+真正剩下的延迟在别处:frontier 分区的提问会同步等一次真实网络搜索,见下面的待定策略。
+
+## 待定策略:frontier 提问会静默真发搜索
+
+概念匹配修好之后,中文提问从 dark 挪进了 frontier,而这两个区对「要不要去搜来源」的处理是反的。`handleAgentAsk` 只在这一轮带 `confirm_discovery` 动作时才不搜:
+
+| 分区 | 动作 | 会不会真搜 |
+| --- | --- | --- |
+| dark | `confirm_discovery, discover_sources` | 不搜(有确认门) |
+| frontier | `start_series, discover_sources` | **搜**(没有门) |
+| learning | `continue_deeper, reframe_simpler` | 不搜(没有 discover 动作) |
+
+搜索 key 配着的时候这条路是活的:问一句中文会花掉搜索额度、写候选源,回话还要等搜索回来。不是本期引入的(英文提问一直如此),但门设反了——知道得少反而要确认。等用户定:frontier 的库内问答不自动搜(回话里本来就有「为这个问题找来源」按钮 + `research.mjs:725` 的按需端点),还是维持现状。
 
 ## 验收
 
