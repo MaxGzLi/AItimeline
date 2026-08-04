@@ -7,7 +7,8 @@ export default defineConfig({
     },
     include: [
       "packages/core/src/**/*.test.ts",
-      "apps/api/test/**/*.test.mjs"
+      "apps/api/test/**/*.test.mjs",
+      "apps/web/src/lib/**/*.test.ts"
     ]
   }
 });

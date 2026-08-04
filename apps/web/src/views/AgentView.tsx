@@ -6,39 +6,10 @@ import { SourceCandidatePanel } from "../components/SourceCandidatePanel";
 import { SourceImportPanel } from "../components/SourceImportPanel";
 import { formatShortTime } from "../lib/format";
 import { t } from "../lib/i18n";
+import { groupImportsByTitle } from "../lib/ledger";
 import type { ApiStatus, SourceCandidateRecord, SubscriptionBacklogView } from "../lib/types";
 
 const IMPORT_GROUP_LIMIT = 20;
-
-interface ImportGroup {
-  latest: SourceImport;
-  count: number;
-}
-
-// The import history repeats the same source title dozens of times (follow-up
-// batches, re-imports). Collapse by title so one line stands for one source.
-function groupImportsByTitle(imports: SourceImport[]): ImportGroup[] {
-  const groups = new Map<string, ImportGroup>();
-
-  for (const item of imports) {
-    const group = groups.get(item.source.title);
-
-    if (!group) {
-      groups.set(item.source.title, { latest: item, count: 1 });
-      continue;
-    }
-
-    group.count += 1;
-
-    if (Date.parse(item.createdAt) > Date.parse(group.latest.createdAt)) {
-      group.latest = item;
-    }
-  }
-
-  return Array.from(groups.values()).sort(
-    (left, right) => Date.parse(right.latest.createdAt) - Date.parse(left.latest.createdAt)
-  );
-}
 
 function backlogStatusKey(status: string): string {
   if (status === "pending" || status === "queued" || status === "imported" || status === "skipped") {
