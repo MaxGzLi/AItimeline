@@ -56,6 +56,26 @@ function makeClient(answer: string): ModelClient {
 }
 
 describe("askGrounded", () => {
+  // 真机上抓到的:DeepSeek 偶尔回一个没有正文的响应,异常一路抛到接口,
+  // 用户问一句话换来一个报错。退回确定性答案,而且它只由登记过的原文块拼成。
+  it("falls back to the deterministic answer when the model call throws", async () => {
+    const client: ModelClient = {
+      complete: async () => {
+        throw new Error("model response did not include assistant message content.");
+      }
+    };
+    const result = await askGrounded(
+      { post: makePost(), registry: makeRegistry(), question: "混合专家是怎么省算力的?" },
+      { client, contentLanguage: "zh" }
+    );
+
+    expect(result.runnerKind).toBe("deterministic");
+    expect(result.grounded).toBe(true);
+    expect(result.citations).toHaveLength(1);
+    expect(result.citations[0].quote).toBe(evidence);
+    expect(result.answer).toContain(evidence);
+  });
+
   // 答一个问题天生是转述,不是照抄。词序硬门只认近乎摘抄的句子,于是每个真答案
   // 都被判成没依据,界面永远只会回「库内暂无足够依据」。
   it("keeps an answer that restates the excerpt in the reader's own words", async () => {

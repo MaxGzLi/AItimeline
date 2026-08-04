@@ -48,7 +48,15 @@ export async function askGrounded(
     return buildDeterministicAnswer(input, excerpts, contentLanguage);
   }
 
-  return buildModelAnswer(input, excerpts, options.client, options.temperature ?? 0.2, contentLanguage);
+  try {
+    return await buildModelAnswer(input, excerpts, options.client, options.temperature ?? 0.2, contentLanguage);
+  } catch {
+    // 供应商偶尔会回一个没有正文的响应,或者干脆超时。之前这里什么都不接,
+    // 异常一路抛到接口上,用户问一句话换来一个报错。概念简报早就是这么兜的:
+    // 模型不可用就退回确定性产物。这里退回的答案同样只由已登记的原文块拼成,
+    // 不引入模型知识,所以接地这件事没有放松。
+    return buildDeterministicAnswer(input, excerpts, contentLanguage);
+  }
 }
 
 function resolveExcerpts(post: KnowledgePost, registry: SourceRegistry, maxChunks: number): GroundedExcerpt[] {
