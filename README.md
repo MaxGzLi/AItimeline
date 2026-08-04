@@ -64,7 +64,7 @@ The API listens on `http://127.0.0.1:8787` by default and stores local JSON snap
 npm run dev -w @aitimeline/desktop
 ```
 
-如果同一 worktree 的 `npm run dev:api` 正在运行，它会持有相同数据文件的写锁；先退出其中一个，再启动另一个。桌面 API 优先监听 `127.0.0.1:8791`，端口已占用时会自动使用随机端口，Web 页面通过 preload 获得实际地址。
+如果同一 worktree 的 `npm run dev:api` 正在运行，它会持有相同数据文件的写锁；先退出其中一个，再启动另一个。桌面 API 依次尝试 `127.0.0.1:8787` 与 `127.0.0.1:8788`，两个都被占用时才退到随机端口；浏览器插件只能访问 manifest 里声明的这两个端口，退到随机端口后插件将无法连上。Web 页面通过 preload 获得实际地址。
 
 生成未签名的 macOS Apple Silicon 安装包：
 

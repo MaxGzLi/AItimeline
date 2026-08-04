@@ -169,20 +169,27 @@ export function hasErrorCode(error, code) {
 }
 
 /**
- * Listen on the preferred port and retry on an operating-system-assigned port
- * only when that preferred port is already occupied.
+ * Listen on the first free preferred port, falling back to an
+ * operating-system-assigned port only when every preferred port is occupied.
+ *
+ * The browser extension can only reach ports it declares in `host_permissions`,
+ * so the preferred list has to stay short and stable — an OS-assigned port is
+ * reachable by the desktop window but not by the extension.
  *
  * @param {import("node:http").Server} server
- * @param {number} preferredPort
+ * @param {number | readonly number[]} preferredPorts
  * @param {string} host
  */
-export async function listenWithPortFallback(server, preferredPort, host) {
-  try {
-    return await listenOnce(server, preferredPort, host);
-  } catch (error) {
-    if (!hasErrorCode(error, "EADDRINUSE")) throw error;
-    return listenOnce(server, 0, host);
+export async function listenWithPortFallback(server, preferredPorts, host) {
+  const candidates = typeof preferredPorts === "number" ? [preferredPorts] : preferredPorts;
+  for (const port of candidates) {
+    try {
+      return await listenOnce(server, port, host);
+    } catch (error) {
+      if (!hasErrorCode(error, "EADDRINUSE")) throw error;
+    }
   }
+  return listenOnce(server, 0, host);
 }
 
 /**

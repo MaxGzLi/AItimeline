@@ -24,7 +24,10 @@ import {
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(currentDir, "../../..");
-const defaultDesktopPort = 8791;
+// The browser extension declares these ports in host_permissions and probes them
+// in order, so the desktop app has to claim the same ones — an OS-assigned
+// fallback port keeps the window working but leaves the extension unable to reach it.
+const desktopPortCandidates = [8787, 8788];
 const bindingHost = "127.0.0.1";
 const localStorageImportName = "import-localstorage.json";
 const localStorageDoneName = "import-localstorage.done";
@@ -140,7 +143,7 @@ async function startApplication() {
   apiServer = server;
 
   try {
-    const address = await listenWithPortFallback(server, defaultDesktopPort, bindingHost);
+    const address = await listenWithPortFallback(server, desktopPortCandidates, bindingHost);
     apiOrigin = `http://${bindingHost}:${address.port}`;
   } catch (error) {
     if (apiServer === server) apiServer = null;

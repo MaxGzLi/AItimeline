@@ -140,6 +140,47 @@ describe("listenWithPortFallback", () => {
       await Promise.all([closeIfListening(blocker), closeIfListening(candidate)]);
     }
   });
+
+  test("falls through to the next declared port before giving up on a random one", async () => {
+    const blocker = createServer();
+    const spare = createServer();
+    const candidate = createServer();
+
+    try {
+      const occupied = await listenWithPortFallback(blocker, 0, "127.0.0.1");
+      const free = await listenWithPortFallback(spare, 0, "127.0.0.1");
+      await closeIfListening(spare);
+
+      const candidateAddress = await listenWithPortFallback(candidate, [occupied.port, free.port], "127.0.0.1");
+
+      // The extension can only reach ports it declares, so an occupied first
+      // choice has to land on the second declared one, not on a random port.
+      expect(candidateAddress.port).toBe(free.port);
+    } finally {
+      await Promise.all([closeIfListening(blocker), closeIfListening(spare), closeIfListening(candidate)]);
+    }
+  });
+
+  test("uses a random port only when every declared port is occupied", async () => {
+    const firstBlocker = createServer();
+    const secondBlocker = createServer();
+    const candidate = createServer();
+
+    try {
+      const first = await listenWithPortFallback(firstBlocker, 0, "127.0.0.1");
+      const second = await listenWithPortFallback(secondBlocker, 0, "127.0.0.1");
+      const candidateAddress = await listenWithPortFallback(candidate, [first.port, second.port], "127.0.0.1");
+
+      expect(candidateAddress.port).not.toBe(first.port);
+      expect(candidateAddress.port).not.toBe(second.port);
+    } finally {
+      await Promise.all([
+        closeIfListening(firstBlocker),
+        closeIfListening(secondBlocker),
+        closeIfListening(candidate)
+      ]);
+    }
+  });
 });
 
 /** @param {import("node:http").Server} server */
