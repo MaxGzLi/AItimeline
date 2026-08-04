@@ -4,6 +4,29 @@
 
 const API_BASE = "http://127.0.0.1:8787";
 
+// After a successful save, nudge the curation worker so the clip becomes a
+// card in seconds instead of waiting for the next worker poll. Fire-and-forget:
+// the worker picks the job up on its own schedule anyway, so a failed nudge
+// must never surface as a save error. Throttled so clipping several tweets in
+// a row triggers at most one run per window (the API also serializes runs).
+const CURATION_NUDGE_INTERVAL_MS = 5000;
+let lastCurationNudgeAt = 0;
+
+function nudgeCurationRun() {
+  const now = Date.now();
+
+  if (now - lastCurationNudgeAt < CURATION_NUDGE_INTERVAL_MS) {
+    return;
+  }
+
+  lastCurationNudgeAt = now;
+  fetch(`${API_BASE}/api/curation/run`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({})
+  }).catch(() => {});
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message || message.type !== "AITL_SAVE_TWEET") {
     return undefined;
@@ -36,6 +59,8 @@ async function saveTweet(tweet) {
   if (!response.ok) {
     throw new Error(payload && payload.error ? payload.error : `AITimeline API responded ${response.status}.`);
   }
+
+  nudgeCurationRun();
 
   return { ok: true, status: payload.status, alreadyKnown: Boolean(payload.alreadyKnown) };
 }

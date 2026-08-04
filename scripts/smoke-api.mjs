@@ -3939,18 +3939,19 @@ try {
   // must become a card with zero fetches (x.com is login-walled, so the capture
   // is the only copy), the tweet URL must be registered as a citable source,
   // and pending browser captures must drain on a later run like agent captures.
+  // The body is a realistic ~280-character tweet with no topic attached — the
+  // payload the extension actually sends. Text this short fails the source
+  // quality gate on every other lane (see backgroundCurationQueue.test.ts), so
+  // importing it proves the browser_share exemption: the user's explicit save
+  // is the quality signal.
   const clipDataPath = join(tempDir, "browser-clip.json");
   const clipCurationPath = join(tempDir, "browser-clip-curation.json");
   const clipTweetUrl = "https://x.com/karpathy/status/1900000000000000001";
   const clipSecondTweetUrl = "https://x.com/karpathy/status/1900000000000000002";
   const clipTweetText = [
-    "Speculative decoding is the most underrated inference trick right now. A small draft model proposes 4-8 tokens,",
-    "then the large model verifies the whole draft in a single forward pass. Accepted tokens are free; rejected ones",
-    "fall back to the large model's own sample, so the output distribution stays exactly identical to vanilla decoding.",
-    "In practice that means 2-3x throughput on the same hardware with no quality loss. The mechanism only works because",
-    "verification is parallel while generation is serial: checking 8 tokens costs about as much as generating 1.",
-    "The draft model does not need to be good, it needs to be aligned with the target model's easy tokens, which is why",
-    "a 100x smaller distilled model still gets 70-80% of its drafts accepted on natural text."
+    "hot take after a month of daily agent use: the bottleneck is not the model, it is what you feed it.",
+    "give the agent the three files that matter and it one-shots the change;",
+    "dump the whole repo in and it drowns. curation is the real skill now."
   ].join(" ");
   const clipFetch = async (input) => {
     throw new Error(`Browser clip smoke must not fetch anything, but requested: ${getFetchUrl(input)}`);
@@ -3977,7 +3978,6 @@ try {
         author: "Andrej Karpathy",
         publishedAt: "2026-08-01T09:00:00.000Z",
         intakeKind: "browser_share",
-        topic: "Speculative Decoding",
         reason: "Saved from X via the AITimeline extension."
       }
     });
@@ -3996,7 +3996,6 @@ try {
         url: clipSecondTweetUrl,
         capturedText: clipTweetText,
         intakeKind: "browser_share",
-        topic: "Speculative Decoding",
         reason: "Saved from X via the AITimeline extension."
       }
     });
