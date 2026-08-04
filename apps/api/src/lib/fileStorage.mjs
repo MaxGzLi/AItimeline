@@ -10,6 +10,7 @@ import {
   openSync,
   readFileSync,
   renameSync,
+  statSync,
   unlinkSync,
   writeSync
 } from "node:fs";
@@ -34,12 +35,37 @@ export function createFileStorageAdapter(filePath, { ownerId, backupCount = 3 })
   };
   let closed = false;
   let counter = 0;
+  // 读缓存:大文件(快照几十 MB)按 stat(ino+mtime+size)判断未变化就复用上次
+  // 读到的内容,避免每个请求整读整file;revision 惰性求值,免去只为取 revision
+  // 的整篇 JSON.parse。写锁保证本进程是唯一写者,外部手改文件会改变 stat,
+  // 缓存自动失效。
+  /** @type {{ ino: number, mtimeMs: number, size: number, content: string, revision: number | undefined } | null} */
+  let cache = null;
+  const statTarget = () => {
+    try {
+      return statSync(targetPath);
+    } catch (error) {
+      if (error && /** @type {NodeJS.ErrnoException} */ (error).code === "ENOENT") return null;
+      throw error;
+    }
+  };
+  const cacheMatches = (stat) =>
+    cache !== null && stat !== null && cache.ino === stat.ino && cache.mtimeMs === stat.mtimeMs && cache.size === stat.size;
   mkdirSync(dirname(targetPath), { recursive: true });
   acquireWriterLock(lockPath, lockOwner);
 
   const adapter = {
     read() {
-      return existsSync(targetPath) ? readFileSync(targetPath, "utf8") : "";
+      // 先 stat 后读:两步之间文件被外部改写只会导致下次多读一遍,不会读到旧值。
+      const stat = statTarget();
+      if (!stat) {
+        cache = null;
+        return "";
+      }
+      if (cacheMatches(stat)) return cache.content;
+      const content = readFileSync(targetPath, "utf8");
+      cache = { ino: stat.ino, mtimeMs: stat.mtimeMs, size: stat.size, content, revision: undefined };
+      return content;
     },
     compareAndSwap(expectedRevision, serialized) {
       if (closed) throw new Error(`Storage adapter is closed: ${targetPath}`);
@@ -47,11 +73,32 @@ export function createFileStorageAdapter(filePath, { ownerId, backupCount = 3 })
       try {
         writeAndSyncFile(tempPath, `${serialized}\n`);
         const current = adapter.read();
-        const actualRevision = readSerializedRevision(current);
+        let actualRevision;
+        if (cache !== null && cache.content === current && cache.revision !== undefined) {
+          actualRevision = cache.revision;
+        } else {
+          actualRevision = readSerializedRevision(current);
+          if (cache !== null && cache.content === current) cache.revision = actualRevision;
+        }
         if (actualRevision !== expectedRevision) return false;
         if (current) createRollingBackup(targetPath, current, backupCount, ownerId, ++counter);
         renameSync(tempPath, targetPath);
         fsyncDirectory(dirname(targetPath));
+        const written = `${serialized}\n`;
+        const writtenStat = statTarget();
+        // revision 记 expectedRevision + 1:revisioned 存储的提交契约是每次成功
+        // 提交把 revision 恰好推进 1(commitWithRetry 负责写入该值)。stat 大小
+        // 对不上说明 rename 后又被外部改过,放弃缓存退回重读。
+        cache =
+          writtenStat !== null && writtenStat.size === Buffer.byteLength(written, "utf8")
+            ? {
+                ino: writtenStat.ino,
+                mtimeMs: writtenStat.mtimeMs,
+                size: writtenStat.size,
+                content: written,
+                revision: expectedRevision + 1
+              }
+            : null;
         return true;
       } finally {
         if (existsSync(tempPath)) unlinkSync(tempPath);

@@ -212,6 +212,9 @@ export function materializeCurationJobRecords(
 
 export function reconcileAndMaterializeCurationQueue(persistenceStore, curationStore, contentLanguage) {
   const startupAt = new Date().toISOString();
+  // 清扫上次启动前已结算的终结记录:result 大血包压成摘要(晚一拍压缩,
+  // 保证刚结算记录的 run 响应契约与结算前崩溃的重放材料完好)。
+  curationStore.compactMaterializedResults(startupAt);
   persistenceStore.replaceCurationJobRecords(curationStore.list(), startupAt);
   const pending = curationStore.list().filter(
     (record) => ["succeeded", "failed", "skipped"].includes(record.status) && !record.materializedAt

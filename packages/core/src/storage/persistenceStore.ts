@@ -289,14 +289,24 @@ export function createAITimelinePersistenceStore(
   reportLoadIssues(initialDecoded.issues);
   let snapshot = initialDecoded.snapshot;
   let needsFlushMigration = initialDecoded.needsFlushMigration;
+  // 解码缓存:快照文件几十 MB 时,逐请求整篇 JSON.parse + 校验是主要的事件循环
+  // 阻塞源。序列化串未变(引用比较为主,底层文件适配器未变化时返回同一字符串)
+  // 就复用上次的解码结果;提交成功后用内存里的新快照直接播种,不再回头重解。
+  let decodeMemo: { serialized: string; snapshot: AITimelinePersistenceSnapshot } | null = initialRaw
+    ? { serialized: initialRaw, snapshot: initialDecoded.snapshot }
+    : null;
 
   const readLatest = (): AITimelinePersistenceSnapshot => {
     const serialized = storage.read();
     if (!serialized) {
       return cloneSnapshot(snapshot);
     }
+    if (decodeMemo && decodeMemo.serialized === serialized) {
+      return decodeMemo.snapshot;
+    }
     const decoded = decodeAITimelinePersistenceSnapshot(serialized);
     reportLoadIssues(decoded.issues);
+    decodeMemo = { serialized, snapshot: decoded.snapshot };
     return decoded.snapshot;
   };
   const commit = (
@@ -316,6 +326,10 @@ export function createAITimelinePersistenceStore(
     snapshot = result.value;
     if (result.committed) {
       needsFlushMigration = false;
+      const written = storage.read();
+      if (written) {
+        decodeMemo = { serialized: written, snapshot: result.value };
+      }
     }
     return cloneSnapshot(snapshot);
   };
@@ -2002,7 +2016,9 @@ function withoutReleasePlanId(plan: SourcePostReleasePlan & { id: string }): Sou
 }
 
 function cloneSnapshot(snapshot: AITimelinePersistenceSnapshot): AITimelinePersistenceSnapshot {
-  return JSON.parse(JSON.stringify(snapshot)) as AITimelinePersistenceSnapshot;
+  // structuredClone 比 JSON 往返快数倍且不产生几十 MB 的中间字符串;快照本身
+  // 是纯 JSON 形状(解码产物),两种克隆语义等价。
+  return structuredClone(snapshot);
 }
 
 function normalizeDate(value: string | Date): Date {
