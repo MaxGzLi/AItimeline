@@ -4,85 +4,76 @@
 <meta charset="utf-8">
 <link rel="stylesheet" href="shared.css">
 <style>
-  /* 盘点页:目录格,格线分隔,一格一地区 */
-  .grid {
-    margin-top: 44px;
-    border-top: 3px solid #1C1B18;
-  }
-  .region {
-    display: flex;
-    align-items: baseline;
-    gap: 30px;
-    padding: 34px 8px 30px;
-    border-bottom: 1.5px solid #C9C7BF;
-  }
-  .region .flag {
-    font-family: "Huangyou";
-    font-size: 44px;
-    width: 118px;
-    flex-shrink: 0;
-  }
-  .region .models {
-    font-family: "SourceHeavy";
-    font-size: 30px;
-    line-height: 1.6;
-    letter-spacing: 0.01em;
-  }
-  .region .models .en { font-size: 29px; }
-  .region .sub {
-    display: block;
-    font-family: "Wenkai";
-    font-size: 17px;
-    color: #8A8880;
-    margin-top: 8px;
-    letter-spacing: 0;
-  }
-  .src-note { margin-top: 24px; }
+  /* 盘点页:四个地区是四枚棋子,散在中盘,从不对齐成线 */
+  .big1 { position: absolute; left: 26px; top: 358px; font-size: 152px; letter-spacing: 10px; line-height: 1; }
+  .en1 { position: absolute; left: 520px; top: 372px; font-size: 64px; letter-spacing: 1px; line-height: 1; }
+  .sub1 { position: absolute; left: 520px; top: 466px; font-size: 34px; line-height: 1.3; letter-spacing: .5px; }
+  .vert1 { position: absolute; left: 1002px; top: 372px; font-size: 52px; letter-spacing: 3px; }
+
+  .region { position: absolute; }
+  .region .name { font-size: 46px; letter-spacing: 2px; }
+  .region .models { margin-top: 12px; font-size: 24px; line-height: 1.5; letter-spacing: .5px; }
+  .region .note { margin-top: 8px; font-size: 15px; letter-spacing: 1px; }
+  .ra { left: 26px; top: 610px; }
+  .rb { left: 560px; top: 680px; }
+  .rc { left: 26px; top: 872px; }
+  .rd { left: 560px; top: 948px; }
+
+  .takeaway { position: absolute; left: 830px; top: 1064px; font-size: 46px; line-height: 1.35; }
+  .gnote { position: absolute; left: 26px; top: 1180px; width: 590px; font-size: 17px; line-height: 1.6; }
+  .gnote .src { display: block; margin-top: 12px; font-size: 14px; letter-spacing: 1px; }
+  .trans { position: absolute; left: 26px; top: 1382px; font-size: 15px; letter-spacing: 1px; }
+
+  .brv { position: absolute; left: 866px; top: 1246px; font-size: 34px; letter-spacing: 0; }
+  .brs { position: absolute; left: 926px; top: 1250px; font-size: 24px; line-height: 1.3; letter-spacing: .5px; }
+  .brv2 { position: absolute; left: 1046px; top: 1246px; font-size: 13px; letter-spacing: 1px; height: 168px; }
+  .cnr1 { left: 668px; top: 1240px; }
+  .cnr2 { left: 1048px; top: 1382px; }
 </style>
 </head>
 <body>
-<div class="page">
-  <div class="masthead">
-    <div class="brand"><span>AITIMELINE</span><b>知识周报</b></div>
-    <div class="pageno">04 / 06</div>
-  </div>
+<div class="tl">盘点<br>全球版图<br>剪藏自 X</div>
 
-  <div class="kicker"><span class="en">MAP</span>盘点 · 全球版图</div>
-  <h1>一条推文里的全球 <span class="en">LLM</span> 竞赛</h1>
+<div class="date">2026.08.04</div>
+<div class="rule"></div>
+<div class="enp">GLOBAL LLM LANDSCAPE<br>READ FROM A SINGLE TWEET<br>US CN FR KR IN ONE FRAME<br>CLIPPED FROM X</div>
+<div class="pgno">04 / 06</div>
 
-  <div class="grid">
-    <div class="region">
-      <div class="flag">美国</div>
-      <div class="models"><span class="en">Claude、GPT、Gemini、Grok</span> 等
-        <span class="sub">数量最多，闭源为主</span>
-      </div>
-    </div>
-    <div class="region">
-      <div class="flag">中国</div>
-      <div class="models"><span class="en">DeepSeek</span>、<span class="en">Kimi</span>、<span class="en">GLM</span>、<span class="en">Qwen</span>、<span class="en">Seed</span> 等
-        <span class="sub">开源权重是主流打法</span>
-      </div>
-    </div>
-    <div class="region">
-      <div class="flag">法国</div>
-      <div class="models"><span class="en">Mistral</span>，最大 <span class="en">675B</span>
-        <span class="sub">欧洲独苗，一家扛一个大洲</span>
-      </div>
-    </div>
-    <div class="region">
-      <div class="flag">韩国</div>
-      <div class="models">「最近的势头也很猛」
-        <span class="sub">原推只给了这一句；具体是谁，值得后续深挖</span>
-      </div>
-    </div>
-  </div>
+<div class="big1">版图</div>
+<div class="en1">GLOBAL</div>
+<div class="sub1">THE LLM RACE<br>IN ONE TWEET</div>
+<div class="vert1 v">LANDSCAPE</div>
 
-  <div class="src-note note">出处：@Gorden_Sun / X / 2026-08-04 剪藏。地区分档与「675B」为原推说法；「闭源为主／开源主流」两句灰注是本报按各家公开发布惯例所加的边注。</div>
-
-  <div class="transition">
-    <div class="q">版图是天上的事；落到教室里，AI 已经开始干活了。</div>
-    <div class="next">下一页 <span class="en">→ 05</span> · 批改作业</div>
-  </div>
+<div class="region ra">
+  <div class="name">美国</div>
+  <div class="models">CLAUDE / GPT / GEMINI / GROK 等</div>
+  <div class="note">数量最多</div>
 </div>
+<div class="region rb">
+  <div class="name">中国</div>
+  <div class="models">DEEPSEEK / KIMI / GLM<br>QWEN / SEED 等</div>
+  <div class="note">开源权重是主流打法</div>
+</div>
+<div class="region rc">
+  <div class="name">法国</div>
+  <div class="models">MISTRAL / 最大 675B</div>
+  <div class="note">欧洲独苗 / 一家扛一个大洲</div>
+</div>
+<div class="region rd">
+  <div class="name">韩国</div>
+  <div class="models">「最近的势头也很猛」</div>
+  <div class="note">原推只给了这一句 / 具体是谁值得后续深挖</div>
+</div>
+
+<div class="takeaway">一条推文<br>看尽全场</div>
+
+<div class="gnote">地区分档与「675B」为原推说法；「数量最多」「开源权重是主流打法」两句是本报按各家公开发布惯例所加的边注。<span class="src">出处 / @Gorden_Sun / X / 2026.08.04 / 剪藏</span></div>
+<div class="trans">版图是天上的事；落到教室里，AI 已经开始干活了 → 05 批改作业</div>
+
+<div class="brv v">四国同框</div>
+<div class="brs">US<br>CN<br>FR KR<br>04 / 06</div>
+<div class="brv2 v">GLOBAL LLM LANDSCAPE</div>
+<div class="cnr cnr1">&#8988;</div>
+<div class="cnr cnr2">&#8991;</div>
 </body>
 </html>

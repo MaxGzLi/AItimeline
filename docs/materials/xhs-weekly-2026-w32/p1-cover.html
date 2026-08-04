@@ -4,127 +4,82 @@
 <meta charset="utf-8">
 <link rel="stylesheet" href="shared.css">
 <style>
-  .cover-issue {
-    margin-top: 40px;
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-  }
-  .cover-issue .issue-tag {
-    font-family: "Smiley";
-    font-size: 26px;
-    color: #B3402A;
-    letter-spacing: 0.1em;
-  }
-  .cover-issue .date {
-    font-family: "Smiley";
-    font-size: 24px;
-    color: #6B6A66;
-  }
-  .cover-title {
-    margin-top: 26px;
-    font-family: "Huangyou";
-    font-size: 108px;
-    line-height: 1.14;
-    letter-spacing: -0.03em;
-  }
-  .cover-title .en {
-    font-size: 100px;
-    letter-spacing: 0;
-  }
-  .cover-count {
-    margin-top: 30px;
-    font-size: 26px;
-    line-height: 1.7;
-    color: #2B2A26;
-  }
-  .cover-count .num {
-    font-size: 44px;
-    color: #B3402A;
-    margin: 0 4px;
-  }
-  /* 目录格:真序列,对应内页页码 */
-  .toc {
-    margin-top: 52px;
-    border-top: 3px solid #1C1B18;
-  }
-  .toc-row {
-    display: flex;
-    align-items: baseline;
-    gap: 26px;
-    padding: 25px 6px 23px;
-    border-bottom: 1.5px solid #C9C7BF;
-  }
-  .toc-row .no {
-    font-family: "Smiley";
-    font-size: 34px;
-    color: #B3402A;
-    width: 56px;
-  }
-  .toc-row .t {
-    font-family: "SourceHeavy";
-    font-size: 31px;
-    letter-spacing: 0.02em;
-  }
-  .toc-row .t .en { font-size: 30px; }
-  .toc-row .tag {
-    margin-left: auto;
-    font-family: "Wenkai";
-    font-size: 17px;
-    color: #8A8880;
-  }
+  /* 封面:模板原几何,换内容不换关系 */
+  .big1 { position: absolute; left: 26px; top: 358px; font-size: 152px; letter-spacing: 10px; line-height: 1; }
+  .en1 { position: absolute; left: 520px; top: 372px; font-size: 64px; letter-spacing: 1px; line-height: 1; }
+  .sub1 { position: absolute; left: 520px; top: 466px; font-size: 34px; line-height: 1.3; letter-spacing: .5px; }
+  .vert1 { position: absolute; left: 1002px; top: 372px; font-size: 52px; letter-spacing: 3px; }
+
+  .midl { position: absolute; left: 26px; top: 620px; font-size: 46px; line-height: 1.35; }
+  .big2 { position: absolute; left: 262px; top: 598px; font-size: 132px; letter-spacing: 6px; line-height: 1; }
+  .q1 { position: absolute; left: 866px; top: 606px; font-size: 46px; letter-spacing: 6px; }
+  .q2 { position: absolute; left: 806px; top: 640px; font-size: 46px; letter-spacing: 6px; }
+  .q3 { position: absolute; left: 746px; top: 614px; font-size: 46px; letter-spacing: 6px; }
+  .q4 { position: absolute; left: 686px; top: 656px; font-size: 46px; letter-spacing: 6px; }
+
+  .r1 { position: absolute; left: 26px; top: 902px; font-size: 46px; line-height: 1.35; }
+  .r2 { position: absolute; left: 306px; top: 902px; font-size: 46px; line-height: 1.35; }
+  .r2 .lat { font-size: 48px; letter-spacing: 1px; }
+  .r3 { position: absolute; left: 790px; top: 980px; font-size: 46px; line-height: 1.35; }
+
+  .foot { position: absolute; left: 26px; top: 1258px; display: flex; gap: 34px; }
+  .map { width: 92px; height: 92px; border: 1.5px solid var(--ink); position: relative;
+    background: linear-gradient(var(--ink) 1px, transparent 1px) 0 22px / 100% 30px,
+                linear-gradient(90deg, var(--ink) 1px, transparent 1px) 20px 0 / 34px 100%; }
+  .map .dot { position: absolute; left: 40px; top: 34px; width: 12px; height: 12px;
+    background: #C8281E; border-radius: 50%; }
+  .mapc { font-size: 12px; margin-top: 4px; text-align: center; }
+
+  .br { position: absolute; left: 700px; top: 1246px; font-size: 17px; line-height: 1.4; }
+  .br .cn { font-size: 15px; }
+  .brv { position: absolute; left: 866px; top: 1246px; font-size: 34px; letter-spacing: 0; height: 180px; }
+  .brs { position: absolute; left: 926px; top: 1250px; font-size: 24px; line-height: 1.3; letter-spacing: .5px; }
+  .brc { position: absolute; left: 926px; top: 1388px; font-size: 15px; letter-spacing: 1px; }
+  .brv2 { position: absolute; left: 1046px; top: 1246px; font-size: 13px; letter-spacing: 1px; height: 168px; }
+  .trans { position: absolute; left: 26px; top: 1180px; font-size: 15px; letter-spacing: 1px; }
+  .cnr1 { left: 668px; top: 1240px; }
+  .cnr2 { left: 1048px; top: 1382px; }
 </style>
 </head>
 <body>
-<div class="page">
-  <div class="masthead">
-    <div class="brand"><span>AITIMELINE</span><b>知识周报</b></div>
-    <div class="pageno">01 / 06</div>
-  </div>
+<div class="tl">AI 知识周报<br>刷推捞卡实录<br>第一期连载中</div>
 
-  <div class="cover-issue">
-    <div class="issue-tag">ISSUE 01</div>
-    <div class="date">2026.08.03 — 08.09</div>
-  </div>
+<div class="date">2026.08.03<span class="to">&#8990; 08.09</span></div>
+<div class="rule"></div>
+<div class="enp">SIXTEEN KNOWLEDGE CARDS<br>CLIPPED WHILE SCROLLING X<br>NINE STRAIGHT FROM TWEETS<br>EVERY CLAIM WITH A SOURCE<br>AITIMELINE WEEKLY NO.01</div>
+<div class="mark">&#10059;</div>
 
-  <div class="cover-title">这周摸鱼刷 <span class="en">X</span>，<br>捞回一沓知识卡</div>
+<div class="big1">摸鱼</div>
+<div class="en1">SCROLL</div>
+<div class="sub1">SCROLLING TURNS<br>INTO KNOWLEDGE<br>CARDS THIS WEEK</div>
+<div class="vert1 v">AITIMELINE</div>
 
-  <div class="cover-count">
-    本周新攒 <span class="num">16</span> 张卡，其中 <span class="num">9</span> 张是刷推时顺手存下的。
-  </div>
+<div class="midl">刷 X<br>顺手存</div>
+<div class="big2">捞知识</div>
+<div class="q1 v">协议</div>
+<div class="q2 v">稀疏</div>
+<div class="q3 v">版图</div>
+<div class="q4 v">批改</div>
 
-  <div class="toc">
-    <div class="toc-row">
-      <div class="no">02</div>
-      <div class="t">MiniMax H3 的「开源」协议</div>
-      <div class="tag">深读</div>
-    </div>
-    <div class="toc-row">
-      <div class="no">03</div>
-      <div class="t"><span class="en">671B</span> 参数，为何只激活 <span class="en">37B</span></div>
-      <div class="tag">硬核</div>
-    </div>
-    <div class="toc-row">
-      <div class="no">04</div>
-      <div class="t">全球 <span class="en">LLM</span> 版图</div>
-      <div class="tag">盘点</div>
-    </div>
-    <div class="toc-row">
-      <div class="no">05</div>
-      <div class="t">AI 批改作业，教室里先跑起来了</div>
-      <div class="tag">落地</div>
-    </div>
-    <div class="toc-row">
-      <div class="no">06</div>
-      <div class="t">本周数字备忘</div>
-      <div class="tag">收藏</div>
-    </div>
-  </div>
+<div class="r1">本周新攒<br>16 张知识卡<br>剪藏占 9 张</div>
+<div class="r2">逐字引文<br>出处可查<br><span class="lat">GROUNDED</span></div>
+<div class="r3">剪自<br>X 时间线</div>
 
-  <div class="transition">
-    <div class="q">先从这周开源圈吵得最凶的一条说起。</div>
-    <div class="next">下一页 <span class="en">→ 02</span> · MiniMax H3</div>
-  </div>
+<div class="trans">先从这周开源圈吵得最凶的一条说起 → 02 协议</div>
+
+<div class="foot">
+  <div class="fc"><span class="lab">采集:</span>X 剪藏<br><span class="lab" style="margin-top:10px">CAPTURE:</span>BROWSER CLIP</div>
+  <div class="fc"><span class="lab">整理:</span>观察员成卡<br><span class="lab" style="margin-top:10px">AGENT:</span>AITIMELINE</div>
+  <div class="fc"><span class="lab">周期:</span>每周一期<br><span class="lab" style="margin-top:10px">SCHEDULE:</span>WEEKLY</div>
+  <div class="fc"><div class="map"><div class="dot"></div></div><div class="mapc">剪藏 / 卡片 / 周报</div></div>
 </div>
+
+<div class="br"><span class="cn">剪藏成卡<br>出处可查<br>本周</span><br><br>2026 W32<br>SIXTEEN CARDS<br>NINE CLIPS</div>
+<div class="brv v">摸鱼捞知识</div>
+<div class="brs">2026<br>W32<br>NO.01<br>@Maximax</div>
+<div class="brc">出处见各页</div>
+<div class="brv2 v">AITIMELINE WEEKLY REPORT</div>
+<div class="cnr cnr1">&#8988;</div>
+<div class="cnr cnr2">&#8991;</div>
 </body>
 </html>

@@ -4,86 +4,71 @@
 <meta charset="utf-8">
 <link rel="stylesheet" href="shared.css">
 <style>
-  h1 { font-size: 72px; }
-  .sec {
-    margin-top: 42px;
-    display: flex;
-    align-items: baseline;
-  }
-  .quote-block { margin-top: 20px; }
-  .reading { margin-top: 22px; }
-  .reading p { margin-top: 16px; }
-  .reading p:first-child { margin-top: 0; }
-  .verdict {
-    margin-top: 34px;
-    font-family: "SourceHeavy";
-    font-size: 26px;
-    line-height: 1.6;
-  }
-  .compare {
-    margin-top: 20px;
-    display: flex;
-    border: 2px solid #1C1B18;
-  }
-  .cmp-cell {
-    flex: 1;
-    padding: 24px 28px 22px;
-  }
-  .cmp-cell + .cmp-cell { border-left: 2px solid #1C1B18; }
-  .cmp-h {
-    font-family: "SourceHeavy";
-    font-size: 22px;
-  }
-  .cmp-b {
-    margin-top: 10px;
-    font-size: 21px;
-    line-height: 1.6;
-    color: #2B2A26;
-  }
-  .cmp-note { margin-top: 12px; }
+  /* 深读页:大字「开源/随便用」,被限地区做竖排簇,引文逐字落小字块 */
+  .big1 { position: absolute; left: 26px; top: 358px; font-size: 152px; letter-spacing: 10px; line-height: 1; }
+  .en1 { position: absolute; left: 520px; top: 372px; font-size: 64px; letter-spacing: 1px; line-height: 1; }
+  .sub1 { position: absolute; left: 520px; top: 466px; font-size: 34px; line-height: 1.3; letter-spacing: .5px; }
+  .vert1 { position: absolute; left: 1002px; top: 372px; font-size: 52px; letter-spacing: 3px; }
+
+  .midl { position: absolute; left: 26px; top: 620px; font-size: 46px; line-height: 1.35; }
+  .big2 { position: absolute; left: 262px; top: 598px; font-size: 132px; letter-spacing: 6px; line-height: 1; }
+  .q1 { position: absolute; left: 866px; top: 606px; font-size: 46px; letter-spacing: 6px; }
+  .q2 { position: absolute; left: 806px; top: 640px; font-size: 46px; letter-spacing: 6px; }
+  .q3 { position: absolute; left: 746px; top: 614px; font-size: 46px; letter-spacing: 6px; }
+  .q4 { position: absolute; left: 686px; top: 656px; font-size: 46px; letter-spacing: 6px; }
+
+  .r1 { position: absolute; left: 26px; top: 902px; font-size: 46px; line-height: 1.35; }
+  .r2 { position: absolute; left: 306px; top: 902px; font-size: 46px; line-height: 1.35; }
+  .r3 { position: absolute; left: 790px; top: 980px; font-size: 46px; line-height: 1.35; }
+
+  .quote { position: absolute; left: 26px; top: 1148px; width: 566px; }
+  .quote .lab { font-size: 14px; letter-spacing: 1px; }
+  .quote .q-body { margin-top: 10px; font-size: 20px; line-height: 1.75; }
+  .quote .q-src { margin-top: 10px; font-size: 14px; letter-spacing: 1px; }
+  .trans { position: absolute; left: 26px; top: 1382px; font-size: 15px; letter-spacing: 1px; }
+
+  .brv { position: absolute; left: 866px; top: 1246px; font-size: 34px; letter-spacing: 0; }
+  .brs { position: absolute; left: 926px; top: 1250px; font-size: 24px; line-height: 1.3; letter-spacing: .5px; }
+  .brv2 { position: absolute; left: 1046px; top: 1246px; font-size: 13px; letter-spacing: 1px; height: 168px; }
+  .cnr1 { left: 668px; top: 1240px; }
+  .cnr2 { left: 1048px; top: 1382px; }
 </style>
 </head>
 <body>
-<div class="page">
-  <div class="masthead">
-    <div class="brand"><span>AITIMELINE</span><b>知识周报</b></div>
-    <div class="pageno">02 / 06</div>
-  </div>
+<div class="tl">深读<br>开源协议<br>剪藏自 X</div>
 
-  <div class="kicker"><span class="en">DEEP READ</span>深读 · 开源协议</div>
-  <h1>MiniMax H3 的「开源」协议</h1>
+<div class="date">2026.08.03</div>
+<div class="rule"></div>
+<div class="enp">MINIMAX H3 LICENSE<br>RESTRICTS DIRECT USE IN<br>US EU UK AND KOREA<br>EXTRA AGREEMENT REQUIRED</div>
+<div class="pgno">02 / 06</div>
 
-  <div class="sec"><span class="seq">01</span><span class="seq-label">原文</span></div>
-  <div class="quote-block">
-    <div class="q-body">MiniMax H3 的“开源协议”真 nb，不仅有 Kimi K3 的 revenue 歧视条款，还禁止了美国、欧盟、英国、韩国地区直接使用。。需要跟 MiniMax 签额外的协议才可以用。。</div>
-    <div class="q-src">@yvbbrjdr / X / 2026-08-03 · 剪藏原文，一字未改</div>
-  </div>
+<div class="big1">开源</div>
+<div class="en1">LICENSE</div>
+<div class="sub1">OPEN WEIGHTS<br>NOT OPEN USE<br>READ IT FIRST</div>
+<div class="vert1 v">MINIMAX H3</div>
 
-  <div class="sec"><span class="seq">02</span><span class="seq-label">解读</span></div>
-  <div class="reading body-text">
-    <p>权重公开，不等于随便用。这份协议把 <span class="hl">美国、欧盟、英国、韩国挡在「直接使用」之外</span>——想用，得跟 MiniMax 另签一份协议。</p>
-    <p>协议里还带着 Kimi K3 同款的 revenue 歧视条款。两家先后这么写，说明这不是个例，是一种新的授权姿势。</p>
-  </div>
+<div class="midl">权重公开<br>不等于</div>
+<div class="big2">随便用</div>
+<div class="q1 v">美国</div>
+<div class="q2 v">欧盟</div>
+<div class="q3 v">英国</div>
+<div class="q4 v">韩国</div>
 
-  <div class="sec"><span class="seq">03</span><span class="seq-label">对比</span></div>
-  <div class="compare">
-    <div class="cmp-cell">
-      <div class="cmp-h">常见开源协议（如 <span class="en">Apache 2.0</span>）</div>
-      <div class="cmp-b">允许自由使用，可以全球部署</div>
-    </div>
-    <div class="cmp-cell">
-      <div class="cmp-h">MiniMax H3 协议</div>
-      <div class="cmp-b">地域限制 + revenue 歧视条款</div>
-    </div>
-  </div>
-  <div class="note cmp-note">对比出自本卡的知识卡跟帖：需要全球部署，选无地域限制的协议；只在允许地区用，影响较小。</div>
+<div class="r1">另签协议<br>才能直接用</div>
+<div class="r2">KIMI K3 同款<br>REVENUE<br>歧视条款</div>
+<div class="r3">先读协议<br>再上生产</div>
 
-  <div class="verdict accent">「开源」二字不再等于放心用——先读协议，再上生产。</div>
-
-  <div class="transition">
-    <div class="q">协议管的是「谁能用」；这些模型本身强在哪？正好这周把 MoE 啃完了。</div>
-    <div class="next">下一页 <span class="en">→ 03</span> · 稀疏激活</div>
-  </div>
+<div class="quote">
+  <span class="lab">剪藏原文 / 一字未改</span>
+  <div class="q-body">MiniMax H3 的“开源协议”真 nb，不仅有 Kimi K3 的 revenue 歧视条款，还禁止了美国、欧盟、英国、韩国地区直接使用。。需要跟 MiniMax 签额外的协议才可以用。。</div>
+  <div class="q-src">@yvbbrjdr / X / 2026.08.03</div>
 </div>
+<div class="trans">协议管的是谁能用；模型本身强在哪？→ 03 稀疏激活</div>
+
+<div class="brv v">先读再用</div>
+<div class="brs">NOT<br>OPEN<br>USE<br>02 / 06</div>
+<div class="brv2 v">MINIMAX H3 LICENSE TERMS</div>
+<div class="cnr cnr1">&#8988;</div>
+<div class="cnr cnr2">&#8991;</div>
 </body>
 </html>
