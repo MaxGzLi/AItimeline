@@ -4,11 +4,11 @@
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   for (let i = 0; i < 40; i += 1) {
-    if (document.querySelector(".x-task-dispatch-input")) break;
+    if (document.querySelector(".x-task-composerinput")) break;
     await sleep(500);
   }
 
-  const input = document.querySelector(".x-task-dispatch-input");
+  const input = document.querySelector(".x-task-composerinput");
   if (!input) return "no-dispatch-input";
 
   const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set;

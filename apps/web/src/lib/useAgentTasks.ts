@@ -13,6 +13,8 @@ export interface AgentConfirmQuestion {
 
 export interface AgentDispatchReply {
   taskId: string | null;
+  /** 你刚才那句话。对话流里要先摆出它,再摆观察员的回话。 */
+  question: string;
   text: string;
   quote: string | null;
   sourceTitle: string | null;
@@ -27,6 +29,7 @@ interface DispatchResponse {
   reply?: string;
   turnRecord?: { id?: string } | null;
   turn?: {
+    question?: string;
     answer?: {
       answer?: string;
       citations?: Array<{ quote?: string; sourceTitle?: string }>;
@@ -40,8 +43,9 @@ interface DispatchResponse {
  * 回一段有出处的答案。答案正文并没有存进快照(agentTurns 只存问题和状态),所以
  * 这里接住这一次的回话拿去显示,刷新后就只剩任务记录——这是本期的已知限制。
  */
-function extractDispatchReply(result: DispatchResponse): AgentDispatchReply | null {
+function extractDispatchReply(result: DispatchResponse, asked: string): AgentDispatchReply | null {
   const answer = result.turn?.answer;
+  const question = result.turn?.question?.trim() || asked;
   const confirmAction = result.turn?.actions?.find((action) => action.kind === "confirm_discovery");
   const turnId = result.turnRecord?.id;
   const confirm =
@@ -52,6 +56,7 @@ function extractDispatchReply(result: DispatchResponse): AgentDispatchReply | nu
 
     return {
       taskId: result.taskId ?? null,
+      question,
       text: answer.answer,
       quote: citation?.quote ?? null,
       sourceTitle: citation?.sourceTitle ?? null,
@@ -63,6 +68,7 @@ function extractDispatchReply(result: DispatchResponse): AgentDispatchReply | nu
   if (result.reply) {
     return {
       taskId: result.taskId ?? null,
+      question,
       text: result.reply,
       quote: null,
       sourceTitle: null,
@@ -196,7 +202,7 @@ export function useAgentTasks(enabled: boolean) {
         });
 
         setDispatchText("");
-        setLastReply(extractDispatchReply(result));
+        setLastReply(extractDispatchReply(result, trimmed));
 
         const refreshed = await refreshTasks();
 
