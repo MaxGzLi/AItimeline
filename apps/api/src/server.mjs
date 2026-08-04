@@ -92,6 +92,7 @@ import {
   handleIdeaResearchRequest
 } from "./domains/research.mjs";
 import { handlePostReply, handleUserNote } from "./domains/notes.mjs";
+import { handlePreferenceChat } from "./domains/preferences.mjs";
 import {
   backfillLegacyReviewStates,
   buildReviewCompletionRecordId,
@@ -1427,6 +1428,22 @@ export function createApiServer(options = {}) {
         const body = await readJsonBody(request);
         const userId = typeof body.userId === "string" && body.userId.trim() ? body.userId : "local-user";
         const result = handleAgentConfirm(
+          body,
+          userId,
+          persistenceStore,
+          curationStore,
+          resolveContentLanguage(persistenceStore, process.env)
+        );
+
+        sendJson(response, 200, result);
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/agent/preferences") {
+        const body = await readJsonBody(request);
+        requireString(body.text, "text");
+        const userId = typeof body.userId === "string" && body.userId.trim() ? body.userId : "local-user";
+        const result = handlePreferenceChat(
           body,
           userId,
           persistenceStore,
