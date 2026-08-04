@@ -204,6 +204,31 @@ describe("grounding validation", () => {
     expect(result.valid).toBe(true);
     expect(result.checks.every((check) => check.status === "passed")).toBe(true);
   });
+
+  it("downgrades a Latin concept missing from CJK-only evidence to a warning", () => {
+    const evidence = "在中国学校里，人工智能现在通过扫描笔记本来批改作业，并打印出反馈。";
+    const result = validateGrounding(makePost(evidence, "AI Grading"), makeRegistry(evidence));
+
+    const conceptCheck = result.checks.find((check) => check.fieldPath === "$.concepts[0]");
+
+    expect(conceptCheck?.status).toBe("warning");
+    expect(result.valid).toBe(true);
+  });
+
+  it("still passes a Latin concept that appears verbatim inside CJK evidence", () => {
+    const evidence = "世界各国的LLM，韩国最近的势头也很猛。";
+    const result = validateGrounding(makePost(evidence, "LLM"), makeRegistry(evidence));
+
+    expect(result.checks.find((check) => check.fieldPath === "$.concepts[0]")?.status).toBe("passed");
+  });
+
+  it("still fails a same-script concept that is absent from the evidence", () => {
+    const evidence = "RAG improves retrieval quality.";
+    const result = validateGrounding(makePost(evidence, "Vector Databases"), makeRegistry(evidence));
+
+    expect(result.checks.find((check) => check.fieldPath === "$.concepts[0]")?.status).toBe("failed");
+    expect(result.valid).toBe(false);
+  });
 });
 
 describe("concept word-form tolerance", () => {
