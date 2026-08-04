@@ -310,14 +310,24 @@ function validateClaimGrounding(
       )
     );
 
+    // Concepts are prompted in English, so a Latin concept label can never
+    // appear verbatim in CJK-only evidence. When every resolved span is
+    // cross-script with the concept, the miss is a translation artifact, not a
+    // grounding violation — downgrade to a warning (same split #152 applied to
+    // fact anchors). A same-script miss still fails closed.
+    const crossLanguageOnly =
+      !supported && evidence.length > 0 && evidence.every((span) => isCrossScriptPair(claim.claim, span.quote));
+
     return buildClaimCheck(
       claim,
-      supported ? "passed" : options.sameSourceFollowup ? "warning" : "failed",
+      supported ? "passed" : crossLanguageOnly || options.sameSourceFollowup ? "warning" : "failed",
       evidenceChunkIds,
       supported ? 1 : 0,
       supported
         ? "Concept appears in cited evidence text."
-        : "Concept does not appear in cited evidence text."
+        : crossLanguageOnly
+          ? "Concept is cross-language with all cited evidence; accepted with a warning."
+          : "Concept does not appear in cited evidence text."
     );
   }
 
