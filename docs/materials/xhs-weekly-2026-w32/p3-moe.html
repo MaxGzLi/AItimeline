@@ -4,77 +4,46 @@
 <meta charset="utf-8">
 <link rel="stylesheet" href="shared.css">
 <style>
-  /* 大数字页:671B 压版做主角,37B 反白做对位 */
-  .hero-num {
-    margin-top: 46px;
-    line-height: 0.94;
-  }
-  .hero-num .big {
-    font-family: "Smiley";
-    font-size: 300px;
-    letter-spacing: -0.04em;
-    display: block;
-  }
-  .hero-sub {
-    display: flex;
-    align-items: center;
-    gap: 24px;
-    margin-top: 26px;
-  }
-  .hero-sub .arrow {
-    font-family: "Smiley";
-    font-size: 52px;
-    color: #B3402A;
-  }
-  .hero-sub .small {
-    font-family: "Smiley";
-    font-size: 96px;
-    background: #1C1B18;
-    color: #FAFAF6;
-    padding: 0 26px 6px;
-    letter-spacing: -0.02em;
-  }
-  .hero-sub .cap {
-    font-family: "SourceHeavy";
-    font-size: 28px;
-    line-height: 1.45;
-  }
-  .moe-read { margin-top: 44px; max-width: 900px; }
-  .moe-read p { margin-top: 15px; }
-  .moe-read p:first-child { margin-top: 0; }
-  .tech-note {
-    margin-top: 26px;
-  }
+  .kicker { background: var(--bl-bg); color: var(--bl-fg); }
+  .hero { margin-top: 40px; display: flex; align-items: baseline; gap: 28px; font-family: "Huangyou"; }
+  .hero .a { font-size: 190px; line-height: 1; }
+  .hero .arrow { font-size: 80px; color: var(--red); }
+  .hero .b { font-size: 190px; line-height: 1; color: var(--red); }
+  .hero-cap { margin-top: 14px; font-family: "SourceLight"; font-size: 28px; color: #55524A; }
+  .grid2 { margin-top: 36px; }
+  .tech { margin-top: 26px; }
 </style>
 </head>
 <body>
-<div class="page">
-  <div class="masthead">
-    <div class="brand"><span>AITIMELINE</span><b>知识周报</b></div>
-    <div class="pageno">03 / 06</div>
+<div class="head">
+  <div class="badge">AI 知识周报</div>
+  <div class="pgno">03 / 06</div>
+</div>
+
+<div><span class="kicker">硬核 / 模型架构</span></div>
+<div class="title" style="font-size:72px;">总参数很大，<br>每次只用<span class="red">一小撮</span></div>
+
+<div class="hero"><span class="a">671B</span><span class="arrow">→</span><span class="b">37B</span></div>
+<div class="hero-cap">DeepSeek-V3 的总参数，与每个 token 实际激活的参数量</div>
+
+<div class="grid2">
+  <div class="card c-gr">
+    <span class="chip">机制</span>
+    <div class="kw">养一群专家<br>来活只叫醒几个</div>
+    <div class="d">能力按 671B 算，算力按 37B 花——这就是 MoE 的稀疏激活</div>
   </div>
-
-  <div class="kicker"><span class="en">HARDCORE</span>硬核 · 模型架构</div>
-  <h1>总参数很大，每次只用一小撮</h1>
-
-  <div class="hero-num"><span class="big">671B</span></div>
-  <div class="hero-sub">
-    <span class="arrow">→</span>
-    <span class="small">37B</span>
-    <span class="cap">DeepSeek-V3 的总参数<br>与单个 token 实际激活量</span>
+  <div class="card c-pu">
+    <span class="chip">训练账</span>
+    <div class="kw">2.788M<br>GPU 小时</div>
+    <div class="d">V3 预训练的 H800 用量；训练同规模密集模型，估计要超过 10M</div>
   </div>
+</div>
 
-  <div class="moe-read body-text">
-    <p>这就是 MoE 的稀疏激活：模型养着一大群「专家」，每个 token 进来只叫醒其中几个。能力按 671B 算，算力按 37B 花。</p>
-    <p>省下的是真金白银——V3 预训练用了 <span class="num">2.788M</span> H800 GPU 小时；而训练同规模的密集模型，估计要超过 <span class="num">10M</span> GPU 小时。</p>
-  </div>
+<div class="tech note-sm">配套技术：MLA（压缩 KV 缓存的注意力变体）与无辅助损失的负载均衡策略<br>出处：AITimeline 跟进卡 / 转述 DeepSeek-V3 技术报告</div>
 
-  <div class="tech-note note">配套技术：MLA（压缩 KV 缓存的注意力变体）与无辅助损失的负载均衡策略。<br>出处：AITimeline 跟进卡 · Mixture-of-Experts（转述 DeepSeek-V3 技术报告）</div>
-
-  <div class="transition">
-    <div class="q">一家的账算完了；这条赛道上，全球都有谁在跑？</div>
-    <div class="next">下一页 <span class="en">→ 04</span> · LLM 版图</div>
-  </div>
+<div class="bar">
+  <div class="q">一家的账算完了；这条赛道上全球都有谁在跑？</div>
+  <div class="next">下一页 → 04</div>
 </div>
 </body>
 </html>

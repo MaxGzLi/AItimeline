@@ -4,85 +4,49 @@
 <meta charset="utf-8">
 <link rel="stylesheet" href="shared.css">
 <style>
-  /* 盘点页:目录格,格线分隔,一格一地区 */
-  .grid {
-    margin-top: 44px;
-    border-top: 3px solid #1C1B18;
-  }
-  .region {
-    display: flex;
-    align-items: baseline;
-    gap: 30px;
-    padding: 34px 8px 30px;
-    border-bottom: 1.5px solid #C9C7BF;
-  }
-  .region .flag {
-    font-family: "Huangyou";
-    font-size: 44px;
-    width: 118px;
-    flex-shrink: 0;
-  }
-  .region .models {
-    font-family: "SourceHeavy";
-    font-size: 30px;
-    line-height: 1.6;
-    letter-spacing: 0.01em;
-  }
-  .region .models .en { font-size: 29px; }
-  .region .sub {
-    display: block;
-    font-family: "Wenkai";
-    font-size: 17px;
-    color: #8A8880;
-    margin-top: 8px;
-    letter-spacing: 0;
-  }
-  .src-note { margin-top: 24px; }
+  .kicker { background: var(--gr-bg); color: var(--gr-fg); }
+  .grid2 { margin-top: 34px; }
+  .card .kw { font-size: 34px; }
+  .gnote { margin-top: 26px; }
 </style>
 </head>
 <body>
-<div class="page">
-  <div class="masthead">
-    <div class="brand"><span>AITIMELINE</span><b>知识周报</b></div>
-    <div class="pageno">04 / 06</div>
+<div class="head">
+  <div class="badge">AI 知识周报</div>
+  <div class="pgno">04 / 06</div>
+</div>
+
+<div><span class="kicker">盘点 / 全球版图</span></div>
+<div class="title">一条推文里的<br>全球 <span class="red">LLM</span> 竞赛</div>
+
+<div class="grid2">
+  <div class="card c-or">
+    <span class="chip">美国</span>
+    <div class="kw">Claude / GPT<br>Gemini / Grok 等</div>
+    <div class="d">数量最多</div>
   </div>
-
-  <div class="kicker"><span class="en">MAP</span>盘点 · 全球版图</div>
-  <h1>一条推文里的全球 <span class="en">LLM</span> 竞赛</h1>
-
-  <div class="grid">
-    <div class="region">
-      <div class="flag">美国</div>
-      <div class="models"><span class="en">Claude、GPT、Gemini、Grok</span> 等
-        <span class="sub">数量最多，闭源为主</span>
-      </div>
-    </div>
-    <div class="region">
-      <div class="flag">中国</div>
-      <div class="models"><span class="en">DeepSeek</span>、<span class="en">Kimi</span>、<span class="en">GLM</span>、<span class="en">Qwen</span>、<span class="en">Seed</span> 等
-        <span class="sub">开源权重是主流打法</span>
-      </div>
-    </div>
-    <div class="region">
-      <div class="flag">法国</div>
-      <div class="models"><span class="en">Mistral</span>，最大 <span class="en">675B</span>
-        <span class="sub">欧洲独苗，一家扛一个大洲</span>
-      </div>
-    </div>
-    <div class="region">
-      <div class="flag">韩国</div>
-      <div class="models">「最近的势头也很猛」
-        <span class="sub">原推只给了这一句；具体是谁，值得后续深挖</span>
-      </div>
-    </div>
+  <div class="card c-bl">
+    <span class="chip">中国</span>
+    <div class="kw">DeepSeek / Kimi<br>GLM / Qwen / Seed 等</div>
+    <div class="d">开源权重是主流打法</div>
   </div>
-
-  <div class="src-note note">出处：@Gorden_Sun / X / 2026-08-04 剪藏。地区分档与「675B」为原推说法；「闭源为主／开源主流」两句灰注是本报按各家公开发布惯例所加的边注。</div>
-
-  <div class="transition">
-    <div class="q">版图是天上的事；落到教室里，AI 已经开始干活了。</div>
-    <div class="next">下一页 <span class="en">→ 05</span> · 批改作业</div>
+  <div class="card c-gr">
+    <span class="chip">法国</span>
+    <div class="kw">Mistral<br>最大 675B</div>
+    <div class="d">欧洲独苗，一家扛一个大洲</div>
   </div>
+  <div class="card c-pu">
+    <span class="chip">韩国</span>
+    <div class="kw">「最近的势头<br>也很猛」</div>
+    <div class="d">原推只给了这一句；具体是谁，值得后续深挖</div>
+  </div>
+</div>
+
+<div class="gnote note-sm">地区分档与「675B」为原推说法；「数量最多」「开源权重是主流打法」是本报所加边注。出处：@Gorden_Sun / X / 2026.08.04 剪藏</div>
+
+<div class="bar">
+  <div class="q">版图是天上的事；教室里 AI 已经开始干活了。</div>
+  <div class="next">下一页 → 05</div>
 </div>
 </body>
 </html>

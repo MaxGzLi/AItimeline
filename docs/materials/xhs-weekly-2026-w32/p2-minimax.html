@@ -4,86 +4,45 @@
 <meta charset="utf-8">
 <link rel="stylesheet" href="shared.css">
 <style>
-  h1 { font-size: 72px; }
-  .sec {
-    margin-top: 42px;
-    display: flex;
-    align-items: baseline;
-  }
-  .quote-block { margin-top: 20px; }
-  .reading { margin-top: 22px; }
-  .reading p { margin-top: 16px; }
-  .reading p:first-child { margin-top: 0; }
-  .verdict {
-    margin-top: 34px;
-    font-family: "SourceHeavy";
-    font-size: 26px;
-    line-height: 1.6;
-  }
-  .compare {
-    margin-top: 20px;
-    display: flex;
-    border: 2px solid #1C1B18;
-  }
-  .cmp-cell {
-    flex: 1;
-    padding: 24px 28px 22px;
-  }
-  .cmp-cell + .cmp-cell { border-left: 2px solid #1C1B18; }
-  .cmp-h {
-    font-family: "SourceHeavy";
-    font-size: 22px;
-  }
-  .cmp-b {
-    margin-top: 10px;
-    font-size: 21px;
-    line-height: 1.6;
-    color: #2B2A26;
-  }
-  .cmp-note { margin-top: 12px; }
+  .kicker { background: var(--or-bg); color: var(--or-fg); }
+  .qcard { margin-top: 44px; }
+  .grid2 { margin-top: 26px; }
+  .strip { margin-top: 26px; }
 </style>
 </head>
 <body>
-<div class="page">
-  <div class="masthead">
-    <div class="brand"><span>AITIMELINE</span><b>知识周报</b></div>
-    <div class="pageno">02 / 06</div>
+<div class="head">
+  <div class="badge">AI 知识周报</div>
+  <div class="pgno">02 / 06</div>
+</div>
+
+<div><span class="kicker">深读 / 开源协议</span></div>
+<div class="title">「开源」不等于<span class="red">随便用</span></div>
+
+<div class="qcard">
+  <div class="lab">剪藏原文 / 一字未改</div>
+  <div class="q-body">MiniMax H3 的“开源协议”真 nb，不仅有 Kimi K3 的 revenue 歧视条款，还禁止了美国、欧盟、英国、韩国地区直接使用。。需要跟 MiniMax 签额外的协议才可以用。。</div>
+  <div class="q-src">@yvbbrjdr / X / 2026.08.03</div>
+</div>
+
+<div class="grid2">
+  <div class="card c-or">
+    <span class="chip">卡点 01</span>
+    <div class="kw">四个地区<br>被挡在门外</div>
+    <div class="d">美国、欧盟、英国、韩国想直接用，得跟 MiniMax 另签一份协议</div>
   </div>
-
-  <div class="kicker"><span class="en">DEEP READ</span>深读 · 开源协议</div>
-  <h1>MiniMax H3 的「开源」协议</h1>
-
-  <div class="sec"><span class="seq">01</span><span class="seq-label">原文</span></div>
-  <div class="quote-block">
-    <div class="q-body">MiniMax H3 的“开源协议”真 nb，不仅有 Kimi K3 的 revenue 歧视条款，还禁止了美国、欧盟、英国、韩国地区直接使用。。需要跟 MiniMax 签额外的协议才可以用。。</div>
-    <div class="q-src">@yvbbrjdr / X / 2026-08-03 · 剪藏原文，一字未改</div>
+  <div class="card c-bl">
+    <span class="chip">卡点 02</span>
+    <div class="kw">同款还有<br>Kimi K3</div>
+    <div class="d">revenue 歧视条款不是个例，是一种新的授权姿势</div>
   </div>
+</div>
 
-  <div class="sec"><span class="seq">02</span><span class="seq-label">解读</span></div>
-  <div class="reading body-text">
-    <p>权重公开，不等于随便用。这份协议把 <span class="hl">美国、欧盟、英国、韩国挡在「直接使用」之外</span>——想用，得跟 MiniMax 另签一份协议。</p>
-    <p>协议里还带着 Kimi K3 同款的 revenue 歧视条款。两家先后这么写，说明这不是个例，是一种新的授权姿势。</p>
-  </div>
+<div class="strip">先读协议，再上生产</div>
 
-  <div class="sec"><span class="seq">03</span><span class="seq-label">对比</span></div>
-  <div class="compare">
-    <div class="cmp-cell">
-      <div class="cmp-h">常见开源协议（如 <span class="en">Apache 2.0</span>）</div>
-      <div class="cmp-b">允许自由使用，可以全球部署</div>
-    </div>
-    <div class="cmp-cell">
-      <div class="cmp-h">MiniMax H3 协议</div>
-      <div class="cmp-b">地域限制 + revenue 歧视条款</div>
-    </div>
-  </div>
-  <div class="note cmp-note">对比出自本卡的知识卡跟帖：需要全球部署，选无地域限制的协议；只在允许地区用，影响较小。</div>
-
-  <div class="verdict accent">「开源」二字不再等于放心用——先读协议，再上生产。</div>
-
-  <div class="transition">
-    <div class="q">协议管的是「谁能用」；这些模型本身强在哪？正好这周把 MoE 啃完了。</div>
-    <div class="next">下一页 <span class="en">→ 03</span> · 稀疏激活</div>
-  </div>
+<div class="bar">
+  <div class="q">协议管的是谁能用；模型本身强在哪？</div>
+  <div class="next">下一页 → 03</div>
 </div>
 </body>
 </html>

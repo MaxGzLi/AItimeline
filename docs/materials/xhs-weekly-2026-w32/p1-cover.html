@@ -4,127 +4,49 @@
 <meta charset="utf-8">
 <link rel="stylesheet" href="shared.css">
 <style>
-  .cover-issue {
-    margin-top: 40px;
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-  }
-  .cover-issue .issue-tag {
-    font-family: "Smiley";
-    font-size: 26px;
-    color: #B3402A;
-    letter-spacing: 0.1em;
-  }
-  .cover-issue .date {
-    font-family: "Smiley";
-    font-size: 24px;
-    color: #6B6A66;
-  }
-  .cover-title {
-    margin-top: 26px;
-    font-family: "Huangyou";
-    font-size: 108px;
-    line-height: 1.14;
-    letter-spacing: -0.03em;
-  }
-  .cover-title .en {
-    font-size: 100px;
-    letter-spacing: 0;
-  }
-  .cover-count {
-    margin-top: 30px;
-    font-size: 26px;
-    line-height: 1.7;
-    color: #2B2A26;
-  }
-  .cover-count .num {
-    font-size: 44px;
-    color: #B3402A;
-    margin: 0 4px;
-  }
-  /* 目录格:真序列,对应内页页码 */
-  .toc {
-    margin-top: 52px;
-    border-top: 3px solid #1C1B18;
-  }
-  .toc-row {
-    display: flex;
-    align-items: baseline;
-    gap: 26px;
-    padding: 25px 6px 23px;
-    border-bottom: 1.5px solid #C9C7BF;
-  }
-  .toc-row .no {
-    font-family: "Smiley";
-    font-size: 34px;
-    color: #B3402A;
-    width: 56px;
-  }
-  .toc-row .t {
-    font-family: "SourceHeavy";
-    font-size: 31px;
-    letter-spacing: 0.02em;
-  }
-  .toc-row .t .en { font-size: 30px; }
-  .toc-row .tag {
-    margin-left: auto;
-    font-family: "Wenkai";
-    font-size: 17px;
-    color: #8A8880;
-  }
+  /* 封面:亮黄大字报。黄油体大字 + 红划重点 + 虚线清单 */
+  body { background: var(--yellow); }
+  .badge { color: var(--yellow); }
+  .issue { font-size: 26px; letter-spacing: 1px; }
+  .cover-title { margin-top: 56px; font-family: "Huangyou"; font-size: 150px; line-height: 1.16; letter-spacing: 2px; }
+  .cover-title .hl { position: relative; display: inline-block; }
+  .cover-title .hl::after { content: ""; position: absolute; left: -4px; right: -4px; bottom: 6px; height: 20px;
+    background: var(--red); border-radius: 10px; transform: skewX(-12deg); }
+  .cover-title .num { color: var(--red); }
+  .pills { margin-top: 56px; display: flex; gap: 22px; }
+  .pill { border: 4px solid var(--ink); border-radius: 999px; padding: 14px 30px; font-size: 30px; background: #FFF6C9; }
+  .list { margin-top: 52px; }
+  .row { display: flex; align-items: baseline; gap: 26px; padding: 24px 0; border-bottom: 4px dashed var(--ink); }
+  .row:first-child { border-top: 4px dashed var(--ink); }
+  .row .no { font-family: "Huangyou"; font-size: 44px; color: var(--red); }
+  .row .t { font-size: 40px; letter-spacing: 1px; }
+  .foot { position: absolute; left: 64px; right: 64px; bottom: 56px; display: flex; align-items: center; justify-content: space-between; }
+  .swipe { background: var(--ink); color: #FFFFFF; border-radius: 18px; padding: 22px 40px; font-size: 34px; letter-spacing: 2px; }
+  .src { font-family: "SourceLight"; font-size: 24px; }
 </style>
 </head>
 <body>
-<div class="page">
-  <div class="masthead">
-    <div class="brand"><span>AITIMELINE</span><b>知识周报</b></div>
-    <div class="pageno">01 / 06</div>
-  </div>
+<div class="head">
+  <div class="badge" style="font-size:32px; padding:16px 36px;">AI 知识周报</div>
+  <div class="issue">VOL.01 / 2026.W32</div>
+</div>
 
-  <div class="cover-issue">
-    <div class="issue-tag">ISSUE 01</div>
-    <div class="date">2026.08.03 — 08.09</div>
-  </div>
+<div class="cover-title">这周<span class="hl">摸鱼</span>刷X<br>捞回<span class="num">16张</span><br>知识卡</div>
 
-  <div class="cover-title">这周摸鱼刷 <span class="en">X</span>，<br>捞回一沓知识卡</div>
+<div class="pills">
+  <div class="pill">9 张来自剪藏</div>
+  <div class="pill">全部带出处</div>
+</div>
 
-  <div class="cover-count">
-    本周新攒 <span class="num">16</span> 张卡，其中 <span class="num">9</span> 张是刷推时顺手存下的。
-  </div>
+<div class="list">
+  <div class="row"><span class="no">01</span><span class="t">MiniMax「开源」协议，先读再用</span></div>
+  <div class="row"><span class="no">02</span><span class="t">671B 参数，为何只激活 37B</span></div>
+  <div class="row"><span class="no">03</span><span class="t">AI 批改作业，教室里先跑起来了</span></div>
+</div>
 
-  <div class="toc">
-    <div class="toc-row">
-      <div class="no">02</div>
-      <div class="t">MiniMax H3 的「开源」协议</div>
-      <div class="tag">深读</div>
-    </div>
-    <div class="toc-row">
-      <div class="no">03</div>
-      <div class="t"><span class="en">671B</span> 参数，为何只激活 <span class="en">37B</span></div>
-      <div class="tag">硬核</div>
-    </div>
-    <div class="toc-row">
-      <div class="no">04</div>
-      <div class="t">全球 <span class="en">LLM</span> 版图</div>
-      <div class="tag">盘点</div>
-    </div>
-    <div class="toc-row">
-      <div class="no">05</div>
-      <div class="t">AI 批改作业，教室里先跑起来了</div>
-      <div class="tag">落地</div>
-    </div>
-    <div class="toc-row">
-      <div class="no">06</div>
-      <div class="t">本周数字备忘</div>
-      <div class="tag">收藏</div>
-    </div>
-  </div>
-
-  <div class="transition">
-    <div class="q">先从这周开源圈吵得最凶的一条说起。</div>
-    <div class="next">下一页 <span class="en">→ 02</span> · MiniMax H3</div>
-  </div>
+<div class="foot">
+  <div class="src">刷推顺手存，观察员整理成卡</div>
+  <div class="swipe">左滑 6 页 →</div>
 </div>
 </body>
 </html>
