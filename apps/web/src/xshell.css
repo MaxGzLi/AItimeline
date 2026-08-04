@@ -2829,3 +2829,400 @@ button.x-chip {
 @media (max-width: 700px) {
   .x-goal-form { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* ---------- 任务客户端(桌面基地第一屏) ----------
+   左栏任务列表 + 右栏任务详情。用全站既有的 --x- 变量,不另起一套配色;
+   保持扁平:细分割线、无阴影、状态用字符点不用彩色徽章。 */
+.x-task-client {
+  /* Codex 的强调色:浅底 rgb(0,95,135),深底青色。它自己是按终端底色亮度切的。 */
+  --x-task-accent: #005f87;
+  display: grid;
+  grid-template-columns: 340px minmax(0, 1fr);
+  height: 100vh;
+  background: var(--x-bg);
+  color: var(--x-ink);
+  font-size: 15px;
+  line-height: 1.3333;
+}
+:root[data-theme="dark"] .x-task-client { --x-task-accent: #4fd6e0; }
+
+.x-task-side {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--x-line);
+}
+
+.x-task-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 53px;
+  padding: 0 16px;
+  flex: none;
+  border-bottom: 1px solid var(--x-line);
+}
+.x-task-logo {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 800;
+  background: var(--x-btn-bg);
+  color: var(--x-btn-ink);
+}
+.x-task-brandname {
+  font-size: 15px;
+  font-weight: 700;
+}
+.x-task-counts {
+  margin-left: auto;
+  display: flex;
+  gap: 10px;
+  font-size: 12px;
+  font-style: normal;
+}
+.x-task-counts em { font-style: normal; color: var(--x-muted); }
+.x-task-counts em.running { color: var(--x-blue); }
+.x-task-counts em.failed { color: var(--x-red); }
+
+/* 派活框:照 Codex 的 composer——不画边框,底色跟「一条还没发出去的用户消息」
+   同一个(浅色叠 4% 黑,深色叠 12% 白),左边一个加粗的 › 提示符。 */
+.x-task-dispatch {
+  flex: none;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px 12px 12px 14px;
+  background: rgba(15, 20, 25, 0.04);
+  border-bottom: 1px solid var(--x-line);
+}
+:root[data-theme="dark"] .x-task-dispatch { background: rgba(231, 233, 234, 0.12); }
+.x-task-caret {
+  flex: none;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.5;
+  color: var(--x-task-accent);
+}
+.x-task-dispatch-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  resize: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  line-height: 1.4;
+  padding: 4px 0;
+}
+.x-task-dispatch-input::placeholder { color: var(--x-muted); }
+.x-task-dispatch-send {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: var(--x-btn-bg);
+  color: var(--x-btn-ink);
+  cursor: pointer;
+}
+.x-task-dispatch-send:disabled { opacity: 0.4; cursor: default; }
+.x-task-spin { animation: x-task-spin 1s linear infinite; }
+@keyframes x-task-spin { to { transform: rotate(360deg); } }
+
+.x-task-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.x-task-groupname {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: 0;
+  padding: 10px 16px 6px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--x-muted);
+  background: var(--x-bg);
+}
+.x-task-row {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 16px;
+  border: none;
+  border-bottom: 1px solid var(--x-line);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.x-task-row:hover { background: var(--x-hover); }
+.x-task-row.active { background: var(--x-hover); }
+.x-task-dot {
+  flex: none;
+  width: 14px;
+  padding-top: 1px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--x-muted);
+}
+.x-task-dot.running { color: var(--x-blue); }
+.x-task-dot.succeeded { color: var(--x-repost); }
+.x-task-dot.failed { color: var(--x-red); }
+.x-task-rowbody {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.x-task-rowtitle {
+  font-size: 14px;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.x-task-rowmeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--x-muted);
+}
+.x-task-rowmeta em { font-style: normal; }
+.x-task-rowmeta em.you { color: var(--x-ink); font-weight: 600; }
+.x-task-rowmeta .failed { color: var(--x-red); }
+
+/* 旧的八个视图:降为次级入口,收在左栏底部。 */
+.x-task-secondary {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 8px 10px 10px;
+  border-top: 1px solid var(--x-line);
+}
+.x-task-secondary button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 999px;
+  background: none;
+  color: var(--x-muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.x-task-secondary button:hover { background: var(--x-hover); color: var(--x-ink); }
+
+.x-task-detail {
+  min-width: 0;
+  overflow-y: auto;
+}
+.x-task-detailbody {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 28px 40px 64px;
+}
+.x-task-detailhead { border-bottom: 1px solid var(--x-line); padding-bottom: 16px; }
+.x-task-kicker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0 0 6px;
+  font-size: 13px;
+  color: var(--x-muted);
+}
+.x-task-detailhead h1 {
+  margin: 0;
+  font-size: 23px;
+  font-weight: 800;
+  line-height: 1.25;
+}
+.x-task-reason {
+  margin: 10px 0 0;
+  color: var(--x-muted);
+  font-size: 14px;
+  line-height: 1.45;
+}
+.x-task-retry {
+  margin-top: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border: 1px solid var(--x-line);
+  border-radius: 999px;
+  background: none;
+  color: var(--x-ink);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.x-task-retry:hover { background: var(--x-hover); }
+.x-task-retry:disabled { opacity: 0.5; cursor: default; }
+
+/* 步骤流:照 Codex 的历史单元——每步一个 • 前缀,附属行走 │ / └ 的槽,
+   一轮结束是一整行淡横线带一句话。等宽字体让它读起来就是一份执行记录。 */
+.x-task-steps {
+  list-style: none;
+  margin: 20px 0 0;
+  padding: 0;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.x-task-step {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  padding-bottom: 10px;
+}
+.x-task-bullet { color: var(--x-muted); }
+.x-task-step.succeeded .x-task-bullet { color: var(--x-repost); font-weight: 700; }
+.x-task-step.failed .x-task-bullet { color: var(--x-red); font-weight: 700; }
+.x-task-step.claimed .x-task-bullet { color: var(--x-task-accent); font-weight: 700; }
+.x-task-steptext { min-width: 0; }
+.x-task-stepline { display: block; }
+.x-task-step.failed .x-task-stepline { color: var(--x-red); }
+.x-task-steptext em {
+  font-style: normal;
+  color: var(--x-muted);
+  margin-left: 8px;
+}
+.x-task-steptext em.at { font-variant-numeric: tabular-nums; }
+.x-task-stepitems {
+  display: flex;
+  flex-direction: column;
+  margin-top: 2px;
+}
+.x-task-stepitem {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+  color: var(--x-muted);
+}
+.x-task-gutter { flex: none; width: 12px; }
+.x-task-stepitem a,
+.x-task-stepitem > span:not(.x-task-gutter) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.x-task-stepitem a { color: var(--x-task-accent); text-decoration: none; }
+.x-task-stepitem a:hover { text-decoration: underline; }
+.x-task-stepitem em {
+  font-style: normal;
+  margin-left: auto;
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 收尾横线:Codex 的「─ Worked for 2m 05s ────…」。 */
+.x-task-rule {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 2px;
+  color: var(--x-muted);
+}
+.x-task-rule::before,
+.x-task-rule::after {
+  content: "";
+  height: 1px;
+  background: var(--x-line);
+}
+.x-task-rule::before { width: 16px; flex: none; }
+.x-task-rule::after { flex: 1; }
+.x-task-ruletext { white-space: nowrap; }
+.x-task-rule.failed { color: var(--x-red); }
+
+.x-task-produced { margin-top: 12px; }
+.x-task-produced h2 {
+  margin: 0 0 12px;
+  font-size: 15px;
+  font-weight: 700;
+}
+.x-task-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  margin-bottom: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--x-line);
+  border-radius: 16px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.x-task-card:hover { background: var(--x-hover); }
+.x-task-cardtitle { font-size: 15px; font-weight: 700; line-height: 1.3; }
+.x-task-cardtake { font-size: 14px; line-height: 1.45; }
+.x-task-cardquote {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--x-muted);
+  padding-left: 10px;
+  border-left: 2px solid var(--x-line);
+}
+.x-task-cardsource { font-size: 12px; color: var(--x-muted); }
+
+.x-task-empty,
+.x-task-error {
+  margin: 0;
+  padding: 16px;
+  font-size: 14px;
+  color: var(--x-muted);
+}
+.x-task-error { color: var(--x-red); }
+
+@media (max-width: 900px) {
+  .x-task-client { grid-template-columns: minmax(0, 1fr); }
+  .x-task-side { border-right: none; border-bottom: 1px solid var(--x-line); max-height: 45vh; }
+  .x-task-client { height: auto; min-height: 100vh; }
+  .x-task-detailbody { padding: 20px 16px 48px; }
+}
+
+/* 观察员的回话:照 Codex 的 agent 消息——• 前缀,正文不额外上色,引文压一档。 */
+.x-task-replywrap { padding-bottom: 0; }
+.x-task-reply {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  padding: 16px 0;
+  border-bottom: 1px solid var(--x-line);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.x-task-replytext {
+  margin: 0;
+  white-space: pre-wrap;
+}
+.x-task-replyquote {
+  margin: 10px 0 0;
+  padding-left: 10px;
+  border-left: 2px solid var(--x-line);
+  color: var(--x-muted);
+}
+.x-task-replyquote em {
+  display: block;
+  margin-top: 4px;
+  font-style: normal;
+}

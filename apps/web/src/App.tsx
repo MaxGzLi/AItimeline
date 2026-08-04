@@ -38,6 +38,7 @@ import {
   Compass,
   GitBranch,
   Home,
+  ListChecks,
   Newspaper,
   Pause,
   PenLine,
@@ -52,6 +53,7 @@ import type { SupplyRefillState } from "./components/SupplyDroughtCard";
 import { buildWikilinkAutocompleteCandidates } from "./components/WikilinkAutocomplete";
 import { DiscoverView } from "./views/DiscoverView";
 import { AgentView } from "./views/AgentView";
+import { TaskClientView } from "./views/TaskClientView";
 import { BaseView } from "./views/BaseView";
 import { DeepReadView } from "./views/DeepReadView";
 import { GraphView } from "./views/GraphView";
@@ -76,6 +78,7 @@ import {
 } from "./lib/format";
 import { normalizeLanguage, setI18nLanguage, t, type Language } from "./lib/i18n";
 import { buildCardNeighborhoodGraph } from "./lib/localGraph";
+import { useAgentTasks } from "./lib/useAgentTasks";
 import {
   createInteractionSignal,
   createSignalSignature,
@@ -137,10 +140,22 @@ import type {
   WorkerStatus
 } from "./lib/types";
 
-type ViewKey = "base" | "timeline" | "discover" | "graph" | "review" | "notifications" | "agent" | "settings" | "deepread";
+type ViewKey =
+  | "tasks"
+  | "base"
+  | "timeline"
+  | "discover"
+  | "graph"
+  | "review"
+  | "notifications"
+  | "agent"
+  | "settings"
+  | "deepread";
 
 const languageStorageKey = "aitl-language";
 
+// 任务客户端是首屏,不在这个列表里:它自带左栏,下面这八项在它的左栏底部
+// 作为次级入口出现,离开任务客户端后又是原来那条导航条。
 const navItems: Array<{ key: ViewKey; labelKey: string; icon: typeof Home }> = [
   { key: "base", labelKey: "nav.base", icon: Home },
   { key: "timeline", labelKey: "nav.timeline", icon: Newspaper },
@@ -153,6 +168,7 @@ const navItems: Array<{ key: ViewKey; labelKey: string; icon: typeof Home }> = [
 ];
 
 const viewTitleKeys: Record<ViewKey, { title: string; sub?: string }> = {
+  tasks: { title: "tasks.nav" },
   base: { title: "nav.base", sub: "nav.baseSub" },
   timeline: { title: "nav.timeline" },
   discover: { title: "nav.discover", sub: "nav.discoverSub" },
@@ -243,8 +259,9 @@ export function App() {
   const [learningGoalMessage, setLearningGoalMessage] = useState(() => t("goals.message.default"));
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
   const [conceptView, setConceptView] = useState<string | null>(null);
-  // 基地是默认首屏:先看 agent 替你干了什么,信息流退居导航里的一个标签页。
-  const [activeView, setActiveView] = useState<ViewKey>("base");
+  // 任务客户端是默认首屏:先看观察员替你干了什么、干到哪一步了。
+  const [activeView, setActiveView] = useState<ViewKey>("tasks");
+  const agentTasks = useAgentTasks(activeView === "tasks");
   const [graphRequestedTab, setGraphRequestedTab] = useState<"graph" | "boundary" | "skillTree">("graph");
   const [feedTab, setFeedTab] = useState<"foryou" | "latest" | "saved">("foryou");
   const [topicFilter, setTopicFilter] = useState<TopicFilterKey>("all");
@@ -2611,19 +2628,76 @@ export function App() {
     </p>
   ) : null;
 
+  // 任务客户端自带左右两栏,不走三栏外壳;八个旧视图收进它左栏底部的次级入口。
+  if (activeView === "tasks") {
+    return (
+      <TaskClientView
+        detail={agentTasks.detail}
+        detailLoading={agentTasks.detailLoading}
+        dispatchError={agentTasks.dispatchError}
+        dispatchPending={agentTasks.dispatchPending}
+        dispatchText={agentTasks.dispatchText}
+        failedCount={agentTasks.failedCount}
+        lastReply={agentTasks.lastReply}
+        listError={agentTasks.listError}
+        onDispatchSubmit={(event) => {
+          event.preventDefault();
+          void agentTasks.dispatchTask(agentTasks.dispatchText);
+        }}
+        onDispatchTextChange={agentTasks.setDispatchText}
+        onOpenCard={showDetail}
+        onRetry={(taskId) => void agentTasks.retryTask(taskId)}
+        onSelectTask={agentTasks.selectTask}
+        retryingId={agentTasks.retryingId}
+        runningCount={agentTasks.runningCount}
+        secondaryNav={navItems.map((item) => (
+          <button
+            key={item.key}
+            onClick={() => {
+              setActiveView(item.key);
+              setSelectedCardId(null);
+            }}
+            type="button"
+          >
+            <item.icon size={15} strokeWidth={1.9} />
+            <span>{t(item.labelKey)}</span>
+          </button>
+        ))}
+        selectedTaskId={agentTasks.selectedTaskId}
+        tasks={agentTasks.tasks}
+        tasksLoading={agentTasks.tasksLoading}
+      />
+    );
+  }
+
   return (
     <div className="x-frame">
       <nav className="x-navrail" aria-label={t("nav.main")}>
         <button
           className="x-logo"
           onClick={() => {
-            setActiveView("base");
+            setActiveView("tasks");
             setSelectedCardId(null);
           }}
           title="AITimeline"
           type="button"
         >
           AI
+        </button>
+        <button
+          aria-label={t("tasks.nav")}
+          className="x-navbtn"
+          onClick={() => {
+            setActiveView("tasks");
+            setSelectedCardId(null);
+          }}
+          title={t("tasks.nav")}
+          type="button"
+        >
+          <span className="x-navicon">
+            <ListChecks size={26} strokeWidth={1.9} />
+          </span>
+          <span className="x-navlabel">{t("tasks.nav")}</span>
         </button>
         {navItems.map((item) => {
           const label = t(item.labelKey);
