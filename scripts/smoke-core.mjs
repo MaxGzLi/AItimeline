@@ -2778,26 +2778,29 @@ const validateSummaryAgainstEvidence = (summary, evidenceText) => {
   return validateGrounding({ ...contractCard, summary }, probeRegistry);
 };
 
+// Anchor-style grounding (2026-08-03, docs/specs/2026-08-03-anchor-grounding.md):
+// a fabricated predicate on a real entity is an accepted trade-off; the nets that
+// remain deterministic are fabricated entities, numbers, direction and negation.
 const aspirinHallucination = validateSummaryAgainstEvidence(
-  "Aspirin guarantees immortality and cures cancer.",
+  "Aspirin guarantees immortality thanks to Telomerase-X.",
   "Aspirin can reduce ordinary pain."
 );
 
 assert.equal(
   aspirinHallucination.checks.find((check) => check.fieldPath === "$.summary")?.status,
   "failed",
-  "a single shared noun must not support an unrelated strong factual claim"
+  "a single shared noun must not support a claim that introduces a fabricated entity"
 );
 
 const appendedAspirinHallucination = validateSummaryAgainstEvidence(
-  "Aspirin can reduce ordinary pain, guaranteeing immortality.",
+  "Aspirin can reduce ordinary pain, curing 90% of patients.",
   "Aspirin can reduce ordinary pain."
 );
 
 assert.equal(
   appendedAspirinHallucination.checks.find((check) => check.fieldPath === "$.summary")?.status,
   "failed",
-  "a supported clause must not mask an appended unsupported factual clause"
+  "a supported clause must not mask an appended clause with an unsupported number"
 );
 
 const reversedDirectionGrounding = validateSummaryAgainstEvidence(
@@ -3020,18 +3023,47 @@ assert.equal(
   "NFKC/punctuation/whitespace normalization should preserve the CJK full-substring fast path"
 );
 
+// Anchor-style grounding (2026-08-03): these boundary probes must hold in the
+// card gate's anchor mode — they are exactly the nets that mode keeps.
 for (const [claim, evidence, label] of [
   ["RAG", "Storage improves retrieval.", "Latin token boundary"],
   ["The model is not able.", "The model is notable.", "negation word boundary"],
   ["C# enables managed code.", "C enables managed code.", "technical symbol"],
-  ["A/B testing is useful.", "AB testing is useful.", "slash symbol"],
+  ["A/B testing is useful.", "AB testing is useful.", "slash symbol"]
+]) {
+  assert.equal(
+    validateClaimSupport(claim, [evidence], {
+      minOverlap: 1,
+      minimumSharedTokens: 1,
+      supportMode: "anchors"
+    }).supported,
+    false,
+    `${label} changes must not pass normalized or set-overlap support`
+  );
+}
+
+// Anchor-style grounding (2026-08-03): under the card gate's anchor mode, pure
+// word-order reversals carry no numeric, polarity or entity violation, so they
+// pass — a documented trade-off of docs/specs/2026-08-03-anchor-grounding.md,
+// accepted in exchange for letting grounded paraphrase through at all. Callers
+// on the default ordered mode (deep-read, briefs, Q&A) still reject them.
+for (const [claim, evidence, label] of [
   ["Bob defeated Alice.", "Alice defeated Bob.", "ordered participant roles"],
   ["Dog bites man bites dog.", "Dog bites man.", "repeated participant tail"]
 ]) {
   assert.equal(
+    validateClaimSupport(claim, [evidence], {
+      minOverlap: 1,
+      minimumSharedTokens: 1,
+      supportMode: "anchors"
+    }).supported,
+    true,
+    `${label} is beyond the deterministic anchor nets (documented trade-off)`
+  );
+  assert.equal(
     validateClaimSupport(claim, [evidence], { minOverlap: 1, minimumSharedTokens: 1 }).supported,
     false,
-    `${label} changes must not pass normalized or set-overlap support`
+    `${label} must still fail for callers on the default ordered mode`
   );
 }
 
@@ -3119,13 +3151,15 @@ const highCopyExampleRegistry = {
       : chunk
   )
 };
+// Anchor-style grounding (2026-08-03): the fabricated tail must carry an anchor
+// (Telomere-X) to stay detectable; an anchor-free tail is a documented trade-off.
 const highCopyExampleCard = {
   ...contractCard,
   thread: contractCard.thread.map((block) =>
     block.kind === "example"
       ? {
           ...block,
-          body: "Aspirin provides ordinary pain relief for adults under clinical guidance guaranteeing immortality."
+          body: "Aspirin provides ordinary pain relief for adults under clinical guidance via Telomere-X."
         }
       : block
   )

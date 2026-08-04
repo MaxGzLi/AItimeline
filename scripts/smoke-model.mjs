@@ -330,9 +330,12 @@ assert.ok(
 
 let overlapRepairCalls = 0;
 let overlapRepairPrompt = "";
+// Anchor-style grounding (2026-08-03): an anchor-free pure-Chinese paraphrase now
+// passes as narrative, so the repairable overlap failure is a Latin anchor term
+// the cited evidence never mentions.
 const weakOverlapPost = {
   ...zhModelPost,
-  summary: "这句话只用中文转述，遗漏了被引证据里的关键术语。"
+  summary: "这句话只用中文转述，把 prompt cache 说成了文章的核心机制。"
 };
 const overlapRepairRunner = createModelKnowledgePostRunner({
   contentLanguage: "zh",
@@ -368,6 +371,11 @@ assert.match(
   overlapRepairPrompt,
   /Source fact does not overlap enough with cited evidence/,
   "repair prompt should include the weak overlap validation issue"
+);
+assert.match(
+  overlapRepairPrompt,
+  /add the chunk that names the term to that block's citations/,
+  "repair prompt should teach citation retargeting for missing entities and terms"
 );
 assert.equal(overlapRepairResult.run.status, "succeeded", "source-fact overlap repair output should pass");
 assert.equal(overlapRepairResult.posts.length, 1, "source-fact overlap repair should keep the repaired post");

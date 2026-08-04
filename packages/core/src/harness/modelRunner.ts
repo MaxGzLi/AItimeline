@@ -184,6 +184,11 @@ function buildInitialMessages(
         "- Every post must include citations with registered sourceId and chunkId values.",
         "- Source facts must be supported by cited chunks; do not invent claims outside the source.",
         "- Every numeric token in source-fact fields must appear verbatim in that card's cited chunks. Digits inside names count (GPT-4o contains 4, Claude-3.5 contains 3.5): if a cited chunk does not contain the token, do not write it.",
+        "- Every proper noun and technical term in a claim must appear in a chunk that same claim cites. A thread block is checked against the card's citations plus that block's own citations, so before finishing a block, scan its text for proper nouns and Latin technical terms: each one must appear in a chunk the card cites or that block cites. If it does not, add a citation for the chunk that contains it (a block may cite several chunks) or drop the term.",
+        "- reviewPrompts and graphEdges carry no citations of their own and are checked against the card-level citations only: keep them to terms and numbers that appear in the chunks the card cites.",
+        "- Only claim an increase or decrease when a cited chunk states that direction in words (grows, drops, higher, 增长, 下降...); if the evidence states a comparison without direction words, mirror the evidence's wording instead of adding a direction.",
+        "- Example and quiz blocks follow the same rules: build worked examples from numbers and terms that appear in the chunks that block cites, or keep them free of specific figures (\"几个 token\" instead of \"3 个 token\"). Never invent toy numbers.",
+        "- The prior-knowledge bridge (\"你之前了解过 X\") may name X only when X appears in a chunk the card or that block cites. The learner's other known concepts are not in this source: bridge to them without naming them (\"你之前接触过类似的机制\").",
         "- Each thread must include explain, example, contrast, extension, and quiz blocks.",
         ...formatThreadDepthRequirements(contentLanguage),
         "- Use graphEdges for durable concept links that can power review and recommendation.",
@@ -200,6 +205,11 @@ function buildInitialMessages(
         "- Every post must include citations with registered sourceId and chunkId values.",
         "- Source facts must be supported by cited chunks; do not invent claims outside the source.",
         "- Every numeric token in source-fact fields must appear verbatim in that card's cited chunks. Digits inside names count (GPT-4o contains 4, Claude-3.5 contains 3.5): if a cited chunk does not contain the token, do not write it.",
+        "- Every proper noun and technical term in a claim must appear in a chunk that same claim cites. A thread block is checked against the card's citations plus that block's own citations, so before finishing a block, scan its text for proper nouns and Latin technical terms: each one must appear in a chunk the card cites or that block cites. If it does not, add a citation for the chunk that contains it (a block may cite several chunks) or drop the term.",
+        "- reviewPrompts and graphEdges carry no citations of their own and are checked against the card-level citations only: keep them to terms and numbers that appear in the chunks the card cites.",
+        "- Only claim an increase or decrease when a cited chunk states that direction in words (grows, drops, higher, 增长, 下降...); if the evidence states a comparison without direction words, mirror the evidence's wording instead of adding a direction.",
+        "- Example and quiz blocks follow the same rules: build worked examples from numbers and terms that appear in the chunks that block cites, or keep them free of specific figures (\"几个 token\" instead of \"3 个 token\"). Never invent toy numbers.",
+        "- The prior-knowledge bridge (\"你之前了解过 X\") may name X only when X appears in a chunk the card or that block cites. The learner's other known concepts are not in this source: bridge to them without naming them (\"你之前接触过类似的机制\").",
         "- Each thread must include explain, example, contrast, extension, and quiz blocks.",
         ...formatThreadDepthRequirements(contentLanguage),
         "- Use graphEdges for durable concept links that can power review and recommendation.",
@@ -319,6 +329,18 @@ function buildRepairPrompt(
           : "For weak source-fact overlap: when rewriting the failing field, keep key English terms and numbers from the cited chunks verbatim as anchors (method names, model names, metric names, etc.), then organize the Simplified Chinese wording around those anchors. Do not use a pure-Chinese paraphrase for source facts."
       ]
     : [];
+  const entityGuidance = hasUnsupportedEntityValidationError(validation)
+    ? [
+        "",
+        "For proper nouns or technical terms missing from cited evidence: every named entity and technical term in a claim must literally appear in a chunk that same claim cites. The issue path tells you where to add the citation — a $.thread[i] path is checked against the card's citations plus thread[i].citations, so add the chunk that names the term to that block's citations (with a verbatim quote from it); a $.summary, $.keyTakeaway, $.graphEdges or $.reviewPrompts path is checked against the card-level citations, so add the chunk there. If the source has no chunk naming the term, drop the term from that claim."
+      ]
+    : [];
+  const directionGuidance = hasDirectionValidationError(validation)
+    ? [
+        "",
+        "For direction mismatches: the claim asserts an increase or decrease that its cited chunks never state in words. Either cite the chunk that states the direction, or rewrite the claim to mirror the evidence's own comparison wording without adding a direction."
+      ]
+    : [];
 
   return [
     "The previous JSON response failed the AITimeline harness.",
@@ -327,6 +349,8 @@ function buildRepairPrompt(
     ...truncationGuidance,
     ...numberGuidance,
     ...overlapGuidance,
+    ...entityGuidance,
+    ...directionGuidance,
     "",
     "Validation issues:",
     JSON.stringify(
@@ -362,6 +386,20 @@ function hasNumberMismatchValidationError(validation: readonly HarnessValidation
 function hasSourceFactOverlapValidationError(validation: readonly HarnessValidationResult[]): boolean {
   return validation.some((result) =>
     result.issues.some((issue) => /Source fact does not overlap enough with cited evidence/i.test(issue.message))
+  );
+}
+
+function hasUnsupportedEntityValidationError(validation: readonly HarnessValidationResult[]): boolean {
+  return validation.some((result) =>
+    result.issues.some((issue) =>
+      /(?:proper nouns|technical terms) that do not appear in cited evidence/i.test(issue.message)
+    )
+  );
+}
+
+function hasDirectionValidationError(validation: readonly HarnessValidationResult[]): boolean {
+  return validation.some((result) =>
+    result.issues.some((issue) => /uses an? (?:increase|decrease).+direction that does not match/i.test(issue.message))
   );
 }
 

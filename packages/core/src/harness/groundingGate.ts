@@ -25,6 +25,27 @@ export interface ClaimSupportOptions {
   checkNegation?: boolean;
   requireClaimPolarityCue?: boolean;
   allowBeyondSource?: boolean;
+  /**
+   * Final-gate strictness for prose that survives the numeric/direction/
+   * negation/proper-noun checks (docs/specs/2026-08-03-anchor-grounding.md):
+   * - "ordered" (default): every meaningful claim token must appear in order
+   *   in the closest evidence candidate — near-extraction only. Kept for
+   *   near-extractive surfaces with deterministic fallbacks (deep-read
+   *   paragraphs, concept briefs, grounded Q&A).
+   * - "anchors": only fact anchors (Latin terms inside CJK prose, technical
+   *   symbol tokens) must be traceable; narrative wording is free. Used by the
+   *   knowledge-card gate, whose hook/metaphor/thread genre is paraphrase.
+   */
+  supportMode?: "ordered" | "anchors";
+  /**
+   * Quiz bodies enumerate deliberately wrong choices ("A. 增加容量；B. 减少
+   * 容量"). With this on, a clause that starts with an option marker (A.–E.)
+   * skips the direction and negation comparison — offering a choice asserts
+   * nothing about the source. Entities, numbers and Latin anchors inside the
+   * option are still checked. Enabled only for question-kind claims; the answer
+   * and its rationale are ordinary clauses and stay fully checked.
+   */
+  exemptChoiceOptionPolarity?: boolean;
 }
 
 export interface ClaimSupportResult {
@@ -97,7 +118,9 @@ export function validateGrounding(
   const citationIssues = validateCitationsAgainstRegistry(post.citations, registry);
   const threadCitationIssues = validateThreadCitationQuotes(post, registry);
   const claims = createSourceClaims(post);
-  const checks = claims.map((claim) => validateClaimGrounding(claim, post, registry, post.citations, gateOptions));
+  const checks = claims.map((claim) =>
+    validateClaimGrounding(claim, post, registry, resolveClaimCitations(post, claim.fieldPath), gateOptions)
+  );
   const checkIssues = checks.flatMap((check) => checkToIssues(check));
   const issues = [...citationIssues, ...threadCitationIssues, ...checkIssues];
 
@@ -107,6 +130,27 @@ export function validateGrounding(
     checks,
     issues
   };
+}
+
+// A thread block carries its own citations, and they were never used as evidence:
+// every block was graded against the card-level list alone, so a block that
+// correctly cited the chunk naming its entity still failed on that entity. A
+// block's evidence is the card's citations plus its own — the card's citations
+// carry the shared subject, the block's carry what that block adds.
+function resolveClaimCitations(post: KnowledgePost, fieldPath: string): Citation[] | undefined {
+  const blockIndex = Number(fieldPath.match(/^\$\.thread\[(\d+)\]\./)?.[1]);
+  const blockCitations = Number.isInteger(blockIndex) ? post.thread[blockIndex]?.citations : undefined;
+
+  if (!blockCitations?.length) {
+    return post.citations;
+  }
+
+  const cited = new Set((post.citations ?? []).map((citation) => `${citation.sourceId}::${citation.chunkId}`));
+
+  return [
+    ...(post.citations ?? []),
+    ...blockCitations.filter((citation) => !cited.has(`${citation.sourceId}::${citation.chunkId}`))
+  ];
 }
 
 export function createSourceClaims(post: KnowledgePost): SourceClaim[] {
@@ -346,13 +390,17 @@ function getClaimSupportOptions(
   claim: SourceClaim,
   options: GroundingGateOptions
 ): ClaimSupportOptions {
+  // Every card field opts into anchor-style support: the card genre
+  // (hook/metaphor/thread) is paraphrase by design, so only fact anchors are
+  // held to verbatim traceability (docs/specs/2026-08-03-anchor-grounding.md).
   if (claim.fieldPath === "$.recommendedBecause") {
     return {
       minOverlap: 1,
       minimumSharedTokens: 1,
       checkProperNouns: true,
       checkDirection: true,
-      checkNegation: true
+      checkNegation: true,
+      supportMode: "anchors"
     };
   }
 
@@ -365,7 +413,9 @@ function getClaimSupportOptions(
       checkNegation: true,
       // A question can still assert a false premise. If its recalled evidence
       // is negated, omitting that negation is a deterministic contradiction.
-      requireClaimPolarityCue: false
+      requireClaimPolarityCue: false,
+      supportMode: "anchors",
+      exemptChoiceOptionPolarity: true
     };
   }
 
@@ -374,14 +424,16 @@ function getClaimSupportOptions(
       minOverlap: 1,
       minimumSharedTokens: 1,
       checkProperNouns: true,
-      requireClaimPolarityCue: true
+      requireClaimPolarityCue: true,
+      supportMode: "anchors"
     };
   }
 
   return {
     minOverlap: 1,
     minimumSharedTokens: 2,
-    checkProperNouns: true
+    checkProperNouns: true,
+    supportMode: "anchors"
   };
 }
 
@@ -535,9 +587,39 @@ export function validateClaimSupport(
   }
 
   let lowestOverlap = 1;
+  // Clause splitting severs polarity scopes that span clauses: an option marker
+  // from its text ("A. 增加容量" → "A." + "增加容量"), and a hypothesis from its
+  // consequent ("如果…，但发现内存不够" — the second clause no longer starts with
+  // 如果). Both are recovered here by locating each clause in the (glued)
+  // original: a clause preceded by an option marker, or inside a sentence that
+  // opened with a hypothesis marker, skips direction/negation comparison.
+  // Entities, numbers and anchors in it are still checked.
+  const glued = glueShortParentheticals(claim);
+  let cursor = 0;
+  let hypotheticalUntil = -1;
 
   for (const clause of claimClauses) {
-    const support = validateSingleClaimSupport(clause, evidenceClauses, options);
+    let clauseOptions = options;
+    const at = glued.indexOf(clause, cursor);
+
+    if (at >= 0) {
+      cursor = at + clause.length;
+
+      if (isHypotheticalClause(clause)) {
+        const terminator = glued.slice(at).search(/[。．！？!?]|\.(?=\s|$)/u);
+        hypotheticalUntil = terminator >= 0 ? at + terminator : glued.length;
+      }
+
+      const isOption =
+        (options.exemptChoiceOptionPolarity ?? false) &&
+        choiceOptionMarkerBefore.test(glued.slice(Math.max(0, at - 8), at));
+
+      if (isOption || at < hypotheticalUntil) {
+        clauseOptions = { ...options, checkDirection: false, checkNegation: false };
+      }
+    }
+
+    const support = validateSingleClaimSupport(clause, evidenceClauses, clauseOptions);
     lowestOverlap = Math.min(lowestOverlap, support.overlapScore);
 
     if (!support.supported) {
@@ -584,16 +666,26 @@ function validateSingleClaimSupport(
   const candidates = evidence.flatMap(splitEvidenceCandidates);
   const bestEvidence = selectBestEvidenceCandidate(claim, candidates);
   const overlapScore = bestEvidence ? calculateOverlapScore(claim, bestEvidence) : 0;
-  const localEvidence = bestEvidence ? [bestEvidence] : evidence;
+  // Clause-local number checking assumes the closest candidate really is the
+  // aligned sentence. Across scripts there is nothing to align on — a Chinese
+  // clause shares at most a Latin term with its English source sentence — so the
+  // selected clause is close to arbitrary and locality rejects true restatements
+  // ("其中 2 个共享处理所有 token" vs "Two are shared and process every token").
+  // When claim and candidate are written in different scripts, numbers fall back
+  // to the whole cited evidence. Accepted cost: a cross-language claim can pair a
+  // number with the wrong subject inside the same citation; same-script claims
+  // keep the strict clause-local rule that blocks borrowed numbers.
+  const numericEvidence =
+    bestEvidence && !isCrossScriptPair(claim, bestEvidence) ? [bestEvidence] : evidence;
   const claimTokens = Array.from(new Set(tokenize(claim)));
   const evidenceTokens = new Set(tokenize(bestEvidence ?? ""));
   const sharedTokenCount = claimTokens.filter((token) => evidenceTokens.has(token)).length;
-  const orderedLexicalSupport = bestEvidence ? hasOrderedLexicalSupport(claim, bestEvidence) : false;
   const minimumSharedTokens = options.minimumSharedTokens ?? Math.min(2, claimTokens.length);
   const candidateWasRecalled = sharedTokenCount >= Math.max(1, minimumSharedTokens);
   const claimHasPolarityCue =
     hasNegation(claim) || collectDirections(claim).size > 0 || extractNumericTokens(claim).length > 0;
-  const ungroundedNumbers = findUngroundedNumericTokens(claim, localEvidence);
+  const isChoiceOption = (options.exemptChoiceOptionPolarity ?? false) && choiceOptionPattern.test(claim);
+  const ungroundedNumbers = findUngroundedNumericTokens(claim, numericEvidence);
 
   if (ungroundedNumbers.length) {
     return {
@@ -604,7 +696,13 @@ function validateSingleClaimSupport(
     };
   }
 
-  if ((options.checkDirection ?? true) && bestEvidence && candidateWasRecalled) {
+  if (
+    (options.checkDirection ?? true) &&
+    !isChoiceOption &&
+    !isHypotheticalClause(claim) &&
+    bestEvidence &&
+    candidateWasRecalled
+  ) {
     const directionMismatch = findDirectionMismatch(claim, bestEvidence);
 
     if (directionMismatch) {
@@ -617,7 +715,7 @@ function validateSingleClaimSupport(
     }
   }
 
-  if ((options.checkNegation ?? true) && bestEvidence && hasScopedNegationOfClaim(claim, bestEvidence)) {
+  if ((options.checkNegation ?? true) && !isChoiceOption && bestEvidence && hasScopedNegationOfClaim(claim, bestEvidence)) {
     return {
       supported: false,
       overlapScore,
@@ -628,10 +726,20 @@ function validateSingleClaimSupport(
 
   if (
     (options.checkNegation ?? true) &&
+    !isChoiceOption &&
     bestEvidence &&
     candidateWasRecalled &&
+    !isHypotheticalClause(claim) &&
     (!(options.requireClaimPolarityCue ?? false) || claimHasPolarityCue) &&
-    hasNegationMismatch(claim, bestEvidence)
+    (isCrossScriptPair(claim, bestEvidence)
+      ? // Across scripts the overlap-selected clause is not the aligned sentence
+        // (the negative word can sit in a neighbouring clause: "…avoids that
+        // redundant work"), so polarity is judged against the citation as a
+        // whole — a negated claim is rejected only when nothing in the cited
+        // evidence is negative at all. Weaker than the same-script check by
+        // design; reversals inside otherwise-negative evidence get through.
+        hasNegation(claim) && !evidence.some((text) => hasNegation(text))
+      : hasNegationMismatch(claim, bestEvidence))
   ) {
     return {
       supported: false,
@@ -667,10 +775,37 @@ function validateSingleClaimSupport(
     };
   }
 
+  if ((options.supportMode ?? "ordered") === "anchors") {
+    // Anchor-style support (docs/specs/2026-08-03-anchor-grounding.md): numbers,
+    // direction, negation and proper nouns are enforced above; here every Latin
+    // technical term embedded in CJK prose must appear in the cited evidence, with
+    // the same regularized word-form tolerance concepts get. Narrative wording is
+    // the model's own voice and is deliberately not order-checked any more —
+    // still no semantics, no synonym tables, no model.
+    const unsupportedAnchors = findUnsupportedClaimAnchors(claim, evidence, options);
+
+    if (unsupportedAnchors.length) {
+      return {
+        supported: false,
+        overlapScore,
+        reason: `Claim contains technical terms that do not appear in cited evidence: ${unsupportedAnchors.join(", ")}.`,
+        issueKind: "overlap"
+      };
+    }
+
+    return {
+      supported: true,
+      overlapScore,
+      reason: "Claim anchors (numbers, polarity, entities, technical terms) are grounded in cited evidence.",
+      issueKind: "supported"
+    };
+  }
+
   // Overlap chooses the closest evidence candidate; it is never sufficient for
   // acceptance. Without semantic NLU, fail closed unless every meaningful
   // claim token is present in that local candidate.
   const minOverlap = Math.max(1, options.minOverlap ?? 1);
+  const orderedLexicalSupport = bestEvidence ? hasOrderedLexicalSupport(claim, bestEvidence) : false;
 
   if (overlapScore < minOverlap || sharedTokenCount < minimumSharedTokens || !orderedLexicalSupport) {
     return {
@@ -689,8 +824,37 @@ function validateSingleClaimSupport(
   };
 }
 
+function hasOrderedLexicalSupport(claim: string, evidence: string): boolean {
+  const claimTokens = tokenize(claim);
+  const evidenceTokens = tokenize(evidence);
+  let evidenceIndex = 0;
+
+  for (const claimToken of claimTokens) {
+    const nextIndex = evidenceTokens.indexOf(claimToken, evidenceIndex);
+
+    if (nextIndex < 0) {
+      return false;
+    }
+
+    evidenceIndex = nextIndex + 1;
+  }
+
+  return claimTokens.length > 0;
+}
+
+// A short single-token parenthetical — a number ("GPT-2 (2019)", "growth
+// (22,580x)") or a notation fragment ("O(N)", "O(N²)") — is an appositive
+// label for its host, not an independent claim; keep it attached. Worded
+// parentheticals (they contain spaces) still split so factual continuations
+// need their own support.
+function glueShortParentheticals(value: string): string {
+  return value.replace(/[(（]\s*([^\s()（）]{1,10})\s*[)）]/gu, " $1 ");
+}
+
 function splitSupportClauses(value: string): string[] {
-  return Array.from(new Intl.Segmenter(undefined, { granularity: "sentence" }).segment(value))
+  const glued = glueShortParentheticals(value);
+
+  return Array.from(new Intl.Segmenter(undefined, { granularity: "sentence" }).segment(glued))
     .flatMap((entry) => expandSharedPredicateCoordination(entry.segment))
     .flatMap((entry) =>
       entry.split(
@@ -703,7 +867,7 @@ function splitSupportClauses(value: string): string[] {
 }
 
 function expandSharedPredicateCoordination(value: string): string[] {
-  const directionPattern = /\b(?:increase[ds]?|increasing|rise[sn]?|rose|risen|rising|grow(?:s|th|ing)?|grew|higher|above|decrease[ds]?|decreasing|fall(?:s|en|ing)?|fell|drop(?:s|ped|ping)?|lower|below|reduce[ds]?|reducing|decline[ds]?)\b|增加|增长|增幅|上升|提高|提升|上调|高于|超过|减少|下降|降低|减幅|下调|衰减|低于|下跌/iu;
+  const directionPattern = /\b(?:increase[ds]?|increasing|rise[sn]?|rose|risen|rising|grow(?:s|th|ing)?|grew|higher|above|decrease[ds]?|decreasing|fall(?:s|en|ing)?|fell|drop(?:s|ped|ping)?|lower|below|reduce[ds]?|reducing|decline[ds]?|halv(?:e[sd]?|ing)|decay(?:s|ed|ing)?)\b|增加|增长|增幅|上升|提高|提升|上调|高于|超过|减少|下降|降低|减幅|下调|衰减|低于|下跌|减半/iu;
   const direction = directionPattern.exec(value);
 
   if (direction?.index === undefined || !extractNumericTokens(value.slice(direction.index)).length) {
@@ -760,6 +924,54 @@ function splitOnNonNumericCommas(value: string): string[] {
   return clauses;
 }
 
+// The fact-bearing tokens of a clause. In CJK prose every embedded Latin term
+// is technical vocabulary (KV cache, token, transformer) and must trace to the
+// evidence. Latin-script prose anchors on proper nouns instead — enforced via
+// options.checkProperNouns above, or here for callers that did not opt in.
+function findUnsupportedClaimAnchors(
+  claim: string,
+  evidence: readonly string[],
+  options: ClaimSupportOptions
+): string[] {
+  const hasCjk = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(claim);
+
+  if (!hasCjk) {
+    // Symbol-bearing technical tokens (C#, A/B, TCP/IP, ELU+1) are entities even
+    // in lowercase prose; a bare proper-noun scan cannot tell C# from C.
+    const symbolTokens =
+      claim.match(/[A-Za-z][A-Za-z0-9]*(?:\+\+|#)|[A-Za-z0-9]+(?:[/+][A-Za-z0-9]+)+/g) ?? [];
+    const unsupportedSymbols = Array.from(new Set(symbolTokens)).filter(
+      (token) => !evidence.some((text) => normalizedConceptAppearsInText(token, text))
+    );
+
+    if (options.checkProperNouns) {
+      return unsupportedSymbols;
+    }
+
+    return [...unsupportedSymbols, ...findUnsupportedProperNouns(claim, evidence)];
+  }
+
+  const anchors = Array.from(
+    new Set(
+      tokenize(claim).filter(
+        (token) => token.length >= 2 && /[a-z]/.test(token) && !cjkLatinConnectives.has(token)
+      )
+    )
+  );
+
+  return anchors.filter((anchor) => !evidence.some((text) => normalizedConceptAppearsInText(anchor, text)));
+}
+
+// Latin abbreviations that act as prose connectives inside CJK sentences
+// ("GQA vs MQA 的差异") — glue, not technical terms, so never anchors.
+const cjkLatinConnectives = new Set(["vs", "etc", "eg", "ie", "aka"]);
+
+const cjkScriptPattern = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+
+function isCrossScriptPair(claim: string, evidence: string): boolean {
+  return cjkScriptPattern.test(claim) !== cjkScriptPattern.test(evidence);
+}
+
 function findUngroundedNumericTokens(claim: string, evidence: readonly string[]): string[] {
   const claimNumbers = extractNumericTokens(claim);
 
@@ -770,6 +982,17 @@ function findUngroundedNumericTokens(claim: string, evidence: readonly string[])
   const evidenceNumbers = new Set(evidence.flatMap(extractNumericTokens));
 
   return Array.from(new Set(claimNumbers.filter((token) => !evidenceNumbers.has(token))));
+}
+
+// Letter-led identifiers that merely contain digits (GPT-2, ELU+1, KimiK3, Top-2)
+// are technical tokens, not numeric claims. They are stripped before numeric
+// extraction on both the claim and the evidence side; their letters remain
+// covered by the proper-noun and Latin-anchor checks.
+function stripTechnicalIdentifiers(value: string): string {
+  return value.replace(
+    /(?<![\p{L}\p{N}])(?=[A-Za-z0-9/+\-.#]*\d)[A-Za-z][A-Za-z0-9]*(?:[/+\-.#][A-Za-z0-9]+)*(?![\p{L}\p{N}])/gu,
+    " "
+  );
 }
 
 function extractNumericTokens(value: string): string[] {
@@ -800,6 +1023,7 @@ function extractNumericTokens(value: string): string[] {
     "bytes?",
     "kib|mib|gib|tib|kb|mb|gb|tb",
     "hz|khz|mhz|ghz|ms|km|cm|mm|kg",
+    "x(?![a-z0-9])|×|-?folds?",
     "个百分点|百分比|年|个月|月|日|天|小时|分钟|秒|毫秒|步|步骤|个|项|次|人|倍|元|美元|千米|公里|米|厘米|毫米|千克|公斤|克"
   ].join("|");
   const currency = "(?:[$€£¥￥]|usd|eur|gbp|jpy|cny|rmb)";
@@ -809,9 +1033,30 @@ function extractNumericTokens(value: string): string[] {
     `(?:${semanticPrefix}\\s*)*(?:(?:\\d{1,3}(?:,\\d{3})+)|\\d+|\\.\\d+)(?:\\.\\d+)?(?:\\s*(?:${unit}|${currency}))?`,
     "giu"
   );
-  const matches = value.normalize("NFKC").match(pattern) ?? [];
+  // "a factor of 22,580" is the prefix spelling of a multiplier; rewrite it to the
+  // suffix form so it lands in the same normalized token as "22,580x" and "22,580 倍".
+  // Single-word English cardinals are the same numbers in word form ("Two are
+  // shared" ↔ "2 个共享", user decision 2026-08-03). "one" is deliberately
+  // excluded: as a pronoun/determiner ("one of the ways") it would fabricate
+  // number claims out of ordinary prose. Multi-word numerals stay out of scope.
+  const prepared = stripTechnicalIdentifiers(value.normalize("NFKC"))
+    .replace(/\b(?:zero|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)\b/gi, (word) => String(englishCardinalValues[word.toLowerCase()]))
+    .replace(/\b(?:a\s+)?factor\s+of\s+(\d[\d,]*(?:\.\d+)?)/gi, "$1×");
+  const matches = prepared.match(pattern) ?? [];
 
-  return matches.map((token) => token.toLowerCase().replace(/[\s,]+/g, "").replace(/−/g, "-"));
+  return matches.map((token) => {
+    const normalized = token.toLowerCase().replace(/[\s,]+/g, "").replace(/−/g, "-");
+
+    // Multiplier markers are cross-language spellings of the same unit, and a
+    // calendar year reads identically with or without its unit word.
+    return normalized
+      .replace(/(?:倍|times|x|×|-?folds?)$/u, "×")
+      .replace(/^((?:19|20)\d{2})(?:年|years?)$/u, "$1")
+      // The generic classifier 个 adds no meaning a bare English count lacks:
+      // "898 个专家" must equal the "898" in "898 experts". Specific units
+      // (个百分点, 倍, %) never end in a bare 个 after the replacements above.
+      .replace(/个$/u, "");
+  });
 }
 
 function splitEvidenceCandidates(value: string): string[] {
@@ -843,7 +1088,15 @@ function findDirectionMismatch(claim: string, evidence: string): string | undefi
 
   const evidenceDirections = collectDirections(evidence);
 
-  if (claimDirections.has("increase") && !evidenceDirections.has("increase")) {
+  // 增加/提升 in Chinese prose often means "adds a component", not a quantity
+  // rising. Evidence that states an addition satisfies an increase-shaped claim
+  // (user decision 2026-08-03). Evidence-side only: claims saying "adds" do not
+  // start requiring direction support.
+  const evidenceStatesAddition = /\b(?:add(?:s|ed|ing)?|introduce[sd]?|introducing)\b|加入|新增|添加|引入/iu.test(
+    evidence.normalize("NFKC").toLowerCase()
+  );
+
+  if (claimDirections.has("increase") && !evidenceDirections.has("increase") && !evidenceStatesAddition) {
     return "Claim uses an increase/above direction that does not match the closest cited evidence.";
   }
 
@@ -854,11 +1107,41 @@ function findDirectionMismatch(claim: string, evidence: string): string | undefi
   return undefined;
 }
 
+const englishCardinalValues: Record<string, number> = {
+  zero: 0,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+  eleven: 11,
+  twelve: 12,
+  thirteen: 13,
+  fourteen: 14,
+  fifteen: 15,
+  sixteen: 16,
+  seventeen: 17,
+  eighteen: 18,
+  nineteen: 19,
+  twenty: 20,
+  thirty: 30,
+  forty: 40,
+  fifty: 50,
+  sixty: 60,
+  seventy: 70,
+  eighty: 80,
+  ninety: 90
+};
+
 function collectDirections(value: string): Set<"increase" | "decrease"> {
   const normalized = value.normalize("NFKC").toLowerCase();
   const directions = new Set<"increase" | "decrease">();
   const increasePattern = /\b(?:increase[ds]?|increasing|rise[sn]?|rose|risen|rising|grow(?:s|th|ing)?|grew|higher|above)\b|增加|增长|增幅|上升|提高|提升|上调|高于|超过/u;
-  const decreasePattern = /\b(?:decrease[ds]?|decreasing|fall(?:s|en|ing)?|fell|drop(?:s|ped|ping)?|lower|below|reduce[ds]?|reducing|decline[ds]?)\b|减少|下降|降低|减幅|下调|衰减|低于|下跌/u;
+  const decreasePattern = /\b(?:decrease[ds]?|decreasing|fall(?:s|en|ing)?|fell|drop(?:s|ped|ping)?|lower|below|reduce[ds]?|reducing|decline[ds]?|halv(?:e[sd]?|ing)|decay(?:s|ed|ing)?)\b|减少|下降|降低|减幅|下调|衰减|低于|下跌|减半/u;
 
   if (increasePattern.test(normalized)) {
     directions.add("increase");
@@ -874,8 +1157,34 @@ function collectDirections(value: string): Set<"increase" | "decrease"> {
 function hasNegation(value: string): boolean {
   const normalized = value.normalize("NFKC").toLowerCase();
 
-  return /\b(?:no|not|never|without|cannot|can't|doesn't|didn't|isn't|aren't|wasn't|weren't|won't)\b|不|未|并非|并不|没有|无法/u.test(normalized);
+  return /\b(?:no|not|never|without|cannot|can't|doesn't|didn't|isn't|aren't|wasn't|weren't|won't)\b|不(?!如|同|过|断|错)|未|并非|并不|(?<!如果|若|假如)没有|无法/u.test(normalized) ||
+    avoidancePattern.test(normalized);
 }
+
+// "Storing their key and value vectors avoids that redundant work" is a negative
+// statement written with a positive verb; a faithful restatement ("生成时就不用
+// 重算") reads as negated and used to fail the polarity check. Both sides use the
+// same list, so a claim that invents an avoidance still needs evidence for it.
+const avoidancePattern =
+  /\b(?:avoids?|avoided|avoiding|prevents?|prevented|preventing|eliminates?|eliminated|eliminating)\b|避免|无需|免去|省去/u;
+
+// A hypothesis ("如果 X 无法 Y 会怎样") belongs to the quiz or scenario block, not
+// to the source: its direction and negation are the question's own, so neither is
+// compared with the evidence's — for the whole hypothesis sentence, not just the
+// marker clause (validateClaimSupport widens the scope to the sentence end).
+// Entities, numbers and technical terms in it are still checked.
+function isHypotheticalClause(claim: string): boolean {
+  return /^(?:如果|若|假如|倘若|万一|要是|假设|设想)|^(?:if|suppose|imagine|what\s+if)\b/iu.test(claim.trim());
+}
+
+// A multiple-choice option marker: "A. 增加容量", "B、…", "(C) …", "D：…".
+// Uppercase A–E only, and the marker must be followed by whitespace or CJK text
+// so "E.g." style abbreviations never read as options. The clause-start form
+// covers whole-claim validation; the look-behind form covers split clauses,
+// where the marker letter must itself follow a boundary ("列表A：" is a name,
+// not an option).
+const choiceOptionPattern = /^[(（]?\s*[A-E][.、．:：)）](?:\s|(?=[\p{Script=Han}]))/u;
+const choiceOptionMarkerBefore = /(?:^|[\s。．.！!？?；;：:，,、（()）])[A-E][.、．:：)）]\s*$/u;
 
 function hasNegationMismatch(claim: string, evidence: string): boolean {
   const claimIsNegated = hasNegation(claim);
@@ -944,7 +1253,7 @@ function collectNegatedAnchors(value: string): string[] {
     }
   }
 
-  const chinesePattern = /(?:并非|并不|没有|无法|不|未)([\p{Script=Han}]{1,12})/gu;
+  const chinesePattern = /(?:并非|并不|(?<!如果|若|假如)没有|无法|不(?!如|同|过|断|错)|未)([\p{Script=Han}]{1,12})/gu;
 
   for (const match of normalized.matchAll(chinesePattern)) {
     anchors.push(...tokenize(match[1] ?? "").slice(0, 1));
@@ -987,18 +1296,50 @@ function findUnsupportedProperNouns(claim: string, evidence: readonly string[]):
     "smoke",
     "test"
   ]);
-  const candidates = claim.match(/\b(?:[A-Z]{2,}[A-Z0-9]*|[A-Z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*)\b/g) ?? [];
-  const normalizedEvidence = evidence.map(normalizeForComparison);
+  const matches = Array.from(claim.matchAll(/\b(?:[A-Z]{2,}[A-Z0-9]*|[A-Z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*)\b/g));
+  const candidates = matches
+    // A lone capital letter is a math-notation fragment (the O in O(N)), not an
+    // entity name; requiring evidence for it only produces noise.
+    .filter((match) => match[0].length >= 2 && !isSentenceCasedCommonWord(claim, match))
+    .map((match) => match[0]);
 
   return Array.from(
     new Set(
       candidates.filter((candidate) => {
         const normalized = normalizeForComparison(candidate);
 
-        return normalized && !ignored.has(normalized) && !normalizedEvidence.some((text) => text.includes(normalized));
+        // Word-boundary matching, not bare containment: "RAG" must not ride on
+        // the letters inside "storage". Same matcher the concept check uses.
+        return (
+          normalized &&
+          !ignored.has(normalized) &&
+          !evidence.some((text) => normalizedConceptAppearsInText(candidate, text))
+        );
       })
     )
   );
+}
+
+// English capitalizes every sentence opener, so a clause-initial "Scaling" or
+// "Models" is sentence case, not an entity. Only simple-cased words whose shape
+// matches ordinary word morphology are demoted; bare names (Aspirin, Kimi),
+// ALL-CAPS, CamelCase and hyphenated terms stay anchors wherever they appear.
+function isSentenceCasedCommonWord(claim: string, match: RegExpExecArray): boolean {
+  const word = match[0];
+
+  if (!/^[A-Z][a-z]+$/.test(word)) {
+    return false;
+  }
+
+  // Suffixes chosen to exclude name shapes: bare -s/-es (Mars, Postgres),
+  // -er (Sutskever) and -al (Mistral) stay anchors even at sentence start.
+  if (!/(?:ing|ed|tion|sion|ment|ness|ity|able|ible|ly)$/.test(word.toLowerCase())) {
+    return false;
+  }
+
+  const prefix = claim.slice(0, match.index ?? 0).trimEnd();
+
+  return prefix === "" || /[.!?:;。！？：；]["')\]]?$/.test(prefix);
 }
 
 function calculateOverlapScore(claim: string, evidence: string): number {
@@ -1016,24 +1357,6 @@ function calculateOverlapScore(claim: string, evidence: string): number {
   const overlap = claimTokens.filter((token) => evidenceTokens.has(token)).length;
 
   return overlap / claimTokens.length;
-}
-
-function hasOrderedLexicalSupport(claim: string, evidence: string): boolean {
-  const claimTokens = tokenize(claim);
-  const evidenceTokens = tokenize(evidence);
-  let evidenceIndex = 0;
-
-  for (const claimToken of claimTokens) {
-    const nextIndex = evidenceTokens.indexOf(claimToken, evidenceIndex);
-
-    if (nextIndex < 0) {
-      return false;
-    }
-
-    evidenceIndex = nextIndex + 1;
-  }
-
-  return claimTokens.length > 0;
 }
 
 function tokenize(value: string): string[] {
@@ -1287,7 +1610,11 @@ function segmentComparableWords(value: string): string[] {
     new Intl.Segmenter(undefined, { granularity: "word" }).segment(value.normalize("NFKC").replace(/_+/g, " "))
   )
     .filter((entry) => entry.isWordLike)
-    .map((entry) => entry.segment.toLowerCase());
+    // Word segmentation keeps a possessive attached ("Schlag’s" is one token), so
+    // an entity named in the source only in possessive form looked absent. Both
+    // sides are stripped the same way, straight and curly apostrophes alike.
+    .map((entry) => entry.segment.toLowerCase().replace(/[’']s$|[’']$/u, ""))
+    .filter(Boolean);
 }
 
 function normalizeCaptionForComparison(value: string): string {
