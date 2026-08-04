@@ -6,8 +6,9 @@
 // 保存之上的三层体验(spec: docs/specs/2026-08-04-extension-refinement.md):
 // - 悬停「保存」浮出分类条(候选来自本机知识库的兴趣主题+学习目标,可自由输入),
 //   点分类=带 topic 保存;直接点「保存」的一键心流不变。
-// - 折叠长推文不静默存半截:按钮变「点开存全文」导流到详情页(幂等去重意味着
-//   第一次存半截会永久污染,必须在源头拦);X Article 页面提取完整正文。
+// - 折叠长推文不静默存半截:点保存时先就地点开 X 的「显示更多」把正文补全再存
+//   (幂等去重意味着第一次存半截会永久污染,必须在源头拦);X Article 页面
+//   提取完整正文。
 // - 成卡回执:background 轮询到剪藏转成知识卡后通知本页,按钮推进「已成卡」,
 //   页面底部滑入一条可点开知识库的回执。
 
@@ -21,7 +22,6 @@
     saved: "已保存",
     known: "已存过",
     carded: "已成卡",
-    expand: "点开存全文",
     error: "重试"
   };
 
@@ -160,30 +160,68 @@
     return null;
   }
 
-  function onSaveClick(event) {
+  /**
+   * 就地展开被折叠的长推文:X 的「显示更多」是个 button(没有 href),点它
+   * 当场把正文补全、不跳转(2026-08-04 真机实测:169 字 → 364 字,标记消失)。
+   * 展开成功返回 true;超时说明这版 X 不是就地展开,交给调用方走详情页兜底。
+   */
+  async function expandFoldedTweet(article) {
+    const marker = [...article.querySelectorAll('[data-testid="tweet-text-show-more-link"]')].find(
+      (item) => !item.closest('div[role="link"]')
+    );
+
+    if (!marker) {
+      return true;
+    }
+
+    marker.click();
+
+    // 实测就地展开耗时 0.9-1.0 秒,留到 2.5 秒:超时会白跑一次详情页跳转。
+    for (let attempt = 0; attempt < 25; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      if (!isFoldedTweet(article)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  async function onSaveClick(event) {
     const button = event.currentTarget;
+    const topic = button.dataset.aitlTopic || null;
+    const article = button.closest('article[data-testid="tweet"]');
+    const tweet = article ? extractTweet(article) : null;
 
-    if (button.dataset.state === "expand") {
-      const article = button.closest('article[data-testid="tweet"]');
-      const tweet = article ? extractTweet(article) : null;
+    if (tweet && isFoldedTweet(article)) {
+      // 折叠的长推只有半截正文,直接存会被 URL 幂等去重永久钉死。先当场展开,
+      // 展开完再存全文——一次点击,不离开时间线。
+      hideChipBar();
+      setButtonState(button, "saving");
 
-      if (!tweet) {
+      const expanded = await expandFoldedTweet(article);
+      // 展开过程中 X 可能重渲染掉按钮节点。
+      const target = button.isConnected ? button : findButtonByUrl(tweet.url) || button;
+
+      if (expanded) {
+        setButtonState(target, "idle");
+        startSave(target, topic);
         return;
       }
 
-      // 已经在这条推文自己的详情页上还处于导流态(X DOM 变了没识别出展开):
-      // 再导流就是原地刷新死循环,退化成普通保存兜底。
-      if (new URL(tweet.url).pathname === location.pathname) {
-        setButtonState(button, "idle");
-        startSave(button, null);
+      // 就地展开不成:退回详情页存全文;已经在详情页就照常存(避免原地刷新死循环)。
+      if (new URL(tweet.url).pathname !== location.pathname) {
+        location.assign(tweet.url);
         return;
       }
 
-      location.assign(tweet.url);
+      setButtonState(target, "idle");
+      startSave(target, topic);
       return;
     }
 
-    startSave(button, button.dataset.aitlTopic || null);
+    startSave(button, topic);
   }
 
   // ---------- 分类条(悬停「保存」浮出) ----------
@@ -459,6 +497,15 @@
       return;
     }
 
+    // 没有永久链接的条目(广告位实测如此:有正文有操作栏,但没有 time 元素)
+    // 根本存不了,不挂按钮。标记成 skip,免得补挂逻辑每轮重试。
+    const tweet = extractTweet(article);
+
+    if (!tweet) {
+      article.setAttribute(PROCESSED_ATTR, "skip");
+      return;
+    }
+
     article.setAttribute(PROCESSED_ATTR, "1");
 
     const button = document.createElement("button");
@@ -468,18 +515,14 @@
 
     // 这条推文之前存过的话(按钮被 React 换掉重挂),从 URL 状态表恢复,
     // 不然「已保存/已成卡」会退回「保存」,回执也找不到按钮。
-    const tweet = extractTweet(article);
-    const savedState = tweet ? stateByUrl.get(tweet.url) : undefined;
+    const savedState = stateByUrl.get(tweet.url);
 
     if (savedState) {
       setButtonState(button, savedState);
       button.dataset.aitlUrl = tweet.url;
       button.title = savedState === "carded" ? "已转成知识卡" : "已交给本机 AITimeline";
-    } else if (isFoldedTweet(article)) {
-      // 折叠长文只有半截正文,存了会被幂等去重永久钉死,导流到详情页存全文。
-      setButtonState(button, "expand");
-      button.title = "长文被折叠,进详情页保存完整正文";
     } else {
+      // 折叠的长推也照常显示「保存」:点击时先就地展开再存,不额外多一步。
       setButtonState(button, "idle");
       button.title = "保存到 AITimeline";
     }
@@ -494,7 +537,8 @@
     document.querySelectorAll(`article[data-testid="tweet"]:not([${PROCESSED_ATTR}])`).forEach(attachButton);
 
     // React 重渲染会连按钮一起换掉 DOM,标记还留在 article 上:补挂。
-    document.querySelectorAll(`article[data-testid="tweet"][${PROCESSED_ATTR}]`).forEach((article) => {
+    // skip 的条目本来就没按钮,不参与补挂(否则每轮都白试一次)。
+    document.querySelectorAll(`article[data-testid="tweet"][${PROCESSED_ATTR}="1"]`).forEach((article) => {
       if (!article.querySelector(`.${BUTTON_CLASS}`)) {
         article.removeAttribute(PROCESSED_ATTR);
         attachButton(article);

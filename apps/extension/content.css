@@ -38,11 +38,6 @@
   background-color: rgba(0, 186, 124, 0.1);
 }
 
-/* 折叠长文的导流态:蓝色示意「这是个动作」,与保存态区分。 */
-.aitl-save[data-state="expand"] {
-  color: #1d9bf0;
-}
-
 .aitl-save[data-state="error"] {
   color: #f4212e;
 }
