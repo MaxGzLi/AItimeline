@@ -437,6 +437,15 @@ export interface AgentHarnessConfig {
   version: string;
   runnerKind: AgentHarnessRunnerKind;
   objective: AgentHarnessObjective;
+  /**
+   * Grounding gate leniency: claim-level checks downgrade to warnings instead
+   * of blocking the card (same profile followup_generation gets). Set for
+   * browser-clipped sources — the source is a short post the user explicitly
+   * saved, so the card cannot stray far and paraphrase false-kills dominate
+   * genuine violations. Citation registration and verbatim thread quotes stay
+   * hard errors regardless.
+   */
+  lenientGrounding?: boolean;
   maxPostsPerRun: number;
   threadPolicy: {
     requiredKinds: ThreadBlockKind[];

@@ -698,6 +698,104 @@ try {
     );
     assert.deepEqual(secondDue.due, firstDue.due, "second due request should not duplicate backfilled review states");
     assert.equal(secondSnapshot.reviewStates.length, 3, "review backfill should be idempotent");
+
+    // 注入面取卡端点:复习到期优先、连接播报卡除名、limit 生效、字段精简。
+    const injectCards = await requestJsonFromServer(
+      backfillServer,
+      "/api/inject/cards?now=2026-06-10T00:00:00.000Z&limit=10"
+    );
+
+    assert.deepEqual(
+      injectCards.cards.map((card) => card.id).sort(),
+      backfillPosts.map((post) => post.id).sort(),
+      "inject cards should serve the due review posts and never the connection note"
+    );
+    assert.ok(
+      injectCards.cards.every((card) => card.reviewDueAt),
+      "review-due cards should carry reviewDueAt so the extension can tell why they came back"
+    );
+
+    const [firstInjectCard] = injectCards.cards;
+
+    assert.equal(firstInjectCard.topicId, "legacy-review", "inject card topicId should be the slug of the first concept");
+    assert.deepEqual(firstInjectCard.conceptIds, ["Legacy Review"], "inject card should carry concept ids for signals");
+    assert.ok(
+      firstInjectCard.title && firstInjectCard.summary && firstInjectCard.sourceTitle && firstInjectCard.sourceUrl,
+      "inject card should carry the render fields (title/summary/source)"
+    );
+    assert.equal(firstInjectCard.savedAt, "2026-06-01T00:00:00.000Z", "inject card savedAt should be the post createdAt");
+
+    const limitedInjectCards = await requestJsonFromServer(
+      backfillServer,
+      "/api/inject/cards?now=2026-06-10T00:00:00.000Z&limit=2"
+    );
+
+    assert.equal(limitedInjectCards.cards.length, 2, "inject cards should honor the limit parameter");
+
+    // 注入卡的三段信号(纯曝光 / 累计停留 / 点开)必须被信号端点原样接住。
+    const injectPostId = firstInjectCard.id;
+    const injectSignalBase = {
+      postId: injectPostId,
+      topicId: firstInjectCard.topicId,
+      conceptIds: firstInjectCard.conceptIds,
+      impression: true,
+      dwellTimeMs: 0,
+      openedThread: false,
+      liked: false,
+      saved: false,
+      askedQuestion: false,
+      reviewed: false,
+      skippedQuickly: false
+    };
+    const injectImpression = await requestJsonFromServer(backfillServer, "/api/signals", {
+      method: "POST",
+      body: {
+        generatedAt: "2026-06-10T01:00:00.000Z",
+        signal: { ...injectSignalBase, createdAt: "2026-06-10T01:00:00.000Z" },
+        sourceCandidates: []
+      }
+    });
+
+    assert.equal(injectImpression.idempotentReplay, false, "inject impression should be accepted as a fresh signal");
+    assert.equal(
+      injectImpression.records.length,
+      0,
+      "inject impression must stay pure exposure and trigger no curation records"
+    );
+
+    const injectDwell = await requestJsonFromServer(backfillServer, "/api/signals", {
+      method: "POST",
+      body: {
+        generatedAt: "2026-06-10T01:01:00.000Z",
+        signal: { ...injectSignalBase, dwellTimeMs: 4200, createdAt: "2026-06-10T01:01:00.000Z" },
+        sourceCandidates: []
+      }
+    });
+
+    assert.ok(injectDwell.feedback, "inject dwell signal should produce learning feedback");
+
+    const injectOpen = await requestJsonFromServer(backfillServer, "/api/signals", {
+      method: "POST",
+      body: {
+        generatedAt: "2026-06-10T01:02:00.000Z",
+        signal: { ...injectSignalBase, openedThread: true, dwellTimeMs: 9000, createdAt: "2026-06-10T01:02:00.000Z" },
+        sourceCandidates: []
+      }
+    });
+
+    assert.ok(injectOpen.feedback, "inject open signal should produce learning feedback");
+
+    const injectSignalSnapshot = await requestJsonFromServer(backfillServer, "/api/snapshot");
+    const injectSignalRecords = injectSignalSnapshot.interactionSignals.filter(
+      (record) => record.signal.postId === injectPostId && record.createdAt.startsWith("2026-06-10T01:")
+    );
+
+    assert.equal(injectSignalRecords.length, 3, "all three inject signals should be persisted");
+    assert.equal(
+      Math.max(...injectSignalRecords.map((record) => record.signal.dwellTimeMs)),
+      9000,
+      "cumulative dwell should resolve to the max dwell across inject signals"
+    );
   } finally {
     await closeServer(backfillServer);
   }
@@ -3932,6 +4030,139 @@ try {
       delete process.env.AITIMELINE_DAILY_AUTO_JOB_BUDGET;
     } else {
       process.env.AITIMELINE_DAILY_AUTO_JOB_BUDGET = previousCaptureBudget;
+    }
+  }
+
+  // Browser-extension tweet clipping: a capture that carries its own body text
+  // must become a card with zero fetches (x.com is login-walled, so the capture
+  // is the only copy), the tweet URL must be registered as a citable source,
+  // and pending browser captures must drain on a later run like agent captures.
+  // The body is a realistic ~280-character tweet with no topic attached — the
+  // payload the extension actually sends. Text this short fails the source
+  // quality gate on every other lane (see backgroundCurationQueue.test.ts), so
+  // importing it proves the browser_share exemption: the user's explicit save
+  // is the quality signal.
+  const clipDataPath = join(tempDir, "browser-clip.json");
+  const clipCurationPath = join(tempDir, "browser-clip-curation.json");
+  const clipTweetUrl = "https://x.com/karpathy/status/1900000000000000001";
+  const clipSecondTweetUrl = "https://x.com/karpathy/status/1900000000000000002";
+  const clipTweetText = [
+    "hot take after a month of daily agent use: the bottleneck is not the model, it is what you feed it.",
+    "give the agent the three files that matter and it one-shots the change;",
+    "dump the whole repo in and it drowns. curation is the real skill now."
+  ].join(" ");
+  const clipFetch = async (input) => {
+    throw new Error(`Browser clip smoke must not fetch anything, but requested: ${getFetchUrl(input)}`);
+  };
+  const previousClipBudget = process.env.AITIMELINE_DAILY_AUTO_JOB_BUDGET;
+
+  process.env.AITIMELINE_DAILY_AUTO_JOB_BUDGET = "1";
+
+  const clipServer = createApiServer({
+    dataPath: clipDataPath,
+    curationDataPath: clipCurationPath,
+    mediaRootDir,
+    feedFetch: clipFetch,
+    guardedFetch: clipFetch
+  });
+
+  try {
+    const clipCapture = await requestJsonFromServer(clipServer, "/api/captures/source", {
+      method: "POST",
+      body: {
+        url: clipTweetUrl,
+        capturedText: clipTweetText,
+        title: "Andrej Karpathy (@karpathy) on X",
+        author: "Andrej Karpathy",
+        publishedAt: "2026-08-01T09:00:00.000Z",
+        intakeKind: "browser_share",
+        reason: "Saved from X via the AITimeline extension."
+      }
+    });
+
+    assert.equal(clipCapture.status, "queued", "a clipped tweet should queue an import job immediately");
+    assert.equal(clipCapture.record.intakeKind, "browser_share", "extension captures should use the browser_share intake");
+    assert.equal(
+      clipCapture.record.candidate.source.author,
+      "Andrej Karpathy",
+      "the captured author should be registered on the source"
+    );
+
+    const clipSecondCapture = await requestJsonFromServer(clipServer, "/api/captures/source", {
+      method: "POST",
+      body: {
+        url: clipSecondTweetUrl,
+        capturedText: clipTweetText,
+        intakeKind: "browser_share",
+        reason: "Saved from X via the AITimeline extension."
+      }
+    });
+
+    assert.equal(clipSecondCapture.status, "pending", "beyond the daily budget a clipped tweet should stay pending");
+
+    await requestJsonFromServer(clipServer, "/api/curation/run", {
+      method: "POST",
+      body: { now: new Date().toISOString() }
+    });
+
+    const clipSnapshot = await requestJsonFromServer(clipServer, "/api/snapshot");
+    const clipCandidate = clipSnapshot.sourceCandidates.find(
+      (record) => record.candidate.source.url === clipTweetUrl
+    );
+
+    assert.equal(clipCandidate.status, "imported", "the clipped tweet should import without any fetch");
+
+    const clipPost = clipSnapshot.posts.find((post) =>
+      (post.sources ?? []).some((source) => source.url === clipTweetUrl)
+    );
+
+    assert.equal(Boolean(clipPost), true, "the clipped tweet should become a knowledge card");
+    assert.equal(clipPost.citations.length >= 1, true, "the tweet card should carry citations");
+    assert.equal(
+      clipSnapshot.sourceRegistries.some((record) => record.sourceId === clipPost.sources[0].id),
+      true,
+      "the tweet should be registered as a citable source"
+    );
+
+    const clipEvidence = await requestJsonFromServer(clipServer, `/api/evidence/${clipPost.id}`);
+
+    assert.equal(
+      clipEvidence.ledger.summary.citedChunks >= 1,
+      true,
+      "the evidence ledger should resolve the tweet's captured chunks"
+    );
+
+    const clipRecapture = await requestJsonFromServer(clipServer, "/api/captures/source", {
+      method: "POST",
+      body: { url: clipTweetUrl, capturedText: clipTweetText, intakeKind: "browser_share" }
+    });
+
+    assert.equal(clipRecapture.alreadyKnown, true, "re-clipping an imported tweet should be idempotent");
+    assert.equal(clipRecapture.postId, clipPost.id, "re-clipping should point at the existing card");
+
+    // Next day: the fresh budget must drain the pending browser_share capture
+    // exactly like agent captures, and it must import from its captured text.
+    await requestJsonFromServer(clipServer, "/api/curation/run", {
+      method: "POST",
+      body: { now: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() }
+    });
+
+    const clipDrainedSnapshot = await requestJsonFromServer(clipServer, "/api/snapshot");
+    const clipSecondCandidate = clipDrainedSnapshot.sourceCandidates.find(
+      (record) => record.candidate.source.url === clipSecondTweetUrl
+    );
+
+    assert.equal(
+      clipSecondCandidate.status,
+      "imported",
+      "the pending browser_share capture should drain and import on the next run"
+    );
+  } finally {
+    await closeServer(clipServer);
+    if (previousClipBudget === undefined) {
+      delete process.env.AITIMELINE_DAILY_AUTO_JOB_BUDGET;
+    } else {
+      process.env.AITIMELINE_DAILY_AUTO_JOB_BUDGET = previousClipBudget;
     }
   }
 

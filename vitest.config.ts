@@ -8,7 +8,8 @@ export default defineConfig({
     include: [
       "packages/core/src/**/*.test.ts",
       "apps/api/test/**/*.test.mjs",
-      "apps/web/src/lib/**/*.test.ts"
+      "apps/web/src/lib/**/*.test.ts",
+      "apps/extension/test/**/*.test.mjs"
     ]
   }
 });

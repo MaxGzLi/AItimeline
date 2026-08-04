@@ -845,7 +845,17 @@ async function runImportSourceJob(
     recommendedBecause: ingested.recommendedBecause ?? job.reason,
     userContext: await handlers.loadSourceQualityUserContext?.(),
     qualityGateConceptHints: mergeUnique(job.conceptIds, job.sourceCandidate.conceptIds),
-    sourceQualityVerdicts: await handlers.loadSourceQualityVerdicts?.()
+    sourceQualityVerdicts: await handlers.loadSourceQualityVerdicts?.(),
+    // browser_share = the user clipped this content by hand, and that explicit
+    // save is the quality signal, so the depth/quality gate is skipped (D1
+    // decision, 2026-08-04). Every other lane still runs the gate, and the
+    // anchor grounding gate on generated cards applies to all lanes.
+    skipQualityGate: job.sourceCandidate.intakeKind === "browser_share",
+    // D2 decision, 2026-08-04: the clip lane also runs the grounding gate in
+    // the lenient profile (claim checks warn instead of block) — a clipped
+    // tweet is one short chunk, so paraphrase false-kills dominate genuine
+    // violations. Citations and verbatim quotes stay hard everywhere.
+    lenientGrounding: job.sourceCandidate.intakeKind === "browser_share"
   });
 
   if (sourceImport.qualityGate?.verdict === "reject") {

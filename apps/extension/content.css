@@ -1,0 +1,46 @@
+/* One flat text button in the tweet action bar, following X's own idiom:
+   quiet gray at rest, blue tint on hover, color-only state changes. */
+.aitl-save {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: #71767b;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 8px 10px;
+  border-radius: 9999px;
+  cursor: pointer;
+  transition: color 0.15s ease, background-color 0.15s ease;
+}
+
+.aitl-save:hover {
+  color: #1d9bf0;
+  background-color: rgba(29, 155, 240, 0.1);
+}
+
+.aitl-save[data-state="saving"] {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.aitl-save[data-state="saved"],
+.aitl-save[data-state="known"] {
+  color: #00ba7c;
+}
+
+.aitl-save[data-state="saved"]:hover,
+.aitl-save[data-state="known"]:hover {
+  color: #00ba7c;
+  background-color: rgba(0, 186, 124, 0.1);
+}
+
+.aitl-save[data-state="error"] {
+  color: #f4212e;
+}
+
+.aitl-save[data-state="error"]:hover {
+  color: #f4212e;
+  background-color: rgba(244, 33, 46, 0.1);
+}
