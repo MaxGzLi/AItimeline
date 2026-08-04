@@ -91,6 +91,7 @@ import {
   handleDiscoveryRun,
   handleIdeaResearchRequest
 } from "./domains/research.mjs";
+import { dispatchAgentTask, getAgentTask, listAgentTasks, retryAgentTask } from "./domains/agentTasks.mjs";
 import { handlePostReply, handleUserNote } from "./domains/notes.mjs";
 import { handlePreferenceChat } from "./domains/preferences.mjs";
 import {
@@ -1404,6 +1405,78 @@ export function createApiServer(options = {}) {
         const result = await runCurationWithGuard(body);
 
         sendJson(response, 200, result);
+        return;
+      }
+
+      // 任务客户端。列表和详情只回界面要显示的字段,让客户端不必再拉整份快照
+      // (那份现在近 20MB,开一次窗口就得等它传完)。
+      if (request.method === "GET" && url.pathname === "/api/agent/tasks") {
+        const limitParam = Number(url.searchParams.get("limit"));
+
+        sendJson(
+          response,
+          200,
+          listAgentTasks({
+            persistenceStore,
+            curationStore,
+            contentLanguage: resolveContentLanguage(persistenceStore, process.env),
+            limit: Number.isFinite(limitParam) && limitParam > 0 ? limitParam : undefined,
+            status: url.searchParams.get("status") ?? undefined
+          })
+        );
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/agent/tasks") {
+        const body = await readJsonBody(request);
+        requireString(body.text, "text");
+
+        sendJson(
+          response,
+          200,
+          await dispatchAgentTask({
+            body,
+            userId: typeof body.userId === "string" && body.userId.trim() ? body.userId : "local-user",
+            persistenceStore,
+            curationStore,
+            askModelClient,
+            searchProvider,
+            contentLanguage: resolveContentLanguage(persistenceStore, process.env)
+          })
+        );
+        return;
+      }
+
+      if (request.method === "POST" && /^\/api\/agent\/tasks\/[^/]+\/retry$/.test(url.pathname)) {
+        const taskId = decodeURIComponent(url.pathname.slice("/api/agent/tasks/".length, -"/retry".length));
+        const body = await readJsonBody(request);
+        const result = retryAgentTask({
+          id: taskId,
+          persistenceStore,
+          curationStore,
+          contentLanguage: resolveContentLanguage(persistenceStore, process.env),
+          now: typeof body.now === "string" ? body.now : new Date().toISOString()
+        });
+
+        sendJson(response, result.reason === "not_found" ? 404 : 200, result);
+        return;
+      }
+
+      if (request.method === "GET" && /^\/api\/agent\/tasks\/[^/]+$/.test(url.pathname)) {
+        const taskId = decodeURIComponent(url.pathname.replace(/^\/api\/agent\/tasks\//, ""));
+        const detail = getAgentTask({
+          id: taskId,
+          persistenceStore,
+          curationStore,
+          contentLanguage: resolveContentLanguage(persistenceStore, process.env)
+        });
+
+        if (!detail) {
+          sendJson(response, 404, { error: "Task not found." });
+          return;
+        }
+
+        sendJson(response, 200, detail);
         return;
       }
 
