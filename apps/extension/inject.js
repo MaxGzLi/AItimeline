@@ -150,6 +150,11 @@
     }
 
     const state = getSignalState(card.id);
+
+    // 补插会为同一张卡建新节点,共享状态归最新节点所有:
+    // 旧节点迟到的清扫(下面 tick 的断连分支)不得再动共享状态。
+    state.ownerNode = node;
+
     const clearImpressionTimer = () => {
       if (state.impressionTimer !== null) {
         window.clearTimeout(state.impressionTimer);
@@ -165,7 +170,7 @@
       state.impressionTimer = window.setTimeout(() => {
         state.impressionTimer = null;
 
-        if (document.hidden || state.impressionFired) {
+        if (document.hidden || state.impressionFired || !onHomeTimeline()) {
           return;
         }
 
@@ -206,13 +211,31 @@
     );
     const tick = window.setInterval(() => {
       if (!node.isConnected) {
-        // 格子被虚拟列表回收:结算这段停留,释放这套监听;补插时会重新挂一套。
+        // 格子被虚拟列表回收:释放这套监听;只有当本节点仍是这张卡的现役
+        // 节点时才结算共享状态——补插的新节点已接管时,旧节点的清扫不能
+        // 掐掉新节点刚 arm 的曝光计时、清掉进行中的停留段。
         window.clearInterval(tick);
         document.removeEventListener("visibilitychange", onVisibilityChange);
-        clearImpressionTimer();
         observer.disconnect();
+
+        if (state.ownerNode === node) {
+          clearImpressionTimer();
+          flushDwell("exit");
+        }
+
+        return;
+      }
+
+      // 照片查看器/发帖框这类蒙层路由把时间线留在身后:卡被盖住但仍算
+      // "可见",停留会虚涨。不在主时间线就结算停表,回来再续。
+      if (!onHomeTimeline()) {
+        clearImpressionTimer();
         flushDwell("exit");
         return;
+      }
+
+      if (state.intersecting && !document.hidden && state.dwell.visibleSince === null) {
+        state.dwell = core.dwellEnter(state.dwell, performance.now());
       }
 
       if (state.dwell.visibleSince === null) {
@@ -366,6 +389,8 @@
     try {
       chrome.runtime.sendMessage({ type: "AITL_FETCH_INJECT_CARDS" }, (response) => {
         if (chrome.runtime.lastError || !response || !response.ok || !Array.isArray(response.cards)) {
+          // 拉不到卡就把本页 badge 清零:API 停了 badge 还挂着数字是撒谎。
+          sendMessage({ type: "AITL_SET_BADGE", count: 0 });
           return;
         }
 

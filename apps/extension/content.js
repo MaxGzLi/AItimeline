@@ -60,11 +60,17 @@
     };
   }
 
-  /** 时间线上被折叠的长推文(「显示更多」标记)。详情页正文全展开,不会命中。 */
+  /** 时间线上被折叠的长推文(「显示更多」标记)。只认外层推文自己的折叠:
+   *  内嵌引用块(div[role="link"])里的标记不算,否则「引用了长推的普通推文」
+   *  会被永久钉在导流态,在详情页也解不开。 */
   function isFoldedTweet(article) {
-    const marker = article.querySelector('[data-testid="tweet-text-show-more-link"]');
+    if (article.querySelector('[data-testid="twitterArticle"]')) {
+      return false;
+    }
 
-    return Boolean(marker) && !article.querySelector('[data-testid="twitterArticle"]');
+    return [...article.querySelectorAll('[data-testid="tweet-text-show-more-link"]')].some(
+      (marker) => !marker.closest('div[role="link"]')
+    );
   }
 
   function setButtonState(button, state) {
@@ -80,6 +86,10 @@
     return core ? core.classifyXTheme(getComputedStyle(document.body).backgroundColor) : "dark";
   }
 
+  // 保存状态的真身:URL → "saved"|"known"|"carded"。按钮节点会被 X 的 React
+  // 重渲染整个换掉,状态只写在节点上就丢了;补挂时从这里恢复,回执也靠它落地。
+  const stateByUrl = new Map();
+
   function startSave(button, topic) {
     if (["saving", "saved", "known", "carded"].includes(button.dataset.state)) {
       return;
@@ -89,6 +99,7 @@
     const tweet = article ? extractTweet(article) : null;
 
     if (!tweet) {
+      hideChipBar();
       setButtonState(button, "error");
       button.title = "没有找到可保存的推文内容";
       return;
@@ -99,31 +110,54 @@
 
     try {
       chrome.runtime.sendMessage({ type: "AITL_SAVE_TWEET", tweet: { ...tweet, topic: topic || undefined } }, (response) => {
+        // 响应回来时原按钮可能已被 React 换掉:状态写到当前挂载的那个上。
+        const target = button.isConnected ? button : findButtonByUrl(tweet.url) || button;
+
         if (chrome.runtime.lastError || !response || !response.ok) {
-          setButtonState(button, "error");
-          button.title = chrome.runtime.lastError
+          // 失败时记住已选分类,点「重试」不丢。
+          target.dataset.aitlTopic = topic || "";
+          setButtonState(target, "error");
+          target.title = chrome.runtime.lastError
             ? "无法连接扩展后台,刷新页面重试"
             : (response && response.error) || "保存失败,点击重试";
           return;
         }
 
-        // 成卡回执按 URL 找回按钮(React 重渲染会换节点,兜底也扫得到)。
-        button.dataset.aitlUrl = tweet.url;
+        delete target.dataset.aitlTopic;
+        target.dataset.aitlUrl = tweet.url;
 
-        if (response.status === "imported") {
-          setButtonState(button, "carded");
-          button.title = "已经是知识卡了";
-          return;
-        }
+        const state = response.status === "imported" ? "carded" : response.alreadyKnown ? "known" : "saved";
 
-        setButtonState(button, response.alreadyKnown ? "known" : "saved");
-        button.title = "已交给本机 AITimeline";
+        stateByUrl.set(tweet.url, state);
+        setButtonState(target, state);
+        target.title = state === "carded" ? "已经是知识卡了" : "已交给本机 AITimeline";
       });
     } catch {
       // 扩展被重载/更新后旧页面的 chrome.runtime 失效,不再永久卡「保存中…」。
+      button.dataset.aitlTopic = topic || "";
       setButtonState(button, "error");
       button.title = "扩展已更新,请刷新页面";
     }
+  }
+
+  /** 按已知的推文 URL 找当前挂载的保存按钮(先认 dataset,再逐个比对永久链接)。 */
+  function findButtonByUrl(url) {
+    for (const candidate of document.querySelectorAll(`.${BUTTON_CLASS}`)) {
+      if (candidate.dataset.aitlUrl === url) {
+        return candidate;
+      }
+    }
+
+    for (const candidate of document.querySelectorAll(`.${BUTTON_CLASS}`)) {
+      const article = candidate.closest('article[data-testid="tweet"]');
+      const tweet = article ? extractTweet(article) : null;
+
+      if (tweet && tweet.url === url) {
+        return candidate;
+      }
+    }
+
+    return null;
   }
 
   function onSaveClick(event) {
@@ -133,14 +167,23 @@
       const article = button.closest('article[data-testid="tweet"]');
       const tweet = article ? extractTweet(article) : null;
 
-      if (tweet) {
-        location.assign(tweet.url);
+      if (!tweet) {
+        return;
       }
 
+      // 已经在这条推文自己的详情页上还处于导流态(X DOM 变了没识别出展开):
+      // 再导流就是原地刷新死循环,退化成普通保存兜底。
+      if (new URL(tweet.url).pathname === location.pathname) {
+        setButtonState(button, "idle");
+        startSave(button, null);
+        return;
+      }
+
+      location.assign(tweet.url);
       return;
     }
 
-    startSave(button, null);
+    startSave(button, button.dataset.aitlTopic || null);
   }
 
   // ---------- 分类条(悬停「保存」浮出) ----------
@@ -151,10 +194,31 @@
   let chipBar = null;
   let chipInput = null;
   let chipTargetButton = null;
+  let chipTargetUrl = null;
   let chipShowTimer = null;
   let chipHideTimer = null;
   let chipTopics = null;
   let chipContextRequested = false;
+
+  /** 分类条开着的这段时间里按钮可能被 React 换掉:提交时按 URL 找回现挂载的那个。 */
+  function resolveChipTarget() {
+    if (chipTargetButton && chipTargetButton.isConnected) {
+      return chipTargetButton;
+    }
+
+    return chipTargetUrl ? findButtonByUrl(chipTargetUrl) : null;
+  }
+
+  function commitChipSave(topic) {
+    const target = resolveChipTarget();
+
+    if (!target) {
+      hideChipBar();
+      return;
+    }
+
+    startSave(target, topic);
+  }
 
   function requestCaptureContext() {
     if (chipContextRequested) {
@@ -175,6 +239,7 @@
 
         if (chipBar && chipBar.style.display !== "none") {
           renderChips();
+          positionChipBar();
         }
       });
     } catch {
@@ -205,8 +270,8 @@
     chipInput.type = "text";
     chipInput.placeholder = "自定义分类,回车保存";
     chipInput.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" && chipInput.value.trim() && chipTargetButton) {
-        startSave(chipTargetButton, chipInput.value.trim());
+      if (event.key === "Enter" && chipInput.value.trim()) {
+        commitChipSave(chipInput.value.trim());
       }
 
       // 别让 X 的全局快捷键(j/k/l 等)吃掉输入。
@@ -238,9 +303,7 @@
       chip.className = "aitl-chipbar-chip";
       chip.textContent = topic;
       chip.addEventListener("click", () => {
-        if (chipTargetButton) {
-          startSave(chipTargetButton, topic);
-        }
+        commitChipSave(topic);
       });
       chips.appendChild(chip);
     }
@@ -248,16 +311,16 @@
     chips.style.display = chips.childElementCount ? "" : "none";
   }
 
-  function showChipBar(button) {
-    ensureChipBar();
-    requestCaptureContext();
-    chipTargetButton = button;
-    chipBar.dataset.aitlTheme = currentTheme();
-    renderChips();
-    chipInput.value = "";
-    chipBar.style.display = "";
+  /** 悬浮位置:优先贴按钮下方,放不下翻到上方。候选 chips 异步到达会让条长高,
+   *  重新渲染后必须再调用一次,不然可能盖住按钮或伸出视口。 */
+  function positionChipBar() {
+    const anchor = chipTargetButton && chipTargetButton.isConnected ? chipTargetButton : null;
 
-    const rect = button.getBoundingClientRect();
+    if (!anchor) {
+      return;
+    }
+
+    const rect = anchor.getBoundingClientRect();
     const barRect = chipBar.getBoundingClientRect();
 
     chipBar.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - barRect.width - 8))}px`;
@@ -265,6 +328,22 @@
       rect.bottom + barRect.height + 8 > window.innerHeight
         ? `${rect.top - barRect.height - 6}px`
         : `${rect.bottom + 6}px`;
+  }
+
+  function showChipBar(button) {
+    ensureChipBar();
+    requestCaptureContext();
+    chipTargetButton = button;
+
+    const article = button.closest('article[data-testid="tweet"]');
+    const tweet = article ? extractTweet(article) : null;
+
+    chipTargetUrl = tweet ? tweet.url : null;
+    chipBar.dataset.aitlTheme = currentTheme();
+    renderChips();
+    chipInput.value = "";
+    chipBar.style.display = "";
+    positionChipBar();
   }
 
   function hideChipBar() {
@@ -278,9 +357,16 @@
     }
 
     chipTargetButton = null;
+    chipTargetUrl = null;
   }
 
   function scheduleChipBarHide() {
+    // 指针离开按钮:待弹的条不再弹,已弹的条略延迟收(给移向条本体留缝)。
+    if (chipShowTimer !== null) {
+      clearTimeout(chipShowTimer);
+      chipShowTimer = null;
+    }
+
     if (chipHideTimer !== null) {
       clearTimeout(chipHideTimer);
     }
@@ -294,13 +380,13 @@
   function onSaveButtonEnter(event) {
     const button = event.currentTarget;
 
+    if (button.dataset.state !== "idle" && button.dataset.state !== "error") {
+      return;
+    }
+
     if (chipHideTimer !== null) {
       clearTimeout(chipHideTimer);
       chipHideTimer = null;
-    }
-
-    if (button.dataset.state !== "idle" && button.dataset.state !== "error") {
-      return;
     }
 
     if (chipShowTimer !== null) {
@@ -349,11 +435,15 @@
       return;
     }
 
-    for (const button of document.querySelectorAll(`.${BUTTON_CLASS}[data-aitl-url]`)) {
-      if (button.dataset.aitlUrl === message.url) {
-        setButtonState(button, "carded");
-        button.title = "已转成知识卡";
-      }
+    // 先记状态再找按钮:就算此刻按钮被 React 换掉了,补挂时也会恢复成「已成卡」。
+    stateByUrl.set(message.url, "carded");
+
+    const button = findButtonByUrl(message.url);
+
+    if (button) {
+      setButtonState(button, "carded");
+      button.dataset.aitlUrl = message.url;
+      button.title = "已转成知识卡";
     }
 
     showReceipt();
@@ -376,7 +466,16 @@
     button.type = "button";
     button.className = BUTTON_CLASS;
 
-    if (isFoldedTweet(article)) {
+    // 这条推文之前存过的话(按钮被 React 换掉重挂),从 URL 状态表恢复,
+    // 不然「已保存/已成卡」会退回「保存」,回执也找不到按钮。
+    const tweet = extractTweet(article);
+    const savedState = tweet ? stateByUrl.get(tweet.url) : undefined;
+
+    if (savedState) {
+      setButtonState(button, savedState);
+      button.dataset.aitlUrl = tweet.url;
+      button.title = savedState === "carded" ? "已转成知识卡" : "已交给本机 AITimeline";
+    } else if (isFoldedTweet(article)) {
       // 折叠长文只有半截正文,存了会被幂等去重永久钉死,导流到详情页存全文。
       setButtonState(button, "expand");
       button.title = "长文被折叠,进详情页保存完整正文";

@@ -32,15 +32,17 @@ service worker → `POST http://127.0.0.1:8787/api/captures/source`。
    即保存。验证分类进了候选:
 
    ```bash
-   curl -s http://127.0.0.1:8787/api/source-candidates | python3 -m json.tool | grep -B2 -A8 browser_share | head -40
+   curl -s http://127.0.0.1:8787/api/source-candidates | python3 -c "import json,sys; [print(r['candidate']['source']['url'], r['candidate']['conceptIds']) for r in json.load(sys.stdin)['records'] if r.get('intakeKind')=='browser_share']"
    ```
 
    该条 candidate 的 `conceptIds` 应含所选分类。直接点「保存」(不悬停不选
    分类)行为与第 6 步完全一致。
 8. **折叠长文拦截**:找一条时间线上被折叠的长推文(正文末尾有「显示更多」),
    它的按钮应显示蓝色「点开存全文」;点击不发保存请求,而是进推文详情页,
-   在详情页里用展开后的完整正文保存。X Article(长文章)同理:文章页里保存,
-   `capturedText` 是完整正文(candidate 里核对字数)。
+   在详情页里用展开后的完整正文保存。反例:一条正文完整、只是**引用**了
+   被折叠长推的推文,按钮应该还是普通「保存」(引用块里的折叠标记不算数)。
+   X Article(长文章)同理:文章页里保存,`capturedText` 是完整正文
+   (candidate 里核对字数)。
 9. **成卡回执**:保存后等后台策展跑完(保存会自动催一轮,通常几秒到几十秒),
    按钮自动推进「已成卡」,页面底部滑入蓝色回执「已转成知识卡 · 在知识库中
    打开」;点回执新开标签页进知识库(127.0.0.1:5173)。
@@ -87,7 +89,9 @@ x.com 上的 DOM 行为没法无头验证,以下步骤必须真人过一遍:
     点开后 openedThread=true 的记录。
 11. **断连重试**:先停掉 API 再打开 x.com——没有注入卡、badge 为空(不造假
     卡),页面无报错;这时启动 API,保持标签页在前台等最多 60 秒(或切走
-    再切回来),注入卡应自动出现,badge 出数字,全程不用刷新页面。
+    再切回来),badge 应出数字;继续往下滚动,注入卡出现在视口下方的推文
+    之间(新卡不会插在已经滚过的位置),全程不用刷新页面。badge 是按标签页
+    记的,关掉或导航离开该标签页就消失。
 
 ## 已知限制
 
@@ -95,9 +99,14 @@ x.com 上的 DOM 行为没法无头验证,以下步骤必须真人过一遍:
   候选会落为 `rejected_source`。长推文/长帖(Article)通过率高。
 - 折叠长文与 X Article 的选择器(`tweet-text-show-more-link`、
   `twitterArticle`)按 2026-08 的 X DOM 施工,需真机核验;X 改版需跟进。
-  引用推文内嵌的折叠标记可能误把外层按钮变成「点开存全文」(导流无害)。
+- **X Article 只能在文章详情页保存**:时间线上的 Article 预览推文没有
+  `twitterArticle` 结构,在时间线保存只会存到推文的评论文字,且 URL 幂等
+  去重会把这半截永久钉死——要存文章,先点进文章页再点「保存」。预览卡
+  的时间线选择器待真机核验后再做拦截。
 - 成卡回执靠 background 轮询(2.5 秒一次,90 秒封顶);超时或 service
-  worker 被浏览器回收就没有回执,下次保存/刷新会看到「已成卡」。
+  worker 被浏览器回收就没有回执,下次保存/刷新会看到「已成卡」。按钮的
+  「已保存/已成卡」状态记在页面内存里,刷新页面后回到「保存」(数据无损,
+  再点一次会得到「已存过/已成卡」)。
 - 只在推文操作栏注入;X 的 DOM 结构(`article[data-testid="tweet"]`、
   `[data-testid="tweetText"]` 等)若改版,选择器需要跟进。
 - 注入依赖 X 虚拟列表的格子结构(`div[data-testid="cellInnerDiv"]`)和推文
