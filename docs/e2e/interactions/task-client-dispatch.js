@@ -4,11 +4,11 @@
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   for (let i = 0; i < 40; i += 1) {
-    if (document.querySelector(".x-task-dispatch-input")) break;
+    if (document.querySelector(".x-task-composerinput")) break;
     await sleep(500);
   }
 
-  const input = document.querySelector(".x-task-dispatch-input");
+  const input = document.querySelector(".x-task-composerinput");
   if (!input) return "no-dispatch-input";
 
   const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set;
@@ -20,10 +20,10 @@
   form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
 
   for (let i = 0; i < 120; i += 1) {
-    const reply = document.querySelector(".x-task-replytext");
+    const reply = document.querySelector(".x-task-answer");
     if (reply && reply.textContent.trim()) {
       await sleep(1200);
-      return "reply=" + reply.textContent.slice(0, 40) + " quote=" + Boolean(document.querySelector(".x-task-replyquote"));
+      return "reply=" + reply.textContent.slice(0, 40) + " quote=" + Boolean(document.querySelector(".x-task-quote"));
     }
     await sleep(500);
   }

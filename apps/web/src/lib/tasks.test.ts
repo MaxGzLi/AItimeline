@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { groupAgentTasks, type AgentTaskSummary } from "./tasks";
+import {
+  detailForSelection,
+  groupAgentTasks,
+  type AgentTaskDetailResponse,
+  type AgentTaskSummary
+} from "./tasks";
 
 function createTask(overrides: Partial<AgentTaskSummary> & { id: string }): AgentTaskSummary {
   return {
@@ -65,5 +70,28 @@ describe("groupAgentTasks", () => {
 
   it("returns nothing when there are no tasks at all", () => {
     expect(groupAgentTasks([], now)).toEqual([]);
+  });
+});
+
+describe("detailForSelection", () => {
+  const detail = (id: string): AgentTaskDetailResponse => ({
+    task: createTask({ id }),
+    steps: [],
+    produced: [],
+    conceptBrief: null
+  });
+
+  it("keeps the detail when it belongs to the selected task", () => {
+    const held = detail("task-1");
+
+    expect(detailForSelection(held, "task-1")).toBe(held);
+  });
+
+  it("drops the previous task's detail the moment another row is selected", () => {
+    expect(detailForSelection(detail("task-1"), "task-2")).toBeNull();
+  });
+
+  it("drops the detail when nothing is selected", () => {
+    expect(detailForSelection(detail("task-1"), null)).toBeNull();
   });
 });
