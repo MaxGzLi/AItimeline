@@ -1,4 +1,18 @@
-# 让 SuperIsland 认我们声明的面板尺寸
+# 改过的 SuperIsland(过渡用)
+
+补丁里有两处改动:**面板尺寸插件可以声明**(下面详述),和**悬停只开小条**。
+
+后者是因为:宿主默认鼠标在刘海停 0.3 秒就展开,而且挂着插件模块时是直接跳到最大那一档。
+手伸向菜单栏、切标签页、把窗口拖到顶,一天要蹭过去几十次 —— 面板放大到半屏之后,
+每次误蹭都掉下来半个屏幕,像是刘海自己在乱跳。改成悬停出小条(408×88),
+半屏面板要点一下才出来。改动 1 行,点开的通路本来就有(`handleSurfaceTap`)。
+
+**这份是过渡方案。** 已经拍板要自己写刘海宿主,见
+`docs/specs/2026-08-05-own-notch-host.md`。
+
+---
+
+## 让 SuperIsland 认我们声明的面板尺寸
 
 刘海面板默认是 **658×180**,扣掉左右内衬和上下留白,插件只剩 594×172 —— 大约五六行
 正文。一张知识卡(概要 + 五段 thread,中位 614 字)得切成七页翻着读,这不是「中长段
@@ -32,7 +46,7 @@ manifest 里多两个字段,宿主读到就按这个尺寸开窗。
 git clone https://github.com/shobhit99/SuperIsland.git
 cd SuperIsland
 git checkout 5619541                     # 打补丁时的版本,换版本要重新对一遍
-git apply /path/to/apps/notch-extension/host/superisland-declared-panel-size.patch
+git apply /path/to/apps/notch-extension/host/superisland-aitimeline.patch
 brew install xcodegen && xcodegen         # 仓库用 XcodeGen 生成 .xcodeproj
 xcodebuild -scheme SuperIsland -configuration Release build
 ```

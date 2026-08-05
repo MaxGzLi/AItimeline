@@ -43,10 +43,23 @@ index 798bdf7..04175ce 100644
      }
  
 diff --git a/SuperIsland/App/AppState.swift b/SuperIsland/App/AppState.swift
-index d4f6b38..ef58af3 100644
+index d4f6b38..553b4dc 100644
 --- a/SuperIsland/App/AppState.swift
 +++ b/SuperIsland/App/AppState.swift
-@@ -1089,7 +1089,7 @@ final class AppState: ObservableObject {
+@@ -766,7 +766,11 @@ final class AppState: ObservableObject {
+                 self.cancelFullExpandedDismiss()
+                 self.previousModule = self.activeModule
+                 self.activeModule = module
+-                self.fullyExpand()
++                // Hovering opens the small bar, not the full panel. Reaching for the menu
++                // bar brushes the notch constantly; dropping a half-screen panel on every
++                // brush reads as the island firing off by itself. A tap promotes it
++                // (see IslandContainerView.handleSurfaceTap).
++                self.expand()
+                 return
+             }
+ 
+@@ -1089,7 +1093,7 @@ final class AppState: ObservableObject {
          case .expanded:
              return Constants.expandedSize
          case .fullExpanded:
@@ -55,7 +68,7 @@ index d4f6b38..ef58af3 100644
              // On non-notch Macs the toolbar is inline (no shoulder area),
              // so it eats into content height. Add space for it.
              if usesOutwardTopCorners && !presentationHasNotch {
-@@ -1099,6 +1099,31 @@ final class AppState: ObservableObject {
+@@ -1099,6 +1103,31 @@ final class AppState: ObservableObject {
          }
      }
  
