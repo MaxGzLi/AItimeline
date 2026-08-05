@@ -12,6 +12,12 @@
 //    必须写 "timer",否则宿主只在激活那一瞬间读一次视图——而那时候网络还没回来,
 //    刘海会永远停在「没有卡」的空状态,再也不会更新。定时器回调只调 refreshState
 //    重画,不会弹岛(ExtensionManager.swift:462-464),所以「藏」不受影响。
+//    真机实测过:宿主在 onActivate 之后 2 毫秒就来读视图,第一批卡必然还在路上,
+//    内容全靠这个定时器补上。manifest 里 refreshInterval 写 60 时实测约 86 秒重画
+//    一次;试过改成官方 pomodoro 那样的 1.0,结果三分钟一次都没重画(反而更糟),
+//    所以维持 60。
+//    还有个连带的坑见 minimalPrecedence:第一次读视图时空手而归会被宿主收走槽位,
+//    槽位一没,重画定时器也跟着停,插件就永久隐身了。
 // 2. 不发曝光信号:知识卡有「曝光 5 次且零互动就从时间线下架」的规则
 //    (packages/core/src/ranking/lifecycle.ts:52),而纯曝光信号不做当日合并。
 //    刘海面要是照 X 注入面那样发曝光,几分钟就能把一张卡从网页信息流和 X 注入面
@@ -518,14 +524,24 @@ function metaLine(card) {
 // 真正让位的开关是 precedence 返回 0(AppState.swift:930-934),
 // 官方 pomodoro 就是这么干的。
 function minimalPrecedence() {
-  // 一张卡都没有(不管是本来就没有,还是连不上)就把槽位还回去,
-  // 让音乐控件之类的东西回来,别占着位置画空白。
-  return state.cards.length ? 1 : 0;
+  if (state.cards.length) {
+    return 1;
+  }
+
+  // 第一批还在路上时**不能**还槽位。宿主是在 onActivate 之后 2 毫秒就来读视图的,
+  // 那时候 fetch 才刚发出去,卡必然是空的;这里要是返回 0,槽位当场让出去,
+  // 重画定时器也跟着停(定时器只给在岛上的模块跑),等 240 毫秒后卡回来了
+  // 已经没人来读第二次——插件就此永久隐身,而且是时快时慢的随机现象。
+  // lastFetchAt 是 0 就说明「一次都还没拉回来」,跟「拉回来了但库里真没卡」不是一回事。
+  return state.lastFetchAt === 0 ? 1 : 0;
 }
 
 function minimalLeading() {
   if (!state.cards.length) {
-    return null;
+    // 同上:第一批在路上时画个暗的书本,别让刘海挂一条纯黑空条。
+    return state.lastFetchAt === 0
+      ? View.icon("book.closed", { size: 11, color: "gray" })
+      : null;
   }
 
   if (state.lastError) {
@@ -562,7 +578,13 @@ function compactView() {
   }
 
   if (!state.cards.length) {
-    // 没有卡就什么都不画(宿主把 null 当空节点处理)。
+    // 第一批还在路上就画个暗书本占位,理由同 minimalPrecedence:
+    // 空手而归会被宿主判定为「没内容」,之后不再来读。
+    if (state.lastFetchAt === 0) {
+      return View.icon("book.closed", { size: 12, color: "gray" });
+    }
+
+    // 拉回来了确实一张卡都没有,那就什么都不画(宿主把 null 当空节点处理)。
     return null;
   }
 

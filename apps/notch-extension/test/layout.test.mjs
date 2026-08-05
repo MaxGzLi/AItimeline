@@ -16,7 +16,11 @@ const exported = [
   "bodyTextOf",
   "paginate",
   "layoutOf",
-  "pagesOf"
+  "pagesOf",
+  "minimalPrecedence",
+  "minimalLeading",
+  "compactView",
+  "state"
 ];
 
 const sandbox = new Function(
@@ -59,8 +63,16 @@ const {
   bodyTextOf,
   paginate,
   layoutOf,
-  pagesOf
+  pagesOf,
+  minimalPrecedence,
+  minimalLeading,
+  compactView,
+  state
 } = api;
+
+function setState(patch) {
+  Object.assign(state, { cards: [], index: 0, page: 0, lastFetchAt: 0, lastError: null, loading: false }, patch);
+}
 
 // 用户本机知识库里的真卡,字段原样抄下来。
 const richCard = {
@@ -96,6 +108,44 @@ const degenerateCard = {
   savedAt: "2026-07-04T00:00:00.000Z",
   reviewDueAt: "2026-07-05T00:00:00.000Z"
 };
+
+// 真机上插件整个不显示,查了半天:宿主在 onActivate 之后 2 毫秒就来读视图
+// (探针实测 06:35:52.247 onActivate → .249 compactView),这时第一批卡还在网上。
+// 那会儿 precedence 返回 0 就等于当场把刘海槽位还回去,而重画定时器只给还在岛上的
+// 模块跑 —— 卡 240 毫秒后回来了也没人再来读。表现是「有时看得到有时看不到」。
+describe("第一批卡还没到的时候", () => {
+  it("不还槽位:一次都没拉回来时 precedence 必须保持 1", () => {
+    setState({ cards: [], lastFetchAt: 0 });
+
+    expect(minimalPrecedence()).toBe(1);
+  });
+
+  it("已经拉回来了但库里真没卡,才把槽位还回去", () => {
+    setState({ cards: [], lastFetchAt: 1754300000000 });
+
+    expect(minimalPrecedence()).toBe(0);
+  });
+
+  it("有卡当然占着槽位", () => {
+    setState({ cards: [richCard], lastFetchAt: 1754300000000 });
+
+    expect(minimalPrecedence()).toBe(1);
+  });
+
+  it("加载中不能交白卷:侧槽位和小药丸都得画点东西出来", () => {
+    setState({ cards: [], lastFetchAt: 0 });
+
+    expect(minimalLeading()).not.toBeNull();
+    expect(compactView()).not.toBeNull();
+  });
+
+  it("确认库里没卡之后才允许什么都不画", () => {
+    setState({ cards: [], lastFetchAt: 1754300000000 });
+
+    expect(minimalLeading()).toBeNull();
+    expect(compactView()).toBeNull();
+  });
+});
 
 describe("splitTitle", () => {
   it("splits at a full-width colon into kicker and head", () => {
