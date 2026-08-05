@@ -92,6 +92,12 @@ import {
   handleIdeaResearchRequest
 } from "./domains/research.mjs";
 import { dispatchAgentTask, getAgentTask, listAgentTasks, retryAgentTask } from "./domains/agentTasks.mjs";
+import {
+  createAgentChatStore,
+  getAgentChatTurn,
+  handleAgentChatMessage,
+  listAgentChatTurns
+} from "./domains/agentChat.mjs";
 import { handlePostReply, handleUserNote } from "./domains/notes.mjs";
 import { handlePreferenceChat } from "./domains/preferences.mjs";
 import {
@@ -189,6 +195,7 @@ const minimumConfiguredWorkerIntervalMs = 5000;
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const defaultDataPath = resolve(currentDir, "../data/aitimeline.json");
 const defaultCurationDataPath = resolve(currentDir, "../data/curation-jobs.json");
+const defaultAgentChatDataPath = resolve(currentDir, "../data/agent-chat.json");
 const defaultMediaRoot = resolve(currentDir, "../data/media");
 const backlogManualBatchLimit = 5;
 
@@ -202,6 +209,8 @@ export function createApiServer(options = {}) {
   const dataPath = options.dataPath ?? process.env.AITIMELINE_DATA_PATH ?? defaultDataPath;
   const curationDataPath =
     options.curationDataPath ?? process.env.AITIMELINE_CURATION_DATA_PATH ?? defaultCurationDataPath;
+  const agentChatDataPath =
+    options.agentChatDataPath ?? process.env.AITIMELINE_AGENT_CHAT_DATA_PATH ?? defaultAgentChatDataPath;
   const mediaRootDir = resolve(options.mediaRootDir ?? process.env.AITIMELINE_MEDIA_ROOT ?? defaultMediaRoot);
   const enableFixtures = options.enableFixtures ?? process.env.AITIMELINE_ENABLE_FIXTURES === "1";
   const ownerId = options.ownerId ?? randomUUID();
@@ -209,6 +218,7 @@ export function createApiServer(options = {}) {
   const resources = [];
   let persistenceStore;
   let curationStore;
+  let agentChatStore;
   try {
     const persistenceAdapter = createFileStorageAdapter(dataPath, { ownerId, backupCount: 3 });
     resources.push(persistenceAdapter);
@@ -225,6 +235,12 @@ export function createApiServer(options = {}) {
       onLoadIssue: (issue) => console.warn("[aitimeline] curation queue load issue", issue)
     });
     resources.push(curationStore);
+    const agentChatAdapter = createFileStorageAdapter(agentChatDataPath, { ownerId, backupCount: 3 });
+    resources.push(agentChatAdapter);
+    agentChatStore = createAgentChatStore(agentChatAdapter, {
+      onLoadIssue: (issue) => console.warn("[aitimeline] agent chat load issue", issue)
+    });
+    resources.push(agentChatStore);
     persistenceStore.flushMigration();
     curationStore.flushMigration?.();
     curationStore.recoverExpiredLeases(options.now ?? new Date());
@@ -1480,6 +1496,56 @@ export function createApiServer(options = {}) {
         return;
       }
 
+      // agent 运行时 v1:对话循环的三个端点。POST 立即落一条 running 的 turn,
+      // 循环异步跑;界面 1-2 秒轮询详情直到终态;列表端点在刷新后重建对话流。
+      if (request.method === "POST" && url.pathname === "/api/agent/chat") {
+        const body = await readJsonBody(request);
+        requireString(body.text, "text");
+
+        sendJson(
+          response,
+          200,
+          handleAgentChatMessage({
+            body,
+            userId: typeof body.userId === "string" && body.userId.trim() ? body.userId.trim() : "local-user",
+            agentChatStore,
+            persistenceStore,
+            curationStore,
+            askModelClient,
+            searchProvider,
+            contentLanguage: resolveContentLanguage(persistenceStore, process.env)
+          })
+        );
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/agent/chat") {
+        const limitParam = Number(url.searchParams.get("limit"));
+
+        sendJson(
+          response,
+          200,
+          listAgentChatTurns({
+            agentChatStore,
+            limit: Number.isFinite(limitParam) && limitParam > 0 ? limitParam : undefined
+          })
+        );
+        return;
+      }
+
+      if (request.method === "GET" && /^\/api\/agent\/chat\/[^/]+$/.test(url.pathname)) {
+        const chatTurnId = decodeURIComponent(url.pathname.replace(/^\/api\/agent\/chat\//, ""));
+        const detail = getAgentChatTurn({ agentChatStore, id: chatTurnId });
+
+        if (!detail) {
+          sendJson(response, 404, { error: "Chat turn not found." });
+          return;
+        }
+
+        sendJson(response, 200, detail);
+        return;
+      }
+
       if (request.method === "POST" && url.pathname === "/api/agent/ask") {
         const body = await readJsonBody(request);
         requireString(body.question, "question");
@@ -1697,6 +1763,7 @@ export function createApiServer(options = {}) {
   server.aitimeline = {
     persistenceStore,
     curationStore,
+    agentChatStore,
     workerId,
     closeStores,
     security,
