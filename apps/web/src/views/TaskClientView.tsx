@@ -109,8 +109,13 @@ export function TaskClientView({
     if (stream) stream.scrollTop = stream.scrollHeight;
   }, [detail?.task.id, lastReply]);
 
+  // 桌面壳里系统标题栏是藏掉的(hiddenInset),红绿灯浮在内容左上角:
+  // 侧栏要让出顶部一条,并给窗口一条可拖拽的顶带。浏览器里没有这回事。
+  const isDesktop = typeof window !== "undefined" && Boolean(window.aitimelineDesktop);
+
   return (
-    <div className="x-task-client">
+    <div className={`x-task-client${isDesktop ? " is-desktop" : ""}`}>
+      {isDesktop ? <div aria-hidden className="x-task-dragstrip" /> : null}
       <aside className="x-task-side">
         <div className="x-task-brand">
           <span className="x-task-brandname">AITimeline</span>

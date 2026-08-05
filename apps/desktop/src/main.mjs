@@ -180,6 +180,10 @@ async function createMainWindow() {
     height: 820,
     minWidth: 960,
     minHeight: 640,
+    // 标题栏藏掉、红绿灯嵌进内容区(照 Codex 客户端);网页侧在桌面模式下
+    // 给左上角让位并提供 -webkit-app-region: drag 的顶带。
+    titleBarStyle: "hiddenInset",
+    trafficLightPosition: { x: 18, y: 14 },
     show: false,
     webPreferences: {
       preload: join(currentDir, "preload.mjs"),
