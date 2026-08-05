@@ -38,6 +38,8 @@ import {
   Compass,
   GitBranch,
   Home,
+  Inbox,
+  Library,
   ListChecks,
   Newspaper,
   Pause,
@@ -49,6 +51,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import type { AgentReplyAction, DiscoveryRunState } from "./components/AgentReplyThread";
 import { ConceptDigestPanel } from "./components/ConceptDigestPanel";
+import { ContextRail } from "./components/ContextRail";
 import type { SupplyRefillState } from "./components/SupplyDroughtCard";
 import { buildWikilinkAutocompleteCandidates } from "./components/WikilinkAutocomplete";
 import { DiscoverView } from "./views/DiscoverView";
@@ -2628,10 +2631,50 @@ export function App() {
     </p>
   ) : null;
 
-  // 任务客户端自带左右两栏,不走三栏外壳;八个旧视图收进它左栏底部的次级入口。
+  // 任务客户端自带三栏,不走通用外壳。左栏顶部是常去的三个地方,底部收其余旧视图。
   if (activeView === "tasks") {
+    const openView = (key: ViewKey) => {
+      setActiveView(key);
+      setSelectedCardId(null);
+    };
+    const renderEntry = (
+      key: ViewKey,
+      labelKey: string,
+      Icon: typeof Home,
+      count?: number
+    ) => (
+      <button key={key} onClick={() => openView(key)} type="button">
+        <Icon size={15} strokeWidth={1.8} />
+        <span>{t(labelKey)}</span>
+        {count ? <em>{count}</em> : null}
+      </button>
+    );
+
     return (
       <TaskClientView
+        contextRail={
+          <ContextRail
+            boundary={boundary}
+            detailCard={selectedCard}
+            detailGraph={selectedLocalGraph}
+            graph={graph}
+            learningGoals={learningGoals}
+            onOpenCardId={handleOpenCardId}
+            onOpenConcept={handleOpenConcept}
+            onOpenGraph={() => {
+              setGraphRequestedTab("graph");
+              setActiveView("graph");
+            }}
+            onOpenSkillTree={() => {
+              setGraphRequestedTab("skillTree");
+              setActiveView("graph");
+            }}
+            onOpenReview={() => setActiveView("review")}
+            onSearchChange={setSearchQuery}
+            reviewQueue={reviewQueue}
+            searchQuery={searchQuery}
+          />
+        }
         detail={agentTasks.detail}
         detailLoading={agentTasks.detailLoading}
         dispatchError={agentTasks.dispatchError}
@@ -2651,19 +2694,18 @@ export function App() {
         onSelectTask={agentTasks.selectTask}
         retryingId={agentTasks.retryingId}
         runningCount={agentTasks.runningCount}
-        secondaryNav={navItems.map((item) => (
-          <button
-            key={item.key}
-            onClick={() => {
-              setActiveView(item.key);
-              setSelectedCardId(null);
-            }}
-            type="button"
-          >
-            <item.icon size={15} strokeWidth={1.9} />
-            <span>{t(item.labelKey)}</span>
-          </button>
-        ))}
+        footerNav={[
+          renderEntry("graph", "tasks.entry.library", Library),
+          renderEntry("base", "nav.base", Home),
+          renderEntry("discover", "nav.discover", Compass),
+          renderEntry("notifications", "nav.notifications", Bell, unreadNotificationCount),
+          renderEntry("settings", "tasks.entry.settings", Settings)
+        ]}
+        primaryNav={[
+          renderEntry("timeline", "tasks.entry.today", Newspaper),
+          renderEntry("review", "tasks.entry.review", Brain, reviewQueue.length),
+          renderEntry("agent", "tasks.entry.inbox", Inbox, pendingDiscoverCount)
+        ]}
         selectedTaskId={agentTasks.selectedTaskId}
         tasks={agentTasks.tasks}
         tasksLoading={agentTasks.tasksLoading}

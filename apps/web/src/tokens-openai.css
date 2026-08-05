@@ -1,0 +1,189 @@
+/* ============================================================================
+ * OpenAI Apps SDK UI — design tokens (subset)
+ *
+ * Source     https://github.com/openai/apps-sdk-ui
+ *            src/styles/variables-primitive.css + variables-semantic.css
+ * Version    v0.2.2 — commit 0f00143 (2026-05-05)
+ * License    MIT — Copyright 2025 OpenAI.
+ *            The MIT permission notice in the upstream LICENSE applies to this
+ *            file and must travel with it.
+ * Extracted  2026-08-05
+ *
+ * ---------------------------------------------------------------------------
+ * What was changed on the way out of the repo
+ *
+ * 1. SUBSET. Only the tokens a three-column desktop app uses. The official
+ *    variable names are kept verbatim, so every value below can be grepped for
+ *    in the upstream repo.
+ *
+ * 2. CHAINS FLATTENED. Upstream reads
+ *        --color-surface: light-dark(var(--gray-0), var(--gray-200));
+ *    and --gray-200 is itself light-dark(#cdcdcd, #212121). Both hops are
+ *    resolved here, so --color-surface is plainly #ffffff / #212121.
+ *
+ * 3. light-dark() REMOVED — the important one. light-dark() resolves against
+ *    the element's computed `color-scheme` property, not against a selector.
+ *    Upstream makes it react to [data-theme] by also setting `color-scheme` on
+ *    those elements (src/styles/globals.css), and it has no CSS-level
+ *    prefers-color-scheme support at all: their reference app reads the OS
+ *    preference in JS and writes the attribute. We need both triggers, with
+ *    the attribute winning, so the theme is switched by SELECTOR here:
+ *
+ *        :root                                    -> light  (the default)
+ *        @media (prefers-color-scheme: dark)
+ *          :root:not([data-theme="light"])        -> dark, unless opted out
+ *        :root[data-theme="dark"]                 -> dark, always
+ *
+ *    The :not() is what lets data-theme="light" beat an OS dark preference.
+ *    The last rule is specificity (0,2,0) and declared last, so it beats the
+ *    base :root (0,1,0) and ties-then-wins against the media rule — that is
+ *    what lets data-theme="dark" beat an OS light preference. Attribute wins
+ *    in both directions; with no attribute, the OS decides.
+ *
+ *    `color-scheme` is still declared, but only so native scrollbars, form
+ *    controls and the pre-paint canvas match. No token depends on it.
+ *
+ * 4. alpha() RESOLVED. Upstream's alpha(x, 8%) compiles to
+ *    color-mix(in oklab, x 8%, transparent); mixing against `transparent`
+ *    with premultiplied alpha is exactly x at 8% alpha, written here as
+ *    rgb(... / 8%). --alpha-base is #0d0d0d in light, #ffffff in dark.
+ *
+ * NOTE the theme applies at :root only. Upstream supports nested [data-theme]
+ * subtrees; that needs the light block repeated on [data-theme="light"].
+ * ==========================================================================*/
+
+/* --------------------------------------------------------------------------
+ * Theme-independent + LIGHT theme (the default)
+ * ------------------------------------------------------------------------*/
+:root {
+  color-scheme: light dark;
+
+  /* Radius scale — upstream @theme static block, same in both themes */
+  --radius-xs: 0.25rem; /* 4px */
+  --radius-sm: 0.375rem; /* 6px */
+  --radius-md: 0.5rem; /* 8px */
+  --radius-lg: 0.625rem; /* 10px */
+  --radius-xl: 0.75rem; /* 12px */
+  --radius-2xl: 1rem; /* 16px */
+  --radius-3xl: 1.25rem; /* 20px */
+  --radius-4xl: 1.5rem; /* 24px */
+  --radius-full: 9999px;
+
+  /* Blue accent — the primitives, identical in both themes */
+  --blue-400: #0285ff;
+  --blue-500: #0169cc;
+  --color-background-info-solid: var(--blue-400);
+  --color-text-info-solid: #ffffff;
+
+  /* Upstream resolves to the same gray in both themes */
+  --color-text-tertiary: #8f8f8f;
+
+  /* Surfaces */
+  --color-surface: #ffffff; /* light-dark(--gray-0,  --gray-200) */
+  --color-surface-secondary: #f9f9f9; /* light-dark(--gray-50, --gray-100) */
+  --color-surface-elevated: #ffffff; /* light-dark(--gray-0,  --gray-300) */
+
+  /* Text */
+  --color-text: #0d0d0d; /* --gray-1000 */
+  --color-text-secondary: #5d5d5d; /* light-dark(--gray-500, --gray-700) */
+  --color-text-inverse: #ffffff; /* --gray-0 */
+
+  /* Borders */
+  --color-border-subtle: rgb(13 13 13 / 5%); /* --alpha-05 */
+  --color-border: rgb(13 13 13 / 10%); /* --alpha-10 */
+
+  /* Neutral interaction (nav rows, icon buttons, primary button) */
+  --color-background-primary-ghost-hover: rgb(13 13 13 / 8%);
+  --color-background-primary-ghost-active: rgb(13 13 13 / 12%);
+  --color-background-primary-solid: #181818; /* light-dark(--gray-900, --gray-950) */
+
+  /* Accent */
+  --color-ring: #0169cc; /* light-dark(--blue-500, --blue-400) */
+  --color-text-info: #0169cc; /* light-dark(--blue-500, --blue-200) */
+
+  /* Status */
+  --color-text-success: #00692a; /* light-dark(--green-700,  --green-400) */
+  --color-background-success-surface: rgb(4 184 76 / 8%); /* --green-a25 */
+  --color-text-warning: #923b0f; /* light-dark(--orange-700, --orange-500) */
+  --color-background-warning-surface: rgb(251 106 34 / 7%); /* --orange-a25 */
+  --color-text-danger: #911e1b; /* light-dark(--red-700,    --red-500) */
+  --color-background-danger-surface: rgb(250 66 62 / 8%); /* --red-a25 */
+
+  /* Elevation for the floating panel */
+  --shadow-300: 0 4px 8px -2px rgb(0 0 0 / 0.1);
+}
+
+/* --------------------------------------------------------------------------
+ * DARK theme, by OS preference — skipped when the app pins light.
+ * Keep in sync with the [data-theme="dark"] block below.
+ * ------------------------------------------------------------------------*/
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --color-surface: #212121;
+    --color-surface-secondary: #181818;
+    --color-surface-elevated: #303030;
+
+    --color-text: #ffffff;
+    --color-text-secondary: #afafaf;
+    --color-text-inverse: #0d0d0d;
+
+    --color-border-subtle: rgb(255 255 255 / 6%); /* --alpha-06 */
+    --color-border: rgb(255 255 255 / 12%); /* --alpha-12 */
+
+    --color-background-primary-ghost-hover: rgb(255 255 255 / 12%);
+    --color-background-primary-ghost-active: rgb(255 255 255 / 16%);
+    --color-background-primary-solid: #f3f3f3;
+
+    --color-ring: #0285ff;
+    --color-text-info: #66b5ff;
+
+    --color-text-success: #04b84c;
+    --color-background-success-surface: rgb(4 184 76 / 15%); /* --green-a50 */
+    --color-text-warning: #e25507;
+    --color-background-warning-surface: rgb(251 106 34 / 16%); /* --orange-a50 */
+    --color-text-danger: #e02e2a;
+    --color-background-danger-surface: rgb(250 66 62 / 16%); /* --red-a50 */
+
+    --shadow-300: 0 4px 8px -2px rgb(0 0 0 / 0.36);
+  }
+}
+
+/* --------------------------------------------------------------------------
+ * DARK theme, pinned by attribute — beats an OS light preference.
+ * Same declarations as the media block above.
+ * ------------------------------------------------------------------------*/
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --color-surface: #212121;
+  --color-surface-secondary: #181818;
+  --color-surface-elevated: #303030;
+
+  --color-text: #ffffff;
+  --color-text-secondary: #afafaf;
+  --color-text-inverse: #0d0d0d;
+
+  --color-border-subtle: rgb(255 255 255 / 6%);
+  --color-border: rgb(255 255 255 / 12%);
+
+  --color-background-primary-ghost-hover: rgb(255 255 255 / 12%);
+  --color-background-primary-ghost-active: rgb(255 255 255 / 16%);
+  --color-background-primary-solid: #f3f3f3;
+
+  --color-ring: #0285ff;
+  --color-text-info: #66b5ff;
+
+  --color-text-success: #04b84c;
+  --color-background-success-surface: rgb(4 184 76 / 15%);
+  --color-text-warning: #e25507;
+  --color-background-warning-surface: rgb(251 106 34 / 16%);
+  --color-text-danger: #e02e2a;
+  --color-background-danger-surface: rgb(250 66 62 / 16%);
+
+  --shadow-300: 0 4px 8px -2px rgb(0 0 0 / 0.36);
+}
+
+/* Pinned light — values already come from :root; this only fixes native UI. */
+:root[data-theme="light"] {
+  color-scheme: light;
+}

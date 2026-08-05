@@ -19,7 +19,7 @@
     for (let i = 0; i < 16; i += 1) {
       if (document.querySelector(".x-task-card")) {
         await sleep(600);
-        return "steps=" + document.querySelectorAll(".x-task-cell,.x-task-rule").length +
+        return "steps=" + document.querySelectorAll(".x-task-step,.x-task-runline").length +
           " cards=" + document.querySelectorAll(".x-task-card").length;
       }
       await sleep(250);

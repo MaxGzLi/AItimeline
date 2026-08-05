@@ -2831,50 +2831,93 @@ button.x-chip {
 }
 
 /* ---------- 任务客户端(桌面基地第一屏) ----------
-   照 Codex 的形状:主区是一条从上往下的运行记录,输入框贴在主列底部,
-   左栏只是会话列表。用全站既有的 --x- 变量,不另起一套配色。 */
+   照 Codex 桌面客户端的视觉语言重画。五条规则:
+     1 不用边框分层——一律用填充,底色亮一档或暗一档
+     2 中性灰,不是冷蓝灰
+     3 全屏只有一个饱和色(有事要你看的蓝点)
+     4 你说的话右对齐成一块,它的回答没有容器
+     5 系统无衬线,句首大写,不用等宽字和框线符号
+   颜色和圆角只有一个来源:tokens-openai.css(openai/apps-sdk-ui,MIT)。
+   这里不再自定义任何色值。 */
 .x-task-client {
-  /* Codex 的强调色:浅底 rgb(0,95,135),深底青色。它自己是按终端底色亮度切的。 */
-  --x-task-accent: #005f87;
   display: grid;
-  grid-template-columns: 268px minmax(0, 1fr);
+  grid-template-columns: 264px minmax(0, 1fr) 320px;
   height: 100vh;
   overflow: hidden;
-  background: var(--x-bg);
-  color: var(--x-ink);
+  background: var(--color-surface-secondary);
+  color: var(--color-text);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.6;
 }
-:root[data-theme="dark"] .x-task-client { --x-task-accent: #4fd6e0; }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .x-task-client { --x-task-accent: #4fd6e0; }
-}
-
-/* ---- 左栏:会话列表 ---- */
+/* ---- 左栏:常去的地方 + 任务列表 + 图书馆设置 ---- */
 .x-task-side {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  border-right: 1px solid var(--x-line);
+  padding: 0 8px 8px;
 }
 .x-task-brand {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
-  padding: 16px 16px 12px;
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 0.01em;
+  padding: 16px 10px 12px;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
-.x-task-counts {
+/* 全屏唯一的饱和色:有活在跑。 */
+.x-task-live {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--color-ring);
+}
+
+/* 侧栏里所有可点的行长一个样:细线图标 + 文字 + 可选数字。 */
+.x-task-quick button,
+.x-task-foot button {
   display: flex;
-  gap: 8px;
-  margin-left: auto;
-  font-size: 12px;
-  font-weight: 400;
-  font-style: normal;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: 13.5px;
+  text-align: left;
+  cursor: pointer;
 }
-.x-task-counts .running { color: var(--x-task-accent); font-style: normal; }
-.x-task-counts .failed { color: var(--x-danger, #f4212e); font-style: normal; }
+.x-task-quick button:hover,
+.x-task-foot button:hover {
+  background: var(--color-background-primary-ghost-hover);
+  color: var(--color-text);
+}
+.x-task-quick button em,
+.x-task-foot button em {
+  margin-left: auto;
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+.x-task-quick button svg,
+.x-task-foot button svg {
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+
+.x-task-quick {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-bottom: 10px;
+}
 
 .x-task-list {
   flex: 1;
@@ -2882,81 +2925,88 @@ button.x-chip {
   overflow-y: auto;
   padding-bottom: 8px;
 }
+.x-task-group + .x-task-group {
+  margin-top: 12px;
+}
 .x-task-groupname {
   margin: 0;
-  padding: 16px 16px 6px;
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--x-dim);
+  padding: 8px 10px 4px;
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0;
 }
 .x-task-row {
   display: grid;
-  grid-template-columns: 14px minmax(0, 1fr) auto;
-  align-items: baseline;
-  gap: 8px;
+  grid-template-columns: 6px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
   width: 100%;
-  padding: 7px 16px;
+  padding: 6px 10px;
   border: 0;
+  border-radius: var(--radius-md);
   background: none;
-  color: inherit;
+  color: var(--color-text-secondary);
   font: inherit;
+  font-size: 13.5px;
   text-align: left;
   cursor: pointer;
 }
-.x-task-row:hover { background: var(--x-hover); }
-.x-task-row.active { background: var(--x-hover); }
-.x-task-dot {
-  font-size: 11px;
-  line-height: 1.5;
-  color: var(--x-dim);
+.x-task-row:hover {
+  background: var(--color-background-primary-ghost-hover);
 }
-.x-task-dot.running { color: var(--x-task-accent); }
-.x-task-dot.failed { color: var(--x-danger, #f4212e); }
-.x-task-dot.succeeded { color: var(--x-repost, #00ba7c); }
+/* 选中态是一块浅灰圆角填充,不是左边一道竖条,也不加粗。 */
+.x-task-row.active {
+  background: var(--color-background-primary-ghost-active);
+  color: var(--color-text);
+}
+.x-task-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--color-text-tertiary);
+  opacity: 0.55;
+}
+/* 只有「在跑」和「卡住了」值得你看一眼,其余一律灰。 */
+.x-task-dot.live {
+  background: var(--color-ring);
+  opacity: 1;
+}
+.x-task-dot.stuck {
+  background: var(--color-text-tertiary);
+  opacity: 1;
+}
 .x-task-rowtitle {
   overflow: hidden;
-  font-size: 13.5px;
-  line-height: 1.45;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-.x-task-row.active .x-task-rowtitle { font-weight: 600; }
 .x-task-rowtime {
-  font-size: 11.5px;
-  color: var(--x-dim);
-}
-
-/* 旧的八个视图退成一行小字,不再是八个占地方的格子。 */
-.x-task-secondary {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px 10px;
-  padding: 10px 16px 14px;
-  border-top: 1px solid var(--x-line);
-}
-.x-task-secondary button {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 0;
-  border: 0;
-  background: none;
-  color: var(--x-dim);
-  font: inherit;
+  color: var(--color-text-tertiary);
   font-size: 12px;
-  cursor: pointer;
+  font-variant-numeric: tabular-nums;
 }
-.x-task-secondary button:hover { color: var(--x-ink); }
-.x-task-secondary button svg { width: 13px; height: 13px; }
 
-/* ---- 主列:运行记录 + 底部输入框 ---- */
+.x-task-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-top: 8px;
+}
+.x-task-stuck {
+  padding: 4px 10px 0;
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+  font-style: normal;
+}
+
+/* ---- 中栏:对话流 + 底部输入卡 ---- */
 .x-task-main {
   display: flex;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  background: var(--color-surface);
 }
 /*
  * 内容不满一屏时贴着输入框往上排,不要让对话吊在顶上、底下空一大片。
@@ -2969,41 +3019,47 @@ button.x-chip {
   flex-direction: column;
   min-height: 0;
   overflow-y: auto;
-  padding: 32px 0 8px;
+  padding: 40px 0 8px;
 }
 .x-task-stream > :first-child {
   margin-top: auto;
 }
 .x-task-turn {
-  max-width: 720px;
-  margin: 0 auto 28px;
-  padding: 0 32px;
+  width: 100%;
+  max-width: 768px;
+  margin: 0 auto 32px;
+  padding: 0 40px;
 }
 
-/* 你说的话:Codex 用「终端底色 + 一点白/黑」的浅块,不用气泡不用头像。 */
-.x-task-said {
-  margin: 0;
+/* 规则 4:你说的话是右对齐的一块浅填充,它的回答什么容器都没有。 */
+.x-task-you {
+  max-width: min(72%, 520px);
+  margin: 0 0 20px auto;
   padding: 10px 14px;
-  background: rgba(15, 20, 25, 0.04);
-  font-size: 15px;
-  line-height: 1.5;
+  border-radius: var(--radius-2xl);
+  background: var(--color-background-primary-ghost-hover);
   white-space: pre-wrap;
 }
-:root[data-theme="dark"] .x-task-said { background: rgba(231, 233, 234, 0.12); }
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .x-task-said { background: rgba(231, 233, 234, 0.12); }
+.x-task-agent > * {
+  margin: 0;
+}
+.x-task-agent > * + * {
+  margin-top: 14px;
+}
+.x-task-lead {
+  margin: 0 0 14px;
+  line-height: 1.7;
 }
 
-.x-task-meta {
+/* 这轮跑了多久、几步——收成一行淡字,不是一条通栏横线。 */
+.x-task-runline {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
-  margin: 8px 0 0;
-  padding-left: 14px;
-  font-size: 12px;
-  color: var(--x-dim);
+  gap: 4px 12px;
+  color: var(--color-text-tertiary);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
 }
 .x-task-retry {
   display: inline-flex;
@@ -3012,252 +3068,474 @@ button.x-chip {
   padding: 0;
   border: 0;
   background: none;
-  color: var(--x-task-accent);
+  color: var(--color-text-secondary);
   font: inherit;
-  font-size: 12px;
+  font-size: 12.5px;
   cursor: pointer;
 }
-.x-task-retry:disabled { opacity: 0.5; cursor: default; }
-
-/* 它为什么在做这件事:暗色斜体,像 Codex 的思考行。 */
-.x-task-think {
-  margin: 12px 0 0;
-  padding-left: 14px;
-  color: var(--x-dim);
-  font-size: 13.5px;
-  font-style: italic;
-  line-height: 1.6;
+.x-task-retry:hover {
+  color: var(--color-text);
+}
+.x-task-retry:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
-/* 运行单元:每步一个 •,附属行走 │ / └ 的槽。 */
-.x-task-cells {
-  margin: 14px 0 0;
+/* 运行步骤:靠缩进和灰度分层,不用 • │ └ 这些终端符号。 */
+.x-task-steps {
+  margin: 0;
   padding: 0;
   list-style: none;
 }
-.x-task-cell {
-  display: grid;
-  grid-template-columns: 14px minmax(0, 1fr);
-  gap: 0;
-  margin-top: 10px;
-  font-size: 13.5px;
-  line-height: 1.65;
+.x-task-step + .x-task-step {
+  margin-top: 6px;
 }
-.x-task-bullet {
-  color: var(--x-dim);
-  font-size: 13px;
-  line-height: 1.65;
-}
-.x-task-celltext { min-width: 0; }
-.x-task-cellline em {
-  margin-left: 8px;
-  color: var(--x-dim);
-  font-size: 12px;
-  font-style: normal;
-}
-.x-task-cell.failed .x-task-cellline { color: var(--x-danger, #f4212e); }
-.x-task-cellitems {
+.x-task-stepline {
   display: block;
-  margin-top: 2px;
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-  font-size: 12.5px;
-}
-.x-task-cellitem {
-  display: flex;
-  gap: 6px;
-  color: var(--x-dim);
-}
-.x-task-gutter { color: var(--x-line); }
-.x-task-cellitem a { color: inherit; text-decoration: none; }
-.x-task-cellitem a:hover { text-decoration: underline; }
-.x-task-cellitem em { font-style: normal; }
-
-.x-task-answer {
-  display: block;
-  font-size: 15px;
-  line-height: 1.65;
-  white-space: pre-wrap;
-}
-.x-task-quote {
-  display: block;
-  margin-top: 8px;
-  padding-left: 12px;
-  border-left: 2px solid var(--x-line);
-  color: var(--x-dim);
+  color: var(--color-text-secondary);
   font-size: 13.5px;
   line-height: 1.6;
 }
-.x-task-quote em {
-  display: block;
-  margin-top: 4px;
+.x-task-stepline em {
+  margin-left: 8px;
+  color: var(--color-text-tertiary);
+  font-size: 12.5px;
   font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+.x-task-step.failed .x-task-stepline {
+  color: var(--color-text-danger);
+}
+.x-task-stepitems {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 4px;
+  padding-left: 16px;
+}
+.x-task-stepitem {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+}
+.x-task-stepitem a,
+.x-task-stepitem > span {
+  overflow: hidden;
+  color: var(--color-text-secondary);
+  text-decoration: none;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.x-task-stepitem a:hover {
+  color: var(--color-text);
+  text-decoration: underline;
+}
+.x-task-stepitem em {
+  margin-left: auto;
+  color: var(--color-text-tertiary);
   font-size: 12px;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
 }
 
-/* 产出的卡:一条一条摆在流里,不另起标题栏。 */
-.x-task-produced {
-  display: grid;
-  gap: 8px;
-  margin-top: 14px;
+/* 回答正文就是正文,不套壳。 */
+.x-task-answer {
+  line-height: 1.75;
+  white-space: pre-wrap;
+}
+/* 逐字引文用一道细竖线标出来——这是排版惯例,不是拿边框分层。 */
+.x-task-quote {
   padding-left: 14px;
+  border-left: 2px solid var(--color-border);
+  color: var(--color-text-secondary);
+  font-size: 14px;
+  line-height: 1.7;
+}
+.x-task-quote em {
+  display: block;
+  margin-top: 6px;
+  color: var(--color-text-tertiary);
+  font-size: 12.5px;
+  font-style: normal;
+}
+
+/* 产出的卡:一块填充,不描边。 */
+.x-task-produced {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 .x-task-card {
-  display: grid;
-  gap: 4px;
-  padding: 12px 14px;
-  border: 1px solid var(--x-line);
-  border-radius: 10px;
-  background: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  padding: 14px 16px;
+  border: 0;
+  border-radius: var(--radius-xl);
+  background: var(--color-background-primary-ghost-hover);
   color: inherit;
   font: inherit;
   text-align: left;
   cursor: pointer;
 }
-.x-task-card:hover { background: var(--x-hover); }
-.x-task-cardtitle { font-size: 14.5px; font-weight: 600; line-height: 1.4; }
-.x-task-cardtake { font-size: 13.5px; line-height: 1.55; }
+.x-task-card:hover {
+  background: var(--color-background-primary-ghost-active);
+}
+.x-task-cardtitle {
+  font-size: 14.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.x-task-cardtake {
+  color: var(--color-text-secondary);
+  font-size: 13.5px;
+  line-height: 1.65;
+}
 .x-task-cardquote {
-  padding-left: 10px;
-  border-left: 2px solid var(--x-line);
-  color: var(--x-dim);
+  padding-left: 12px;
+  border-left: 2px solid var(--color-border);
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  line-height: 1.65;
+}
+.x-task-cardsource {
+  color: var(--color-text-tertiary);
   font-size: 12.5px;
-  line-height: 1.5;
 }
-.x-task-cardsource { color: var(--x-dim); font-size: 12px; }
 
-/* 一轮的收尾:通栏横线,左边写这轮用了多久。 */
-.x-task-rule {
+/* 库里答完了要往外搜,先问过你。 */
+.x-task-confirm {
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 10px;
-  margin: 20px 0 0;
-  color: var(--x-dim);
-  font-size: 12px;
+  align-items: flex-start;
 }
-.x-task-rule::after {
-  content: "";
-  flex: 1;
-  height: 1px;
-  background: var(--x-line);
+.x-task-confirmhead {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: 14px;
 }
-.x-task-ruletext { white-space: nowrap; }
-
-/* ---- 底部输入框:无边框,一个加粗的 › ---- */
-.x-task-composer {
-  border-top: 1px solid var(--x-line);
-  padding: 12px 0 18px;
-}
-.x-task-composerrow {
-  display: grid;
-  grid-template-columns: 16px minmax(0, 1fr) 30px;
+.x-task-confirmrow {
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  max-width: 720px;
-  margin: 0 auto;
-  padding: 0 32px;
 }
-.x-task-caret {
-  color: var(--x-task-accent);
-  font-weight: 700;
-  font-size: 15px;
-  line-height: 1.5;
+.x-task-confirmlabel {
+  color: var(--color-text-tertiary);
+  font-size: 13px;
+}
+.x-task-choice {
+  padding: 4px 12px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--color-background-primary-ghost-hover);
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.x-task-choice:hover {
+  background: var(--color-background-primary-ghost-active);
+  color: var(--color-text);
+}
+.x-task-choice.active {
+  background: var(--color-background-primary-solid);
+  color: var(--color-text-inverse);
+}
+.x-task-confirmgo {
+  padding: 7px 16px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--color-background-primary-solid);
+  color: var(--color-text-inverse);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.x-task-confirmgo:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.x-task-confirmed {
+  color: var(--color-text-success);
+  font-size: 13.5px;
+}
+
+/* ---- 底部输入卡:圆角卡,工具条在卡里面 ---- */
+.x-task-composer {
+  padding: 8px 40px 20px;
+}
+.x-task-composerbox {
+  max-width: 768px;
+  margin: 0 auto;
+  padding: 12px 14px 10px;
+  border-radius: var(--radius-2xl);
+  background: var(--color-background-primary-ghost-hover);
 }
 .x-task-composerinput {
+  display: block;
+  width: 100%;
+  max-height: 200px;
   border: 0;
   background: none;
-  color: inherit;
+  color: var(--color-text);
   font: inherit;
-  font-size: 15px;
-  line-height: 1.5;
+  line-height: 1.6;
   resize: none;
+}
+.x-task-composerinput:focus {
   outline: none;
 }
-.x-task-composerinput::placeholder { color: var(--x-dim); }
+.x-task-composerinput::placeholder {
+  color: var(--color-text-tertiary);
+}
+.x-task-tools {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+}
+.x-task-toolnote {
+  color: var(--color-text-tertiary);
+  font-size: 12.5px;
+}
 .x-task-send {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 30px;
   height: 30px;
+  margin-left: auto;
   border: 0;
-  border-radius: 999px;
-  background: var(--x-btn-bg);
-  color: var(--x-btn-ink);
+  border-radius: var(--radius-full);
+  background: var(--color-background-primary-solid);
+  color: var(--color-text-inverse);
   cursor: pointer;
 }
-.x-task-send:disabled { opacity: 0.35; cursor: default; }
-.x-task-spin { animation: x-task-spin 1s linear infinite; }
-
+.x-task-send:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+.x-task-spin {
+  animation: x-task-spin 0.9s linear infinite;
+}
 @keyframes x-task-spin {
   to { transform: rotate(360deg); }
 }
-
-/* ---- 确认块:要往外搜先问过 ---- */
-.x-task-confirm {
-  margin: 14px 0 0;
-  padding-left: 14px;
-}
-.x-task-confirmhead {
-  margin: 0 0 8px;
-  font-size: 13.5px;
-}
-.x-task-confirmrow {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 6px;
-}
-.x-task-confirmlabel {
-  margin-right: 4px;
-  color: var(--x-dim);
-  font-size: 12.5px;
-}
-.x-task-choice {
-  padding: 3px 10px;
-  border: 1px solid var(--x-line);
-  border-radius: 999px;
-  background: none;
-  color: inherit;
-  font: inherit;
-  font-size: 12.5px;
-  cursor: pointer;
-}
-.x-task-choice.active {
-  border-color: var(--x-task-accent);
-  color: var(--x-task-accent);
-}
-.x-task-confirmgo {
-  margin-top: 6px;
-  padding: 5px 14px;
-  border: 0;
-  border-radius: 999px;
-  background: var(--x-btn-bg);
-  color: var(--x-btn-ink);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 700;
-  cursor: pointer;
-}
-.x-task-confirmgo:disabled { opacity: 0.4; cursor: default; }
-.x-task-confirmed {
-  margin: 12px 0 0;
-  padding-left: 14px;
-  color: var(--x-repost, #00ba7c);
-  font-size: 13.5px;
+@media (prefers-reduced-motion: reduce) {
+  .x-task-spin { animation: none; }
 }
 
 .x-task-empty,
 .x-task-error {
-  max-width: 720px;
+  width: 100%;
+  max-width: 768px;
   margin: 0 auto;
-  padding: 0 32px;
-  color: var(--x-dim);
+  padding: 0 40px;
+  color: var(--color-text-tertiary);
   font-size: 13.5px;
 }
-.x-task-error { color: var(--x-danger, #f4212e); }
+.x-task-error {
+  color: var(--color-text-danger);
+}
 
+/* ---- 右栏:浮起的一张卡。用的是现有 ContextRail,只在这一屏里换皮 ----
+   ContextRail 原来是给三栏外壳写的:固定 350px 宽、sticky、模块自带底色和描边,
+   深色下还有一条 `:root[data-theme="dark"] .x-module` 的高权重规则。所以这里的
+   选择器都带 `.x-task-client .x-task-rail .x-rail` 前缀压过去,组件本身一行不动。 */
+.x-task-rail {
+  min-width: 0;
+  min-height: 0;
+  padding: 12px 12px 12px 0;
+  overflow: hidden;
+}
+.x-task-client .x-task-rail .x-rail {
+  position: static;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  padding: 14px;
+  border: 0;
+  border-radius: var(--radius-2xl);
+  background: var(--color-surface-elevated);
+  overflow-y: auto;
+}
+.x-task-client .x-task-rail .x-rail .x-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--color-background-primary-ghost-hover);
+  color: var(--color-text-tertiary);
+}
+.x-task-client .x-task-rail .x-rail .x-search svg {
+  flex: none;
+  width: 15px;
+  height: 15px;
+}
+.x-task-client .x-task-rail .x-rail .x-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: none;
+  color: var(--color-text);
+  font: inherit;
+  font-size: 13.5px;
+}
+.x-task-client .x-task-rail .x-rail .x-search input:focus {
+  outline: none;
+}
+.x-task-client .x-task-rail .x-rail .x-module {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  overflow: visible;
+}
+.x-task-client .x-task-rail .x-rail .x-module-head {
+  margin: 0 0 4px;
+  padding: 0 8px;
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.x-task-client .x-task-rail .x-rail .x-mrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--color-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.x-task-client .x-task-rail .x-rail .x-mrow:hover {
+  background: var(--color-background-primary-ghost-hover);
+}
+.x-task-client .x-task-rail .x-rail .x-mmain {
+  min-width: 0;
+  flex: 1;
+}
+.x-task-client .x-task-rail .x-rail .x-mname {
+  margin: 0;
+  overflow: hidden;
+  font-size: 13.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.x-task-client .x-task-rail .x-rail .x-msub,
+.x-task-client .x-task-rail .x-rail .x-mmeta,
+.x-task-client .x-task-rail .x-rail .x-mrnote {
+  margin: 0;
+  color: var(--color-text-tertiary);
+  font-size: 12.5px;
+  font-weight: 400;
+  line-height: 1.55;
+}
+.x-task-client .x-task-rail .x-rail .x-mrnote {
+  padding: 0 8px 4px;
+}
+.x-task-client .x-task-rail .x-rail .x-mnum {
+  flex: none;
+  color: var(--color-text-tertiary);
+  font-size: 12.5px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+.x-task-client .x-task-rail .x-rail .x-mmore {
+  display: block;
+  width: auto;
+  margin-top: 2px;
+  padding: 4px 8px;
+  border: 0;
+  background: none;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.x-task-client .x-task-rail .x-rail .x-mmore:hover {
+  background: none;
+  color: var(--color-text);
+}
+/* 三区比例条:三段灰阶,不是三种颜色。行内样式带了颜色,只能在这里压掉。 */
+.x-task-client .x-task-rail .x-rail .x-bar {
+  display: flex;
+  height: 4px;
+  margin: 2px 8px 8px;
+  border-radius: var(--radius-full);
+  background: var(--color-background-primary-ghost-hover);
+  overflow: hidden;
+}
+.x-task-client .x-task-rail .x-rail .x-bar span:nth-child(1) {
+  background: var(--color-text-secondary) !important;
+}
+.x-task-client .x-task-rail .x-rail .x-bar span:nth-child(2) {
+  background: var(--color-text-tertiary) !important;
+}
+.x-task-client .x-task-rail .x-rail .x-bar span:nth-child(3) {
+  background: var(--color-border) !important;
+}
+.x-task-client .x-task-rail .x-rail .x-zonechip {
+  flex: none;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--color-background-primary-ghost-hover);
+  color: var(--color-text-tertiary);
+  font-size: 11.5px;
+  font-weight: 400;
+}
+.x-task-client .x-task-rail .x-rail .x-localgraph {
+  margin: 4px 0;
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-secondary);
+  overflow: hidden;
+}
+.x-task-client .x-task-rail .x-rail .x-raillinks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: auto 0 0;
+  padding: 8px 8px 0;
+  color: var(--color-text-tertiary);
+  font-size: 11.5px;
+}
+
+.x-task-client :focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
+
+@media (max-width: 1180px) {
+  .x-task-client { grid-template-columns: 264px minmax(0, 1fr); }
+  .x-task-rail { display: none; }
+}
 @media (max-width: 860px) {
   .x-task-client { grid-template-columns: minmax(0, 1fr); }
   .x-task-side { display: none; }
+  .x-task-turn,
+  .x-task-composer { padding-left: 20px; padding-right: 20px; }
 }

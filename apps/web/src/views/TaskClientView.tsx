@@ -1,26 +1,28 @@
 import { ArrowUp, LoaderCircle, RotateCcw } from "lucide-react";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { formatRelativeTime, formatShortTime } from "../lib/format";
 import { t } from "../lib/i18n";
 import { groupAgentTasks, type AgentTaskDetailResponse, type AgentTaskStatus, type AgentTaskSummary } from "../lib/tasks";
 import type { AgentDispatchReply } from "../lib/useAgentTasks";
 
-// 状态点用一个字符表明,不用彩色徽章——设计语法要扁平,不要模板脸。
-const statusGlyphs: Record<AgentTaskStatus, string> = {
-  queued: "○",
-  running: "◐",
-  succeeded: "●",
-  failed: "×",
-  skipped: "–"
+// 状态点是一个小圆,不是字符也不是徽章。只有「有事要你看」才上强调色。
+const statusTone: Record<AgentTaskStatus, string> = {
+  queued: "waiting",
+  running: "live",
+  succeeded: "done",
+  failed: "stuck",
+  skipped: "done"
 };
 
 export interface TaskClientViewProps {
+  contextRail: ReactNode;
   detail: AgentTaskDetailResponse | null;
   detailLoading: boolean;
   dispatchError: string | null;
   dispatchPending: boolean;
   dispatchText: string;
   failedCount: number;
+  footerNav: ReactNode;
   lastReply: AgentDispatchReply | null;
   listError: string | null;
   onConfirmDiscovery: (turnId: string, choices: Record<string, string>) => void;
@@ -29,17 +31,17 @@ export interface TaskClientViewProps {
   onOpenCard: (cardId: string) => void;
   onRetry: (taskId: string) => void;
   onSelectTask: (taskId: string) => void;
+  primaryNav: ReactNode;
   retryingId: string | null;
   runningCount: number;
-  secondaryNav: React.ReactNode;
   selectedTaskId: string | null;
   tasks: AgentTaskSummary[];
   tasksLoading: boolean;
 }
 
 /**
- * 一轮跑了多久。Codex 每一轮结尾是一条通栏横线加「用了 X」,那个数字要有出处,
- * 所以只在头尾两步都带时间戳时才算,算不出来就不写。
+ * 这一轮跑了多久。Codex 把它收成一行很淡的小字放在这轮开头,不是一条通栏横线,
+ * 所以这里只出数字,长什么样交给样式。算不出来就不写,不编。
  */
 function describeElapsed(steps: AgentTaskDetailResponse["steps"]): string | null {
   const stamps = steps.map((step) => step.at).filter((at): at is string => Boolean(at));
@@ -61,12 +63,14 @@ function describeElapsed(steps: AgentTaskDetailResponse["steps"]): string | null
 }
 
 export function TaskClientView({
+  contextRail,
   detail,
   detailLoading,
   dispatchError,
   dispatchPending,
   dispatchText,
   failedCount,
+  footerNav,
   lastReply,
   listError,
   onConfirmDiscovery,
@@ -75,9 +79,9 @@ export function TaskClientView({
   onOpenCard,
   onRetry,
   onSelectTask,
+  primaryNav,
   retryingId,
   runningCount,
-  secondaryNav,
   selectedTaskId,
   tasks,
   tasksLoading
@@ -90,6 +94,8 @@ export function TaskClientView({
   );
   const elapsed = detail ? describeElapsed(detail.steps) : null;
   const streamRef = useRef<HTMLDivElement | null>(null);
+  // 这活是你派的还是它自己排的。你派的才右对齐,它排的按它说话处理。
+  const taskFromYou = detail?.task.origin === "you";
 
   // 换一轮对话就把上一轮的勾选清掉,免得把旧选择带进新的确认。
   useEffect(() => {
@@ -108,11 +114,15 @@ export function TaskClientView({
       <aside className="x-task-side">
         <div className="x-task-brand">
           <span className="x-task-brandname">AITimeline</span>
-          <span className="x-task-counts">
-            {runningCount > 0 ? <em className="running">{t("tasks.countRunning", { count: runningCount })}</em> : null}
-            {failedCount > 0 ? <em className="failed">{t("tasks.countFailed", { count: failedCount })}</em> : null}
-          </span>
+          {runningCount > 0 ? (
+            <span aria-label={t("tasks.countRunning", { count: runningCount })} className="x-task-live" />
+          ) : null}
         </div>
+
+        {/* 常去的地方钉在最上面,不跟着列表滚。 */}
+        <nav aria-label={t("tasks.primaryNav")} className="x-task-quick">
+          {primaryNav}
+        </nav>
 
         <div className="x-task-list">
           {listError ? <p className="x-task-error">{listError}</p> : null}
@@ -120,7 +130,7 @@ export function TaskClientView({
             <p className="x-task-empty">{tasksLoading ? t("tasks.loading") : t("tasks.empty")}</p>
           ) : null}
           {groups.map((group) => (
-            <section key={group.key}>
+            <section className="x-task-group" key={group.key}>
               <h2 className="x-task-groupname">{t(`tasks.group.${group.key}`)}</h2>
               {group.tasks.map((task) => (
                 <button
@@ -130,7 +140,7 @@ export function TaskClientView({
                   onClick={() => onSelectTask(task.id)}
                   type="button"
                 >
-                  <span className={`x-task-dot ${task.status}`}>{statusGlyphs[task.status] ?? "○"}</span>
+                  <span aria-hidden="true" className={`x-task-dot ${statusTone[task.status] ?? "waiting"} ${task.status}`} />
                   <span className="x-task-rowtitle">{task.title}</span>
                   <span className="x-task-rowtime">{formatRelativeTime(task.updatedAt)}</span>
                 </button>
@@ -139,9 +149,10 @@ export function TaskClientView({
           ))}
         </div>
 
-        {/* 旧视图退成不起眼的一行小字。它们不是这一屏的主角,不该占八个格子。 */}
-        <nav className="x-task-secondary" aria-label={t("tasks.secondaryNav")}>
-          {secondaryNav}
+        {/* 图书馆、设置这些是「去了就回来」的地方,收在最底下。 */}
+        <nav aria-label={t("tasks.footerNav")} className="x-task-foot">
+          {footerNav}
+          {failedCount > 0 ? <em className="x-task-stuck">{t("tasks.countFailed", { count: failedCount })}</em> : null}
         </nav>
       </aside>
 
@@ -152,52 +163,52 @@ export function TaskClientView({
 
           {detail ? (
             <article className="x-task-turn">
-              {/* 一轮的开头是「你说的话」:派的这个活本身。 */}
-              <p className="x-task-said">{detail.task.title}</p>
+              {/* 你派的活右对齐成一块,它自己排的活当它说的第一句话。 */}
+              {taskFromYou ? (
+                <p className="x-task-you">{detail.task.title}</p>
+              ) : (
+                <p className="x-task-lead">{detail.task.title}</p>
+              )}
 
-              <p className="x-task-meta">
-                <span>{detail.task.kindLabel}</span>
-                <span>{formatRelativeTime(detail.task.updatedAt)}</span>
-                {detail.task.attempts > 1 ? <span>{t("tasks.attempts", { count: detail.task.attempts })}</span> : null}
-                {detail.task.retryable ? (
-                  <button
-                    className="x-task-retry"
-                    disabled={retryingId === detail.task.id}
-                    onClick={() => onRetry(detail.task.id)}
-                    type="button"
-                  >
-                    {retryingId === detail.task.id ? (
-                      <LoaderCircle className="x-task-spin" size={13} />
-                    ) : (
-                      <RotateCcw size={13} />
-                    )}
-                    <span>{t("tasks.retry")}</span>
-                  </button>
-                ) : null}
-              </p>
+              <div className="x-task-agent">
+                {/* 这轮跑了多久、几步,收成一行淡字放在开头。 */}
+                <p className="x-task-runline">
+                  <span>{elapsed ?? t(`tasks.status.${detail.task.status}`)}</span>
+                  {detail.steps.length > 0 ? <span>{t("tasks.stepCount", { count: detail.steps.length })}</span> : null}
+                  <span>{detail.task.kindLabel}</span>
+                  <span>{formatRelativeTime(detail.task.updatedAt)}</span>
+                  {detail.task.attempts > 1 ? <span>{t("tasks.attempts", { count: detail.task.attempts })}</span> : null}
+                  {detail.task.retryable ? (
+                    <button
+                      className="x-task-retry"
+                      disabled={retryingId === detail.task.id}
+                      onClick={() => onRetry(detail.task.id)}
+                      type="button"
+                    >
+                      {retryingId === detail.task.id ? (
+                        <LoaderCircle className="x-task-spin" size={13} />
+                      ) : (
+                        <RotateCcw size={13} />
+                      )}
+                      <span>{t("tasks.retry")}</span>
+                    </button>
+                  ) : null}
+                </p>
 
-              {/* 派活理由是「它为什么在做这件事」,照 Codex 的思考行:暗色斜体,不抢戏。 */}
-              {detail.task.reason ? <p className="x-task-think">{detail.task.reason}</p> : null}
+                {taskFromYou && detail.task.reason ? <p className="x-task-lead">{detail.task.reason}</p> : null}
 
-              <ol className="x-task-cells">
-                {detail.steps.map((step, index) => (
-                  <li className={`x-task-cell ${step.kind}`} key={`${step.kind}-${index}`}>
-                    <span aria-hidden="true" className="x-task-bullet">
-                      •
-                    </span>
-                    <span className="x-task-celltext">
-                      <span className="x-task-cellline">
+                <ol className="x-task-steps">
+                  {detail.steps.map((step, index) => (
+                    <li className={`x-task-step ${step.kind}`} key={`${step.kind}-${index}`}>
+                      <span className="x-task-stepline">
                         {step.text}
                         {step.at ? <em className="at">{formatShortTime(step.at)}</em> : null}
                         {step.note ? <em>{step.note}</em> : null}
                       </span>
                       {step.items?.length ? (
-                        <span className="x-task-cellitems">
-                          {step.items.map((item, itemIndex) => (
-                            <span className="x-task-cellitem" key={`${item.title}-${item.url ?? ""}`}>
-                              <span aria-hidden="true" className="x-task-gutter">
-                                {itemIndex === step.items!.length - 1 ? "└" : "│"}
-                              </span>
+                        <span className="x-task-stepitems">
+                          {step.items.map((item) => (
+                            <span className="x-task-stepitem" key={`${item.title}-${item.url ?? ""}`}>
                               {item.url ? (
                                 <a href={item.url} rel="noreferrer" target="_blank">
                                   {item.title}
@@ -210,98 +221,84 @@ export function TaskClientView({
                           ))}
                         </span>
                       ) : null}
-                    </span>
-                  </li>
-                ))}
-              </ol>
-
-              {detail.produced.length ? (
-                <section className="x-task-produced">
-                  {detail.produced.map((card) => (
-                    <button className="x-task-card" key={card.id} onClick={() => onOpenCard(card.id)} type="button">
-                      <span className="x-task-cardtitle">{card.title}</span>
-                      {card.keyTakeaway ? <span className="x-task-cardtake">{card.keyTakeaway}</span> : null}
-                      {card.quote ? <span className="x-task-cardquote">{card.quote}</span> : null}
-                      {card.source ? <span className="x-task-cardsource">{card.source.title}</span> : null}
-                    </button>
+                    </li>
                   ))}
-                </section>
-              ) : null}
+                </ol>
 
-              {/* 一轮的收尾:一条通栏横线,左边写这轮用了多久。 */}
-              <p className="x-task-rule">
-                <span className="x-task-ruletext">
-                  {elapsed ?? t(`tasks.status.${detail.task.status}`)}
-                </span>
-              </p>
+                {detail.produced.length ? (
+                  <section className="x-task-produced">
+                    {detail.produced.map((card) => (
+                      <button className="x-task-card" key={card.id} onClick={() => onOpenCard(card.id)} type="button">
+                        <span className="x-task-cardtitle">{card.title}</span>
+                        {card.keyTakeaway ? <span className="x-task-cardtake">{card.keyTakeaway}</span> : null}
+                        {card.quote ? <span className="x-task-cardquote">{card.quote}</span> : null}
+                        {card.source ? <span className="x-task-cardsource">{card.source.title}</span> : null}
+                      </button>
+                    ))}
+                  </section>
+                ) : null}
+              </div>
             </article>
           ) : null}
 
           {/* 你刚说的那句话和观察员的回话。答案正文不进快照,只活在这一次会话里。 */}
           {lastReply ? (
             <article className="x-task-turn">
-              <p className="x-task-said">{lastReply.question}</p>
-              <div className="x-task-cell">
-                <span aria-hidden="true" className="x-task-bullet">
-                  •
-                </span>
-                <span className="x-task-celltext">
-                  <span className="x-task-answer">{lastReply.text}</span>
-                  {lastReply.quote ? (
-                    <span className="x-task-quote">
-                      {lastReply.quote}
-                      {lastReply.sourceTitle ? <em>{lastReply.sourceTitle}</em> : null}
-                    </span>
-                  ) : null}
-                </span>
-              </div>
+              <p className="x-task-you">{lastReply.question}</p>
 
-              {/* 库里的答完了;要往外搜先问过用户,别静默花掉搜索额度。 */}
-              {lastReply.confirm ? (
-                <div className="x-task-confirm">
-                  <p className="x-task-confirmhead">{t("tasks.confirmHead")}</p>
-                  {lastReply.confirm.questions.map((confirmQuestion) => (
-                    <div className="x-task-confirmrow" key={confirmQuestion.id}>
-                      <span className="x-task-confirmlabel">{confirmQuestion.label}</span>
-                      {confirmQuestion.options.map((option) => (
-                        <button
-                          aria-pressed={confirmChoices[confirmQuestion.id] === option.id}
-                          className={`x-task-choice${
-                            confirmChoices[confirmQuestion.id] === option.id ? " active" : ""
-                          }`}
-                          key={option.id}
-                          onClick={() =>
-                            setConfirmChoices((current) => ({ ...current, [confirmQuestion.id]: option.id }))
-                          }
-                          type="button"
-                        >
-                          {option.label}
-                        </button>
-                      ))}
-                    </div>
-                  ))}
-                  <button
-                    className="x-task-confirmgo"
-                    disabled={!isConfirmReady || dispatchPending}
-                    onClick={() => onConfirmDiscovery(lastReply.confirm!.turnId, confirmChoices)}
-                    type="button"
-                  >
-                    {t("tasks.confirmGo")}
-                  </button>
-                </div>
-              ) : null}
-              {lastReply.confirmedNote ? <p className="x-task-confirmed">{lastReply.confirmedNote}</p> : null}
+              <div className="x-task-agent">
+                <p className="x-task-answer">{lastReply.text}</p>
+                {lastReply.quote ? (
+                  <blockquote className="x-task-quote">
+                    {lastReply.quote}
+                    {lastReply.sourceTitle ? <em>{lastReply.sourceTitle}</em> : null}
+                  </blockquote>
+                ) : null}
+
+                {/* 库里的答完了;要往外搜先问过用户,别静默花掉搜索额度。 */}
+                {lastReply.confirm ? (
+                  <div className="x-task-confirm">
+                    <p className="x-task-confirmhead">{t("tasks.confirmHead")}</p>
+                    {lastReply.confirm.questions.map((confirmQuestion) => (
+                      <div className="x-task-confirmrow" key={confirmQuestion.id}>
+                        <span className="x-task-confirmlabel">{confirmQuestion.label}</span>
+                        {confirmQuestion.options.map((option) => (
+                          <button
+                            aria-pressed={confirmChoices[confirmQuestion.id] === option.id}
+                            className={`x-task-choice${
+                              confirmChoices[confirmQuestion.id] === option.id ? " active" : ""
+                            }`}
+                            key={option.id}
+                            onClick={() =>
+                              setConfirmChoices((current) => ({ ...current, [confirmQuestion.id]: option.id }))
+                            }
+                            type="button"
+                          >
+                            {option.label}
+                          </button>
+                        ))}
+                      </div>
+                    ))}
+                    <button
+                      className="x-task-confirmgo"
+                      disabled={!isConfirmReady || dispatchPending}
+                      onClick={() => onConfirmDiscovery(lastReply.confirm!.turnId, confirmChoices)}
+                      type="button"
+                    >
+                      {t("tasks.confirmGo")}
+                    </button>
+                  </div>
+                ) : null}
+                {lastReply.confirmedNote ? <p className="x-task-confirmed">{lastReply.confirmedNote}</p> : null}
+              </div>
             </article>
           ) : null}
         </div>
 
-        {/* Codex 的 composer:贴在主列底部、没有边框,左边一个加粗的 › 提示符。 */}
+        {/* 输入区是一张浮在底部的圆角卡,工具条在卡里面,不是卡外面一条工具栏。 */}
         <form className="x-task-composer" onSubmit={onDispatchSubmit}>
           {dispatchError ? <p className="x-task-error">{dispatchError}</p> : null}
-          <div className="x-task-composerrow">
-            <span aria-hidden="true" className="x-task-caret">
-              ›
-            </span>
+          <div className="x-task-composerbox">
             <textarea
               aria-label={t("tasks.dispatchLabel")}
               className="x-task-composerinput"
@@ -311,18 +308,24 @@ export function TaskClientView({
               rows={1}
               value={dispatchText}
             />
-            <button
-              aria-label={t("tasks.dispatchSubmit")}
-              className="x-task-send"
-              disabled={dispatchPending || !dispatchText.trim()}
-              title={t("tasks.dispatchSubmit")}
-              type="submit"
-            >
-              {dispatchPending ? <LoaderCircle className="x-task-spin" size={15} /> : <ArrowUp size={15} />}
-            </button>
+            <div className="x-task-tools">
+              <span className="x-task-toolnote">{t("tasks.groundedNote")}</span>
+              <button
+                aria-label={t("tasks.dispatchSubmit")}
+                className="x-task-send"
+                disabled={dispatchPending || !dispatchText.trim()}
+                title={t("tasks.dispatchSubmit")}
+                type="submit"
+              >
+                {dispatchPending ? <LoaderCircle className="x-task-spin" size={15} /> : <ArrowUp size={15} />}
+              </button>
+            </div>
           </div>
         </form>
       </main>
+
+      {/* 右栏是浮起的一张卡:当前在看什么、边界在哪、该复习什么。用的是现有 ContextRail。 */}
+      <aside className="x-task-rail">{contextRail}</aside>
     </div>
   );
 }
