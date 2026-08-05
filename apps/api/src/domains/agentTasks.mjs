@@ -271,6 +271,9 @@ function summarizeAgentTurn(turn, contentLanguage) {
 function mapTurnStatus(status) {
   if (status === "answered" || status === "closed") return "succeeded";
   if (status === "researching") return "running";
+  // 答完但还挂着「要不要出网查」的确认:这不是排队,是等用户拍板。原来归进
+  // queued,列表就永远「排队中」,和详情里的「答完了」自相矛盾。
+  if (status === "pending_confirmation") return "awaiting";
 
   return "queued";
 }

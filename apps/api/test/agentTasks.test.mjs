@@ -95,6 +95,30 @@ describe("listAgentTasks", () => {
     expect(result.tasks[1]).toMatchObject({ kind: "import_source", status: "succeeded", retryable: false });
   });
 
+  // 答完但挂着「要不要出网查」的确认不是排队:原来映射成 queued,列表就永远
+  // 显示「排队中」,和详情里的「答完了」自相矛盾。
+  it("lists a turn pending user confirmation as awaiting, not queued", () => {
+    const { curationStore, persistenceStore } = createStores({
+      snapshot: {
+        agentTurns: [
+          {
+            id: "agent-turn-2",
+            userId: "local-user",
+            question: "门控网络是怎么选专家的",
+            intent: "grounded_qa",
+            status: "pending_confirmation",
+            threadId: "thread-2",
+            createdAt: "2026-08-02T09:00:00.000Z"
+          }
+        ]
+      }
+    });
+
+    const [task] = listAgentTasks({ persistenceStore, curationStore, contentLanguage: "zh" }).tasks;
+
+    expect(task).toMatchObject({ id: "agent-turn-2", status: "awaiting" });
+  });
+
   it("never leaks the worker id that claimed a job", () => {
     const { curationStore, persistenceStore } = createStores({ records: [createJobRecord()] });
 

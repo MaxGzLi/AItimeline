@@ -3303,6 +3303,10 @@ button.x-chip {
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-2xl);
   background: var(--color-surface);
+  transition: border-color 0.15s ease;
+}
+.x-task-composerbox:focus-within {
+  border-color: var(--color-border);
 }
 .x-task-composerinput {
   display: block;
@@ -3354,8 +3358,28 @@ button.x-chip {
 @keyframes x-task-spin {
   to { transform: rotate(360deg); }
 }
+/* 「在想」的三个点:小、灰、轮流呼吸。不是彩色打字机,也不是进度条。 */
+.x-task-thinking {
+  display: flex;
+  gap: 5px;
+  padding: 6px 0;
+}
+.x-task-thinking span {
+  width: 5px;
+  height: 5px;
+  border-radius: var(--radius-full);
+  background: var(--color-text-tertiary);
+  animation: x-task-breathe 1.2s ease-in-out infinite;
+}
+.x-task-thinking span:nth-child(2) { animation-delay: 0.15s; }
+.x-task-thinking span:nth-child(3) { animation-delay: 0.3s; }
+@keyframes x-task-breathe {
+  0%, 100% { opacity: 0.25; }
+  40% { opacity: 1; }
+}
 @media (prefers-reduced-motion: reduce) {
   .x-task-spin { animation: none; }
+  .x-task-thinking span { animation: none; opacity: 0.6; }
 }
 
 .x-task-empty,
@@ -3566,6 +3590,11 @@ button.x-chip {
   outline: 2px solid var(--color-ring);
   outline-offset: 2px;
   border-radius: var(--radius-xs);
+}
+/* 文本框不画蓝圈——光标本身就是落点;输入卡靠 focus-within 提亮发丝线示意。 */
+.x-task-client textarea:focus-visible,
+.x-task-client input:focus-visible {
+  outline: none;
 }
 
 @media (max-width: 1180px) {
