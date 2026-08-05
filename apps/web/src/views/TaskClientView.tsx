@@ -27,6 +27,8 @@ export interface TaskClientViewProps {
   dispatchError: string | null;
   dispatchPending: boolean;
   dispatchText: string;
+  /** 嵌进中栏的整页内容(今天/复习/收集箱)。有它时对话流和输入框让位。 */
+  embed?: ReactNode;
   failedCount: number;
   footerNav: ReactNode;
   lastReply: AgentDispatchReply | null;
@@ -77,6 +79,7 @@ export function TaskClientView({
   dispatchError,
   dispatchPending,
   dispatchText,
+  embed,
   failedCount,
   footerNav,
   lastReply,
@@ -171,6 +174,10 @@ export function TaskClientView({
       </aside>
 
       <main className="x-task-main">
+        {/* 左栏点了今天/复习/收集箱,中栏就换成嵌进来的那一页;对话流和输入框先让位。
+            输入框的草稿存在上层状态里,卸载不丢。 */}
+        {embed ? <div className="x-task-embed">{embed}</div> : null}
+        {embed ? null : (
         <div className="x-task-stream" ref={streamRef}>
           {/* 屏幕上已经有回答了就别再挂一行「加载中」,那看着像出了两件事。 */}
           {!detail && !lastReply && detailLoading ? <p className="x-task-empty">{t("tasks.loading")}</p> : null}
@@ -326,8 +333,10 @@ export function TaskClientView({
             </article>
           ) : null}
         </div>
+        )}
 
         {/* 输入区是一张浮在底部的圆角卡,工具条在卡里面,不是卡外面一条工具栏。 */}
+        {embed ? null : (
         <form className="x-task-composer" onSubmit={onDispatchSubmit}>
           {dispatchError ? <p className="x-task-error">{dispatchError}</p> : null}
           <div className="x-task-composerbox">
@@ -354,6 +363,7 @@ export function TaskClientView({
             </div>
           </div>
         </form>
+        )}
       </main>
 
       {/* 右栏是浮起的一张卡:当前在看什么、边界在哪、该复习什么。用的是现有 ContextRail。 */}

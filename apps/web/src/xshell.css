@@ -3597,6 +3597,68 @@ button.x-chip {
   outline: none;
 }
 
+/* ---- 嵌入槽:老视图(今天/复习/收集箱)进任务客户端中栏 ---- */
+.x-task-embed {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  /* 变量桥:老视图一行不改,--x-* 在槽内重定向到官方 token,
+     浅/深两套自动跟着走,消掉「纯黑 X 皮贴在灰底客户端上」的拼接感。 */
+  --x-bg: var(--color-surface-secondary);
+  --x-module: var(--color-surface);
+  --x-hover: var(--fill-quiet);
+  --x-line: var(--color-border-subtle);
+  --x-ink: var(--color-text);
+  --x-muted: var(--color-text-secondary);
+  --x-blue: var(--color-ring);
+  --x-blue-hover: var(--color-ring);
+  --x-like: var(--color-text-danger);
+  --x-repost: var(--color-text-success);
+  --x-warn: var(--color-text-warning);
+  --x-red: var(--color-text-danger);
+  --x-btn-ink: var(--color-text-inverse);
+  --x-btn-bg: var(--color-background-primary-solid);
+}
+/* 老壳深色下有两条按属性选择器写的高权重补丁,会压过上面的桥,这里逐条压回来。 */
+:root[data-theme="dark"] .x-task-embed .x-module {
+  background: var(--x-module);
+  border-color: var(--x-line);
+}
+:root[data-theme="dark"] .x-task-embed .x-search {
+  background: var(--x-module);
+}
+/* 时间线整页(.x-main)嵌进来:压掉窗口级 100vh,保住 600px 栏宽居中。 */
+.x-task-embed .x-main {
+  width: 100%;
+  max-width: 600px;
+  min-height: 0;
+  margin: 0 auto;
+}
+/* 桌面壳:fixed 的 36px 拖拽带会盖住 sticky 在 top:0 的列头,让列头往下让。 */
+.x-task-client.is-desktop .x-task-embed .x-colhead {
+  top: 36px;
+}
+/* 复习/收集箱这种没有自带页框的视图:限宽 + 一个安静的页头。 */
+.x-task-embedcol {
+  width: 100%;
+  max-width: var(--task-col);
+  margin: 0 auto;
+  padding-bottom: 48px;
+}
+.x-task-pagehead {
+  padding: 22px 16px 8px;
+}
+.x-task-pagehead h1 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+}
+/* 左栏入口的选中态:和任务行的 active 同一语法,安静的填充。 */
+.x-task-quick button.active {
+  background: var(--fill-select);
+  color: var(--color-text);
+}
+
 @media (max-width: 1180px) {
   .x-task-client { grid-template-columns: 264px minmax(0, 1fr); }
   .x-task-rail { display: none; }
