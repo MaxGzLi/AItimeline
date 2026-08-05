@@ -18,7 +18,9 @@
     "minimalCompact": true,
     "backgroundRefresh": true,
     "settings": false,
-    "notificationFeed": false
+    "notificationFeed": false,
+    "fullExpandedWidth": 900,
+    "fullExpandedHeight": 520
   },
   "refreshInterval": 60.0,
   "activationTriggers": ["manual", "timer"]

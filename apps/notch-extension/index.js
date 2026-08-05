@@ -33,11 +33,15 @@ var REFETCH_INTERVAL_MS = 60 * 1000;
 
 // 画布(全部扣掉宿主自己的边距之后的真实可用区,算自 Constants.swift + AppState.swift):
 //   抽屉 expanded  408×88 - 左右 26 - 上 8 下 10 = 356×70
-//   详情 fullExpanded 658×180 - 左右 32 - 上下 4 = 594×172
-// 宿主没有任何接口能改画布大小(island 上只有 activate/dismiss/state/isActive),
-// 所以「读全文」只能靠翻页,不能靠把卡撑大。
-var PANEL_W = 594;
-var PANEL_H = 172;
+//   详情 fullExpanded 900×520 - 左右 32 - 上下各 4 = 836×512
+//
+// 900×520 不是宿主的默认值(默认 658×180,只够五六行正文)。它来自 manifest 里的
+// capabilities.fullExpandedWidth / fullExpandedHeight —— 这两个字段是我们给
+// SuperIsland 加的(见 docs/specs/2026-08-05-notch-panel-size.md)。**改这里必须
+// 同步改 manifest**,两边对不上版面就会算错高度。
+// 跑官方原版 SuperIsland 时这两个字段会被忽略,面板回到 658×180,版面会溢出。
+var PANEL_W = 836;
+var PANEL_H = 512;
 var DRAWER_W = 356;
 
 // 实测行高(SwiftUI .system,ImageRenderer 量的):26→30、16→19、14→17、13→16、11→14、10→13。
@@ -395,7 +399,9 @@ function layoutOf(card) {
   // 复习题只在这张卡真的到期时才出 —— 它回来的理由就是让你想一想。
   var showPrompt = isReviewDue(card.reviewDueAt, new Date().toISOString()) && !!card.reviewPrompt;
   var promptH = showPrompt ? LH_BODY + 3 : 0;
-  var bodyLines = Math.max(1, Math.min(3, Math.floor((middle - deckH - promptH) / LH_BODY)));
+  // 行数只由版心剩下多少高度决定,不设上限 —— 面板从 180 点放大到 520 点时,
+  // 原来那个「最多 3 行」的上限会让头版印完三行就留一大片黑。
+  var bodyLines = Math.max(1, Math.floor((middle - deckH - promptH) / LH_BODY));
 
   return {
     kicker: split.kicker,
@@ -407,23 +413,44 @@ function layoutOf(card) {
   };
 }
 
-// 一张卡有几页:正文若干页,有概念的再加一页词条页。
 // 续版页的正文行数。首页要让给 26 点大标题和导语,续版页只印一行接排题,
-// 省下来的高度全给正文:面板 172 - 报头 25 - 接排题 16 - 分隔线和间距 11 - 页脚 25。
+// 省下来的高度全给正文:面板高 - 报头 25 - 接排题 16 - 分隔线和间距 11 - 页脚 25。
 var CONT_LINES = Math.floor((PANEL_H - 25 - 16 - 11 - 25) / LH_BODY);
-// 带小题的续版页再让出「小题 16 + 间距 2」。
-var CONT_SECTION_LINES = Math.floor((PANEL_H - 25 - 16 - 11 - 18 - 25) / LH_BODY);
+// 小题(13 点中黑)一行的高度,和块与块之间的间距。
+var LH_SUB = 16;
+var BLOCK_GAP = 6;
 
 // 把一段文字切成页数尽量少、而且每页都装得差不多满的若干页。
-// 直接按上限切会切出「一整页 + 一行」的碎页:先算出至少要几页,再按均分的份额切。
+// 直接按上限切会切出「几页装满 + 末页一行」的碎页:切点只能落在句号上,每页都装不到上限,
+// 攒下来的零头最后单独成页。上限只决定「至少几页」;页数定了之后,
+// 再找**还能维持这个页数的最小份额**,那就是最均匀的切法。
+// (不能拿「总字数 ÷ 页数」当份额:份额一小,句号处的零头又攒出多一页,越切越碎。)
 function balancedPages(text, cap) {
   if (!text) {
     return [];
   }
 
-  var count = Math.max(1, Math.ceil(textUnits(text) / cap));
+  var pages = paginate(text, cap);
 
-  return paginate(text, Math.max(cap / 3, Math.ceil(textUnits(text) / count)));
+  if (pages.length < 2) {
+    return pages;
+  }
+
+  // 份额越小页数只会越多,所以「页数不超过 pages.length」是单调的,二分找得到边界。
+  var lo = 1;
+  var hi = cap;
+
+  while (lo < hi) {
+    var mid = Math.floor((lo + hi) / 2);
+
+    if (paginate(text, mid).length <= pages.length) {
+      hi = mid;
+    } else {
+      lo = mid + 1;
+    }
+  }
+
+  return paginate(text, lo);
 }
 
 // thread 段落(接口里叫 sections)。每段自带一个小标题,正好当报纸的分栏小题。
@@ -442,62 +469,135 @@ function sectionsOf(card) {
   return out;
 }
 
+// 概念索引框排几行:少于 5 个排一列,多了才分两列。
+function conceptRows(card) {
+  var names = card.conceptIds || [];
+
+  return names.length < 5 ? names.length : Math.ceil(names.length / 2);
+}
+
+// 一块占多高。块 = 一段正文(可带小题)或末尾那个概念索引框。
+function blockHeight(block, card) {
+  if (block.concepts) {
+    var rows = conceptRows(card);
+
+    return 13 + 4 + rows * LH_BODY + (rows - 1) * 3;
+  }
+
+  return (block.subhead ? LH_SUB + 2 : 0) + lineCount(block.text, PANEL_W, 11) * LH_BODY;
+}
+
+// 一页上这些块摞起来有多高(块与块之间还有间距)。
+function stackHeight(blocks, card) {
+  var total = (blocks.length - 1) * BLOCK_GAP;
+
+  for (var i = 0; i < blocks.length; i += 1) {
+    total += blockHeight(blocks[i], card);
+  }
+
+  return total;
+}
+
+// 一张卡分几页。页面是拿「块」拼出来的:一段一百来字的 thread 独占一整页,
+// 在放大后的面板上只填得掉一成,剩下九成全是黑的;所以塞得下就往同一页上接着塞。
 function pagesOf(card) {
   var view = layoutOf(card);
   var text = bodyTextOf(card);
-  // 第一页要跟导语挤,少给一行;后面几页导语和大标题都不再重复,行数放开。
-  var firstUnits = (view.bodyLines * PANEL_W) / 11;
-  var laterCap = (CONT_LINES * PANEL_W) / 11;
-  // 余量必须按第一页**真正**切到哪里来算。第一页会提前在句号处断,
-  // 拿估算的余量去平摊,后面每页只剩十几个字,一段正文能切出十页。
-  var firstEnd = pageEnd(text, 0, firstUnits);
-  var rest = text.slice(firstEnd);
-
   var sections = sectionsOf(card);
-  var pages = [];
+  // 头版的正文高度已经扣掉了大标题、导语和复习题;续版页这几样都不重复,整块给正文。
+  var contH = CONT_LINES * LH_BODY;
+  var blocks = [];
+  // 概念索引框只有几行高,自己占一页就是一整片黑。所以最后一段正文切页时先把它的位置留出来,
+  // 索引框就总能跟在正文后面。留不留只影响最后那一段,别的段照样按整页切。
+  var reserve = conceptRows(card) ? blockHeight({ concepts: true }, card) + BLOCK_GAP : 0;
+
+  // 一段装不进一整页时切开,每一片都重印小题 —— 否则翻到下一页就不知道在读哪一节了。
+  function cut(subhead, body, keep) {
+    var lines = Math.floor((contH - keep - (subhead ? LH_SUB + 2 : 0)) / LH_BODY);
+
+    balancedPages(body, (lines * PANEL_W) / 11).forEach(function (part) {
+      blocks.push({ subhead: subhead, text: part });
+    });
+  }
 
   if (text) {
-    pages.push({ kind: "body", text: text.slice(0, firstEnd) });
+    // 导语正文最多印满头版一页。有 thread 段落时,印不完的尾巴不再单开页 ——
+    // 那几段把同样的内容讲得更细,为尾巴多开一页只会得到一行字加一片黑。
+    var leadKeep = sections.length ? 0 : reserve;
+    var firstEnd = pageEnd(text, 0, ((view.bodyLines - Math.ceil(leadKeep / LH_BODY)) * PANEL_W) / 11);
 
-    // 概要印不完的部分只有在「后面没有 thread 段落」时才单开续版页。有段落的时候,
-    // 那几段把同样的内容讲得更细,再为概要的尾巴开一页,只会得到一行字加一片黑
-    // (真机上量到过:264 字的概要切成「装满一页 + 一行」)。
+    blocks.push({ text: text.slice(0, firstEnd) });
+
     if (!sections.length) {
-      balancedPages(rest, laterCap).forEach(function (page) {
-        pages.push({ kind: "body", text: page });
-      });
+      cut("", text.slice(firstEnd), reserve);
     }
   }
 
-  // thread 段落跟在导语正文后面,一段一个小题。续版页印的是接排题(一行 13 点),
-  // 不是首页那个 26 点大标题,所以正文能多拿两行 —— 见 CONT_LINES。
-  var sectionCap = (CONT_SECTION_LINES * PANEL_W) / 11;
-
-  sections.forEach(function (section) {
-    balancedPages(section.body, sectionCap).forEach(function (part) {
-      pages.push({ kind: "body", subhead: section.title, text: part });
-    });
+  sections.forEach(function (section, i) {
+    cut(section.title, section.body, i === sections.length - 1 ? reserve : 0);
   });
 
-  if (card.conceptIds && card.conceptIds.length) {
-    // 最后一页只剩一句话时,把它并到概念页上 —— 报纸的转版页就是一段接续正文加一个索引框,
-    // 总比留一整页黑好。并之前先算得下算不下,放不下就老老实实分两页。
-    var tail = pages.length > 1 ? pages[pages.length - 1] : null;
-    var rowsFree = Math.floor((middleHeight(view) - LH_BODY - 6 - 13 - 4) / LH_BODY);
-    var rowsNeeded = card.conceptIds.length < 5 ? card.conceptIds.length : Math.ceil(card.conceptIds.length / 2);
-
-    // 带小题的页不并 —— 并过去小题就没地方放了,读者会看不出这段是哪一节的。
-    if (tail && !tail.subhead && lineCount(tail.text, PANEL_W, 11) <= 1 && rowsNeeded <= rowsFree) {
-      pages.pop();
-      pages.push({ kind: "concepts", text: tail.text });
-    } else {
-      pages.push({ kind: "concepts" });
-    }
+  if (conceptRows(card)) {
+    blocks.push({ concepts: true });
   }
 
-  // 一页都没有(正文空、概念也空)时留一页空正文,否则翻页的分母会是 0。
+  var pages = [];
+  var current = [];
+  var used = 0;
+  var room = view.bodyLines * LH_BODY;
+
+  blocks.forEach(function (block, i) {
+    var height = blockHeight(block, card);
+    var next = blocks[i + 1];
+    // 概念索引框只有几行高,自己占一页就是一整片黑(真机上量过:一页只填掉一成)。
+    // 排最后一段正文时先把索引框的高度算进来,一起装不下就让这两块一同翻页。
+    var together = next && next.concepts ? height + BLOCK_GAP + blockHeight(next, card) : height;
+    var need = together <= contH ? together : height;
+
+    if (current.length && used + BLOCK_GAP + need > room) {
+      pages.push({ kind: "body", blocks: current });
+      current = [];
+      used = 0;
+      room = contH;
+    }
+
+    if (current.length) {
+      used += BLOCK_GAP;
+    }
+
+    current.push(block);
+    used += height;
+  });
+
+  if (current.length) {
+    pages.push({ kind: "body", blocks: current });
+  }
+
+  // 一块都没有(正文空、概念也空)时留一页空正文,否则翻页的分母会是 0。
   if (!pages.length) {
-    pages.push({ kind: "body", text: "" });
+    pages.push({ kind: "body", blocks: [{ text: "" }] });
+  }
+
+  // 塞满了往下翻,末页往往只剩一小截:前一页黑边一行都没有,末页黑掉三分之二,
+  // 看着像没排完。把前一页尾巴上的块往末页挪,挪到两页差不多满为止 ——
+  // 只动最后这一处断点,前面几页照旧填满。
+  if (pages.length > 1) {
+    var last = pages[pages.length - 1];
+    var prev = pages[pages.length - 2];
+
+    while (prev.blocks.length > 1) {
+      var move = prev.blocks[prev.blocks.length - 1];
+      var shift = blockHeight(move, card) + BLOCK_GAP;
+      var here = stackHeight(prev.blocks, card);
+      var there = stackHeight(last.blocks, card);
+
+      if (there + shift > contH || Math.abs(here - shift - (there + shift)) >= Math.abs(here - there)) {
+        break;
+      }
+
+      prev.blocks.pop();
+      last.blocks.unshift(move);
+    }
   }
 
   return pages;
@@ -679,10 +779,10 @@ function flagRow(card, view, width, withStats) {
 }
 
 // 词条页:全部概念分两列排。之前是「切前 4 个拼一行」,9 个概念必被截成半个词。
-function conceptPage(card, leadText) {
+function conceptPage(card) {
   var names = card.conceptIds || [];
   // 少于 5 个排一列,多了才分两列 —— 三个词摊成两列会显得版面是空的。
-  var half = names.length < 5 ? names.length : Math.ceil(names.length / 2);
+  var half = conceptRows(card);
   var columns = names.length < 5 ? [names] : [names.slice(0, half), names.slice(half)];
 
   var rendered = columns.map(function (column) {
@@ -697,20 +797,8 @@ function conceptPage(card, leadText) {
     );
   });
 
-  var children = [];
-
-  if (leadText) {
-    children.push(
-      View.frame(View.text(leadText, { style: "caption", color: BODY_C, lineLimit: 1 }), {
-        maxWidth: 9999,
-        alignment: "leading"
-      })
-    );
-    children.push(gap(6));
-  }
-
   return View.vstack(
-    children.concat([
+    [
       View.frame(
         View.text("相关概念 " + names.length + " 个", { style: "footnote", color: DIM_C, lineLimit: 1 }),
         { maxWidth: 9999, alignment: "leading" }
@@ -720,7 +808,7 @@ function conceptPage(card, leadText) {
         maxWidth: 9999,
         alignment: "leading"
       })
-    ]),
+    ],
     { spacing: 0, align: "leading" }
   );
 }
@@ -826,25 +914,32 @@ function fullExpandedView() {
     gap(5)
   ];
 
-  if (page.kind === "concepts") {
-    children.push(conceptPage(card, page.text));
-  } else {
-    // 导语只印在第一页,后面几页整块让给正文。
-    if (state.page === 0 && view.deckLines) {
-      children.push(
-        View.frame(
-          View.text(card.keyTakeaway, { style: "headline", color: DECK_C, lineLimit: view.deckLines }),
-          { maxWidth: 9999, alignment: "leading" }
-        )
-      );
-      children.push(gap(3));
+  // 导语只印在第一页,后面几页整块让给正文。
+  if (state.page === 0 && view.deckLines) {
+    children.push(
+      View.frame(
+        View.text(card.keyTakeaway, { style: "headline", color: DECK_C, lineLimit: view.deckLines }),
+        { maxWidth: 9999, alignment: "leading" }
+      )
+    );
+    children.push(gap(3));
+  }
+
+  (page.blocks || []).forEach(function (block, i) {
+    if (i) {
+      children.push(gap(BLOCK_GAP));
+    }
+
+    if (block.concepts) {
+      children.push(conceptPage(card));
+      return;
     }
 
     // 小题:thread 那一段的标题,当报纸的分栏小题用。13 点中黑压在 11 点正文上面,
     // 一眼能看出「现在读的是哪一节」。
-    if (page.subhead) {
+    if (block.subhead) {
       children.push(
-        View.frame(View.text(page.subhead, { style: "subtitle", color: TEXT, lineLimit: 1 }), {
+        View.frame(View.text(block.subhead, { style: "subtitle", color: TEXT, lineLimit: 1 }), {
           maxWidth: 9999,
           alignment: "leading"
         })
@@ -852,34 +947,33 @@ function fullExpandedView() {
       children.push(gap(2));
     }
 
-    var bodyLimit = view.bodyLines;
-
-    if (isJump) {
-      bodyLimit = page.subhead ? CONT_SECTION_LINES : CONT_LINES;
-    }
-
     children.push(
       View.frame(
-        View.text(page.text, { style: "caption", color: BODY_C, lineLimit: bodyLimit }),
+        View.text(block.text, {
+          style: "caption",
+          color: BODY_C,
+          // 行数就按这块真正占几行来给 —— 分页时算的是同一个数,版面才不会跟分页对不上。
+          lineLimit: Math.max(1, lineCount(block.text, PANEL_W, 11))
+        }),
         { maxWidth: 9999, alignment: "leading" }
       )
     );
+  });
 
-    if (state.page === 0 && view.showPrompt) {
-      children.push(gap(3));
-      children.push(
-        View.frame(
-          View.hstack(
-            [
-              View.text("问", { style: "footnote", color: AMBER, lineLimit: 1 }),
-              View.text(card.reviewPrompt, { style: "caption", color: META_C, lineLimit: 1 })
-            ],
-            { spacing: 5, align: "center" }
-          ),
-          { maxWidth: 9999, alignment: "leading" }
-        )
-      );
-    }
+  if (state.page === 0 && view.showPrompt) {
+    children.push(gap(3));
+    children.push(
+      View.frame(
+        View.hstack(
+          [
+            View.text("问", { style: "footnote", color: AMBER, lineLimit: 1 }),
+            View.text(card.reviewPrompt, { style: "caption", color: META_C, lineLimit: 1 })
+          ],
+          { spacing: 5, align: "center" }
+        ),
+        { maxWidth: 9999, alignment: "leading" }
+      )
+    );
   }
 
   children.push(View.spacer(4));

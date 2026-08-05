@@ -20,7 +20,13 @@ const exported = [
   "minimalPrecedence",
   "minimalLeading",
   "compactView",
-  "state"
+  "state",
+  "PANEL_W",
+  "PANEL_H",
+  "LH_BODY",
+  "LH_SUB",
+  "BLOCK_GAP",
+  "CONT_LINES"
 ];
 
 const sandbox = new Function(
@@ -67,8 +73,25 @@ const {
   minimalPrecedence,
   minimalLeading,
   compactView,
-  state
+  state,
+  lineCount,
+  PANEL_W,
+  PANEL_H,
+  LH_BODY,
+  LH_SUB,
+  BLOCK_GAP,
+  CONT_LINES
 } = api;
+
+// 版面尺寸会变(面板从 658×180 放大到 900×520 就是一次),所以断言一律跟着画布算,
+// 不写死点数。写死的话每次调画布都要改一堆测试,而且改完只是让它们重新变绿,
+// 并不代表版面还是对的。
+function longerThanOnePage(multiple = 3) {
+  const unitsPerPage = ((PANEL_H / LH_BODY) * PANEL_W) / 11;
+  const sentence = "这一句是用来把正文撑到超过一整页的填充文字。";
+
+  return sentence.repeat(Math.ceil((unitsPerPage * multiple) / sentence.length));
+}
 
 function setState(patch) {
   Object.assign(state, { cards: [], index: 0, page: 0, lastFetchAt: 0, lastError: null, loading: false }, patch);
@@ -264,24 +287,28 @@ describe("paginate", () => {
 });
 
 describe("layoutOf", () => {
-  it("gives a big headline card three body lines and no review question", () => {
+  it("gives a short-titled card the big headline, a deck, and the rest as body", () => {
     const view = layoutOf(richCard);
 
     expect(view.big).toBe(true);
-    expect(view.deckLines).toBe(2);
-    expect(view.bodyLines).toBe(3);
+    expect(view.deckLines).toBeGreaterThan(0);
+    // 导语只占几行,剩下的都该给正文 —— 别的比例关系都会随画布变,这条不会。
+    expect(view.bodyLines).toBeGreaterThan(view.deckLines);
     expect(view.showPrompt).toBe(false);
   });
 
   it("shows the review question only when the card is actually due, and pays for it in body lines", () => {
-    const view = layoutOf(degenerateCard);
+    const due = layoutOf(degenerateCard);
+    const notDue = layoutOf({ ...degenerateCard, reviewDueAt: undefined });
 
-    expect(view.big).toBe(false);
-    expect(view.showPrompt).toBe(true);
-    expect(view.bodyLines).toBe(1);
+    expect(due.big).toBe(false);
+    expect(due.showPrompt).toBe(true);
+    expect(notDue.showPrompt).toBe(false);
+    // 问题那一行的高度得从正文里扣,不能白拿。
+    expect(due.bodyLines).toBeLessThan(notDue.bodyLines);
   });
 
-  it("never lays out more than the 172 points the panel actually has", () => {
+  it("never lays out more than the height the panel actually has", () => {
     for (const card of [richCard, degenerateCard, { title: "光秃秃的卡", conceptIds: [] }]) {
       const view = layoutOf(card);
       const used =
@@ -290,50 +317,42 @@ describe("layoutOf", () => {
         11 +
         (view.deckLines ? view.deckLines * 17 + 3 : 0) +
         (view.showPrompt ? 17 : 0) +
-        view.bodyLines * 14 +
+        view.bodyLines * LH_BODY +
         25;
 
-      expect(used).toBeLessThanOrEqual(172);
+      expect(used).toBeLessThanOrEqual(PANEL_H);
     }
   });
 });
 
-describe("pagesOf", () => {
-  it("appends a concept page after the body pages", () => {
-    const pages = pagesOf(richCard);
+// 一页是若干「块」拼出来的:一块正文(可带小题),或末尾那个概念索引框。
+// 断言都对着块走 —— 「哪一段在第几页」是排版算出来的,不该写进测试里。
+const blocksOf = (pages) => pages.flatMap((page) => page.blocks);
+const proseOf = (pages) => blocksOf(pages).filter((block) => !block.concepts);
+const subheadsOf = (pages) => proseOf(pages).filter((b) => b.subhead).map((b) => b.subhead);
 
-    expect(pages.length).toBeGreaterThan(1);
-    expect(pages[pages.length - 1].kind).toBe("concepts");
-    expect(pages.slice(0, -1).every((page) => page.kind === "body")).toBe(true);
+// 独立于产品代码再算一遍一块占多高,用来验「这一页塞过头了没有」。
+const heightOf = (block) =>
+  (block.subhead ? LH_SUB + 2 : 0) + Math.max(1, lineCount(block.text, PANEL_W, 11)) * LH_BODY;
+
+describe("pagesOf", () => {
+  it("puts the concept index last, once", () => {
+    const pages = pagesOf(richCard);
+    const blocks = blocksOf(pages);
+
+    expect(blocks.filter((block) => block.concepts).length).toBe(1);
+    expect(blocks[blocks.length - 1].concepts).toBe(true);
   });
 
   it("still returns one body page when the card has no prose and no concepts", () => {
-    expect(pagesOf({ title: "光秃秃的卡", conceptIds: [] })).toEqual([{ kind: "body", text: "" }]);
+    expect(pagesOf({ title: "光秃秃的卡", conceptIds: [] })).toEqual([
+      { kind: "body", blocks: [{ text: "" }] }
+    ]);
   });
 
-  // 曾经切出过 10 页,第二页只有「实验在 o」四个字 —— 余量是估的,不是第一页真断在哪。
-  it("never leaves a sliver page: every body page carries a real share of the text", () => {
-    // 关键是「总量刚过第一页容量,而第一句很早就有句号」:第一页在句号处提前断,
-    // 真实余量远大于「总量减去第一页容量」这个估算值。这正是线上切出十页的那一种。
-    const card = {
-      ...richCard,
-      shortBody: "很短的第一句。" + "接着是一段一直没有句号的连续文字".repeat(11) + "。"
-    };
-
-    const bodyPages = pagesOf(card).filter((page) => page.kind === "body");
-    const longest = Math.max(...bodyPages.map((page) => page.text.length));
-
-    expect(bodyPages.length).toBeGreaterThan(1);
-    expect(bodyPages.length).toBeLessThanOrEqual(3);
-
-    // 第一页是完整的一句,短是正常的;从第二页起不许出现只有几个字的碎页。
-    for (const page of bodyPages.slice(1)) {
-      expect(page.text.length).toBeGreaterThan(longest * 0.4);
-    }
-  });
-
-  // 刘海之前只印 summary/shortBody(中位 119 字),thread 那 5 段(中位 487 字)一个字没露。
-  it("puts each thread section after the lead, with its own subhead, before the concepts page", () => {
+  // 这是放大面板的目的:一段一百来字的 thread 独占一整页,在 512 点高的面板上只填得掉一成,
+  // 剩下九成全是黑的。装得下就得接着往同一页上放。
+  it("packs short sections onto the same page as the lead instead of one page each", () => {
     const card = {
       ...richCard,
       sections: [
@@ -343,86 +362,152 @@ describe("pagesOf", () => {
     };
 
     const pages = pagesOf(card);
-    const subheads = pages.filter((page) => page.subhead).map((page) => page.subhead);
 
-    expect(subheads).toEqual([
+    expect(pages.length).toBe(1);
+    // 导语正文在最前,两段各带小题跟在后面,概念索引框收尾。
+    expect(pages[0].blocks[0].subhead).toBeUndefined();
+    expect(subheadsOf(pages)).toEqual([
       "为什么 bias 循环能替代 auxiliary loss？",
       "一个 expert 过载时会发生什么？"
     ]);
-    // 导语正文在最前,概念页在最后,小题段落夹在中间。
-    expect(pages[0].subhead).toBeUndefined();
-    expect(pages[pages.length - 1].kind).toBe("concepts");
-    expect(pages.findIndex((page) => page.subhead)).toBeGreaterThan(0);
+  });
+
+  // 真机上量过:整张卡的正文正好填满第一页,只有几行高的概念索引框被挤到第二页,
+  // 那一页就填掉一成,剩下九成全黑。正文再长也不许出现这种页。
+  it("never leaves the concept index alone on a page", () => {
+    const lonely = [];
+
+    for (let n = 1; n <= 24; n += 1) {
+      const body = longerThanOnePage(n / 8);
+      const cards = [
+        { ...richCard, sections: [{ title: "一段", body }] },
+        { ...richCard, shortBody: body, summary: body }
+      ];
+
+      for (const card of cards) {
+        const last = pagesOf(card).slice(-1)[0];
+
+        if (last.blocks.length === 1 && last.blocks[0].concepts) {
+          lonely.push(`${n}/8 页正文,${card.sections ? "有段落" : "只有概要"}`);
+        }
+      }
+    }
+
+    expect(lonely).toEqual([]);
+  });
+
+  // 一路塞满了往下翻,末页只剩一小截:前一页一行黑边都没有,末页黑掉三分之二。
+  it("evens out the last page instead of leaving it nearly empty", () => {
+    const sections = Array.from({ length: 6 }, (_, i) => ({
+      title: `第 ${i + 1} 段`,
+      body: longerThanOnePage(0.18)
+    }));
+    const pages = pagesOf({ ...richCard, sections });
+    const filled = pages.map((page) =>
+      page.blocks.reduce((sum, block) => sum + (block.concepts ? 0 : heightOf(block)), 0)
+    );
+
+    expect(pages.length).toBeGreaterThan(1);
+    // 末页装的正文不许少于最满那页的一半(不均衡时这里只有三分之一)。
+    expect(filled[filled.length - 1]).toBeGreaterThan(Math.max(...filled) * 0.5);
+  });
+
+  // 塞归塞,不能塞到版心外面去 —— 塞过头就是文字被裁掉,比留黑更糟。
+  it("never packs a page past the height it has", () => {
+    const card = {
+      ...richCard,
+      conceptIds: [],
+      sections: [
+        { title: "一", body: longerThanOnePage(0.4) },
+        { title: "二", body: longerThanOnePage(0.5) },
+        { title: "三", body: longerThanOnePage(1.4) },
+        { title: "四", body: "短短一句。" }
+      ]
+    };
+
+    const pages = pagesOf(card);
+    const room = [layoutOf(card).bodyLines * LH_BODY, CONT_LINES * LH_BODY];
+
+    expect(pages.length).toBeGreaterThan(1);
+
+    pages.forEach((page, i) => {
+      const used = page.blocks.reduce((sum, block) => sum + heightOf(block), 0);
+
+      expect(used + (page.blocks.length - 1) * BLOCK_GAP).toBeLessThanOrEqual(room[i ? 1 : 0]);
+    });
+  });
+
+  // 曾经切出过 10 页,第二页只有「实验在 o」四个字 —— 余量是估的,不是第一页真断在哪。
+  it("never leaves a sliver: every body block carries a real share of the text", () => {
+    // 关键是「总量刚过第一页容量,而第一句很早就有句号」:第一页在句号处提前断,
+    // 真实余量远大于「总量减去第一页容量」这个估算值。这正是线上切出十页的那一种。
+    const card = { ...richCard, shortBody: "很短的第一句。" + longerThanOnePage(1.2) + "。" };
+    const blocks = proseOf(pagesOf(card));
+    const longest = Math.max(...blocks.map((block) => block.text.length));
+
+    expect(blocks.length).toBeGreaterThan(1);
+    expect(blocks.length).toBeLessThanOrEqual(3);
+
+    // 第一块是完整的一句,短是正常的;从第二块起不许出现只有几个字的碎块。
+    for (const block of blocks.slice(1)) {
+      expect(block.text.length).toBeGreaterThan(longest * 0.4);
+    }
   });
 
   it("keeps every character of every section across its pages", () => {
-    // 一页装得下约 216 个字宽,这里堆到约 750,保证真的切了页而不是空跑一遍断言。
-    const long = "这一段特别长，长到一页放不下，需要切成好几页才读得完。".repeat(28);
-    const pages = pagesOf({ ...richCard, sections: [{ title: "长段", body: long }] });
-    const joined = pages
-      .filter((page) => page.subhead === "长段")
-      .map((page) => page.text)
-      .join("")
-      .replace(/\s/g, "");
+    // 长度按画布算,画布再变也还是「超过一页」,不会退化成空跑一遍断言。
+    const long = longerThanOnePage(3);
+    const parts = proseOf(pagesOf({ ...richCard, sections: [{ title: "长段", body: long }] })).filter(
+      (block) => block.subhead === "长段"
+    );
 
-    expect(pages.filter((page) => page.subhead === "长段").length).toBeGreaterThan(1);
-    expect(joined).toBe(long.replace(/\s/g, ""));
+    expect(parts.length).toBeGreaterThan(1);
+    expect(parts.map((block) => block.text).join("").replace(/\s/g, "")).toBe(long.replace(/\s/g, ""));
   });
 
   // 真机渲染出来看到的:一段 333 字的 thread 切成「装满的一页 + 只有一行的一页」,
   // 第二页下面一大片黑。按上限硬切必然这样,要先算出至少几页再均分。
   it("splits an overflowing section evenly instead of leaving a one-line page", () => {
-    const body = "这一段有三百多个字，一页装不下，会被切开。".repeat(16);
-    const pages = pagesOf({ ...richCard, sections: [{ title: "长段", body }] }).filter(
-      (page) => page.subhead === "长段"
-    );
-    const sizes = pages.map((page) => page.text.length);
+    const parts = proseOf(
+      pagesOf({ ...richCard, sections: [{ title: "长段", body: longerThanOnePage(1.6) }] })
+    ).filter((block) => block.subhead === "长段");
+    const sizes = parts.map((block) => block.text.length);
 
-    expect(pages.length).toBeGreaterThan(1);
-    // 最短的一页不许短于最长那页的六成 —— 这就是「碎页」的判据。
+    expect(parts.length).toBeGreaterThan(1);
+    // 最短的一片不许短于最长那片的六成 —— 这就是「碎页」的判据。
     expect(Math.min(...sizes)).toBeGreaterThan(Math.max(...sizes) * 0.6);
   });
 
-  it("keeps the lead on the front page only when sections follow it", () => {
-    const withSections = pagesOf({ ...richCard, sections: [{ title: "细说", body: "这一段把概要展开讲。" }] });
+  it("drops the tail of an over-long lead when sections say the same thing in more detail", () => {
+    const lead = longerThanOnePage(2);
+    const withSections = proseOf(pagesOf({ ...richCard, shortBody: lead, summary: lead, sections: [{ title: "细说", body: "这一段把概要展开讲。" }] }));
 
-    // 概要只占头版一页,第二页起就是带小题的段落。
-    expect(withSections[0].subhead).toBeUndefined();
-    expect(withSections[1].subhead).toBe("细说");
+    // 导语只占头版一块,后面接的是带小题的段落,不为导语的尾巴再开一块。
+    expect(withSections.filter((block) => !block.subhead).length).toBe(1);
+    expect(subheadsOf([{ blocks: withSections }])).toEqual(["细说"]);
   });
 
   it("still pages the lead to the end when the card has no sections", () => {
-    // 首页只装得下约 162 个字宽,这里给到约 500,保证真的要翻页。
-    const lead = "概要写得很长，一页装不下，没有段落接着的时候必须翻页读完。".repeat(18);
-    const pages = pagesOf({ ...richCard, shortBody: lead, summary: lead });
+    // 长度按画布算,保证真的要翻页。
+    const lead = longerThanOnePage(2);
+    const blocks = proseOf(pagesOf({ ...richCard, shortBody: lead, summary: lead }));
 
-    expect(pages.filter((page) => page.kind === "body").length).toBeGreaterThan(1);
-    // 最后剩一行时会并到概念页上(转版页),所以拼回原文要把概念页那截也算上。
-    expect(pages.map((page) => page.text || "").join("").replace(/\s/g, "")).toBe(lead.replace(/\s/g, ""));
+    expect(blocks.length).toBeGreaterThan(1);
+    expect(blocks.map((block) => block.text).join("").replace(/\s/g, "")).toBe(lead.replace(/\s/g, ""));
   });
 
-  it("skips sections with no prose instead of emitting a blank page", () => {
+  it("skips sections with no prose instead of emitting a blank block", () => {
     const pages = pagesOf({
       ...richCard,
       sections: [{ title: "空的", body: "   " }, { title: "有内容", body: "真的有正文。" }]
     });
 
-    expect(pages.filter((page) => page.subhead).map((page) => page.subhead)).toEqual(["有内容"]);
-  });
-
-  it("never merges a subheaded page into the concepts page", () => {
-    // 尾页并进概念页是给「导语正文只剩一句」准备的;带小题的页并过去,小题就没了。
-    const pages = pagesOf({ ...richCard, sections: [{ title: "小题", body: "短。" }] });
-    const concepts = pages[pages.length - 1];
-
-    expect(concepts.kind).toBe("concepts");
-    expect(concepts.text).toBeUndefined();
+    expect(subheadsOf(pages)).toEqual(["有内容"]);
   });
 
   it("keeps every character of the body across its pages", () => {
-    const joined = pagesOf(richCard)
-      .filter((page) => page.kind === "body")
-      .map((page) => page.text)
+    const joined = proseOf(pagesOf(richCard))
+      .map((block) => block.text)
       .join("")
       .replace(/\s/g, "");
 
