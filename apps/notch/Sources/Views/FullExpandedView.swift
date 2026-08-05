@@ -83,7 +83,7 @@ struct FullExpandedView: View {
 
     private func headline(_ card: Card) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(card.title)
+            Text(card.displayTitle)
                 .font(.system(size: 24, weight: .semibold))
                 .foregroundStyle(.white)
                 .fixedSize(horizontal: false, vertical: true)
@@ -99,7 +99,7 @@ struct FullExpandedView: View {
 
     @ViewBuilder
     private func body(_ card: Card) -> some View {
-        let text = card.shortBody?.isEmpty == false ? card.shortBody! : card.summary
+        let text = card.displayBody
 
         if !text.isEmpty {
             Text(text)

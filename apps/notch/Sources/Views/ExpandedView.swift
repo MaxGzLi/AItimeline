@@ -29,7 +29,7 @@ struct ExpandedView: View {
                         .foregroundStyle(.white.opacity(0.4))
                 }
 
-                Text(card.title)
+                Text(card.displayTitle)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.92))
                     .lineLimit(2)
