@@ -67,13 +67,20 @@ final class AppState: ObservableObject {
         isHovering = inside
     }
 
-    /// 黑色面板在屏幕上的实际位置(窗口比它大一圈,那圈是透明的,不算)。
+    /// 算「鼠标还在不在上面」用的范围:黑面板本身,面板档再往左右各放宽一个空槽 ——
+    /// 那两条槽里有翻页钮,手移过去不该被当成离开。
     private var surfaceRect: CGRect {
         let size = currentSize
         let anchorX = notchRect?.midX ?? screenFrame.midX
         let anchorY = notchRect?.maxY ?? screenFrame.maxY
+        let slack: CGFloat = currentState == .fullExpanded ? Constants.gutterWidth : 0
 
-        return CGRect(x: anchorX - size.width / 2, y: anchorY - size.height, width: size.width, height: size.height)
+        return CGRect(
+            x: anchorX - size.width / 2 - slack,
+            y: anchorY - size.height,
+            width: size.width + slack * 2,
+            height: size.height
+        )
     }
 
     // MARK: - 屏幕
@@ -85,6 +92,19 @@ final class AppState: ObservableObject {
     }
 
     var hasNotch: Bool { notchRect != nil }
+
+    /// 刘海本体多大;没刘海就是零。
+    var notchSize: CGSize {
+        guard let notchRect else { return .zero }
+
+        return CGSize(width: notchRect.width, height: notchRect.height)
+    }
+
+    /// 肩栏中间必须让开的净空 = 刘海宽 + 20。两翼宽度一律按这个反推,
+    /// **不许写死像素** —— 换一台刘海宽度不同的机器,写死的数会直接撞上刘海。
+    var shoulderGap: CGFloat {
+        hasNotch ? notchSize.width + 20 : 0
+    }
 
     // MARK: - 状态切换
 

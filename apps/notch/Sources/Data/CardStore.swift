@@ -18,6 +18,7 @@ final class CardStore: ObservableObject {
     @Published var page = 0
 
     private let endpoint = URL(string: "http://127.0.0.1:8787/api/inject/cards")!
+    private let signalsEndpoint = URL(string: "http://127.0.0.1:8787/api/signals")!
     private var timer: Timer?
 
     private init() {}
@@ -74,5 +75,61 @@ final class CardStore: ObservableObject {
 
         index = (index + 1) % cards.count
         page = 0
+    }
+
+    func previous() {
+        guard !cards.isEmpty else { return }
+
+        index = (index - 1 + cards.count) % cards.count
+        page = 0
+    }
+
+    /// 「标记已复习」回传一条行为信号,和浏览器插件走的是同一个接口、同一套字段
+    /// (`apps/notch-extension/index.js` 的 `sendOpenSignal`),只是 `reviewed` 为真。
+    /// 接口那边按整条信号的内容做去重,所以同一张卡先看后标不会被当成重复丢掉。
+    func markReviewed(_ card: Card) async -> Bool {
+        guard let topicId = card.topicId, !topicId.isEmpty, !card.conceptIds.isEmpty else {
+            return false
+        }
+
+        let now = ISO8601DateFormatter().string(from: Date())
+        let signal: [String: Any] = [
+            "postId": card.id,
+            "topicId": topicId,
+            "conceptIds": card.conceptIds,
+            "impression": true,
+            "dwellTimeMs": 9_000,
+            "openedThread": true,
+            "liked": false,
+            "saved": false,
+            "askedQuestion": false,
+            "reviewed": true,
+            "skippedQuickly": false,
+            "createdAt": now
+        ]
+        let payload: [String: Any] = [
+            "generatedAt": now,
+            "signal": signal,
+            "sourceCandidates": []
+        ]
+
+        var request = URLRequest(url: signalsEndpoint)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 4
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+
+            guard code == 200 || code == 201 else { return false }
+
+            await refresh()
+
+            return true
+        } catch {
+            return false
+        }
     }
 }

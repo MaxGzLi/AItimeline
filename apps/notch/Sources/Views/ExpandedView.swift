@@ -1,56 +1,163 @@
 import SwiftUI
 
-/// 悬停出来的小条:一眼看清「有什么、要不要点开」。
+/// 悬停出来的小条:面板 408×88。
+///
+/// 这一档只回答两件事:**这张卡的结论是一句什么话、为什么是现在给我看**。
+/// 停 0.3 秒读完就能决定点不点开,所以不放正文、不放截断的半句话。
+///
+/// 版面账(有刘海时):
+/// - 上面 37 是让开刘海的带子,元信息(来源、状态、页码)就装在这条带子的两翼里;
+/// - 下面 51 只放一个来源方块和两行结论。88 高刨掉 37 只剩 51,
+///   元信息再挤进来必然裁字 —— 搬进带子之后反而多出 11 点空气。
 struct ExpandedView: View {
+    @EnvironmentObject private var appState: AppState
     @ObservedObject private var store = CardStore.shared
 
+    /// 左右各留 34。原版是容器 26 + 内容 8 两级叠出来的,408 宽里内容只占 340(83%)。
+    /// 留白靠绝对像素,不靠百分比 —— 小面板用百分比会在窄档显得挤、宽档显得空。
+    private let sidePadding: CGFloat = 34
+    private let tileSize: CGFloat = 36
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            if let card = store.current {
-                HStack(spacing: 6) {
+        VStack(spacing: 0) {
+            if appState.contentTopInset > 0 {
+                shoulder
+                    .frame(height: appState.contentTopInset)
+                    .clipped()
+
+                content
+                    .padding(.horizontal, sidePadding)
+                    .padding(.top, 4)
+                    .padding(.bottom, 11)
+                    .frame(maxHeight: .infinity, alignment: .top)
+            } else {
+                // 没刘海的机器:带子是零,元信息回到内容上方排一行。
+                flatMeta
+                    .padding(.horizontal, sidePadding)
+                    .padding(.top, 10)
+                    .padding(.bottom, 8)
+
+                content
+                    .padding(.horizontal, sidePadding)
+                    .padding(.bottom, 22)
+                    .frame(maxHeight: .infinity, alignment: .top)
+            }
+        }
+    }
+
+    // MARK: - 让位带里的肩栏
+
+    private var shoulder: some View {
+        let wing = max(0, (appState.currentSize.width - 40 - appState.shoulderGap) / 2)
+
+        return HStack(spacing: 0) {
+            sourceLine
+                .frame(width: wing, alignment: .leading)
+
+            Spacer(minLength: appState.shoulderGap)
+
+            trailingMeta
+                .frame(width: wing, alignment: .trailing)
+        }
+        // 肩栏自己一套内边距,比内容区那 34 窄一档。
+        .padding(.horizontal, 20)
+        .frame(maxHeight: .infinity)
+    }
+
+    private var sourceLine: some View {
+        Text(store.current?.sourceTitle ?? "")
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(NotchInk.weak)
+            .lineLimit(1)
+            .truncationMode(.tail)
+    }
+
+    @ViewBuilder
+    private var trailingMeta: some View {
+        if let card = store.current {
+            HStack(spacing: 8) {
+                // 状态不做成实心徽章。深色面板上的实心色块是整版最模板化的一处,
+                // 换成「圆点 + 有色文字」立刻干净。
+                HStack(spacing: 5) {
                     if card.isReviewDue {
-                        Text("该复习了")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(.black)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1)
-                            .background(Color(red: 1, green: 0.72, blue: 0.2), in: RoundedRectangle(cornerRadius: 3))
+                        Circle()
+                            .fill(NotchAccent.amber.opacity(0.92))
+                            .frame(width: 4, height: 4)
                     }
 
-                    Text(card.sourceTitle ?? "")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.white.opacity(0.4))
-                        .lineLimit(1)
-
-                    Spacer(minLength: 0)
-
-                    Text("\(store.index + 1)/\(store.cards.count)")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.white.opacity(0.4))
+                    Text(card.timelinessLabel)
+                        .font(.system(size: 10, weight: card.isReviewDue ? .semibold : .medium))
+                        .foregroundStyle(card.isReviewDue ? NotchAccent.amber.opacity(0.90) : NotchInk.weak)
                 }
 
-                Text(card.displayTitle)
+                Text("\(store.index + 1)/\(store.cards.count)")
+                    .font(.system(size: 10, weight: .medium))
+                    .monospacedDigit()
+                    .foregroundStyle(NotchInk.ghost)
+            }
+        }
+    }
+
+    private var flatMeta: some View {
+        HStack(spacing: 8) {
+            sourceLine
+            Spacer(minLength: 12)
+            trailingMeta
+        }
+        .frame(height: 12)
+    }
+
+    // MARK: - 一句结论
+
+    @ViewBuilder
+    private var content: some View {
+        if let card = store.current {
+            HStack(alignment: .center, spacing: 12) {
+                SourceTile(letter: card.sourceLetter, size: tileSize)
+
+                Text(card.lead)
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.92))
+                    .foregroundStyle(NotchInk.body)
                     .lineLimit(2)
-                    .multilineTextAlignment(.leading)
-            } else {
-                Text(placeholder)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.white.opacity(0.5))
+                    .truncationMode(.tail)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(height: tileSize)
+        } else {
+            empty
+        }
+    }
+
+    private var empty: some View {
+        HStack(alignment: .center, spacing: 12) {
+            RoundedRectangle(cornerRadius: tileSize * 0.15, style: .continuous)
+                .fill(.white.opacity(0.03))
+                .overlay(
+                    RoundedRectangle(cornerRadius: tileSize * 0.15, style: .continuous)
+                        .stroke(.white.opacity(0.07), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                )
+                .frame(width: tileSize, height: tileSize)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(placeholder.headline)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.55))
+
+                Text(placeholder.hint)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(NotchInk.faint)
             }
 
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: tileSize)
     }
 
-    private var placeholder: String {
-        if !store.hasLoadedOnce { return "正在读知识库…" }
-        if store.isOffline { return "本机 AITimeline 没有运行" }
+    private var placeholder: (headline: String, hint: String) {
+        if !store.hasLoadedOnce { return ("正在读知识库", "稍等一下") }
+        if store.isOffline { return ("本机 AITimeline 没在跑", "打开它,卡就回来了") }
 
-        return "知识库里还没有该回来的卡"
+        return ("今天没有要回来的卡", "存点东西,过几天它自己找上来")
     }
 }
