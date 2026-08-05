@@ -16,8 +16,10 @@ import {
   applyDailyAutoJobBudget,
   applyUserMemoryEdits,
   askGrounded,
+  buildConceptSurfaceForms,
   buildDiscoveryConfirmationQuestions,
   commitWithRetry,
+  createConceptAliasResolver,
   decodeJson,
   decodeRecordCollection,
   deepClone,
@@ -32,7 +34,8 @@ import {
   getHardDismissedPostIds,
   mergeSourceRegistries,
   readAgentLoopMaxSteps,
-  runAgentLoop
+  runAgentLoop,
+  textMentionsSurfaceForm
 } from "../../../../packages/core/dist/index.js";
 import {
   createSingleJobPlan,
@@ -46,6 +49,7 @@ import {
 import { getKnowledgePosts } from "./importSettlement.mjs";
 import { backfillLegacyReviewStates, selectReviewPrompt } from "./review.mjs";
 import { normalizeSourceCandidate } from "./supply.mjs";
+import { normalizeUrlKey } from "./subscriptions.mjs";
 import { dispatchAgentTask, listAgentTasks } from "./agentTasks.mjs";
 
 const maxStoredTurns = 200;
@@ -74,7 +78,7 @@ const memoryEditKinds = new Set(["add", "remove", "replace", "clear", "set"]);
 
 /**
  * @param {{ read(): string | null | undefined, compareAndSwap(expectedRevision: number, serialized: string): boolean, close?(): void }} storage
- * @param {{ onLoadIssue?: (issue: any) => void }} [options]
+ * @param {{ onLoadIssue?: (issue: any) => void, contentLanguage?: "zh" | "en" }} [options]
  */
 export function createAgentChatStore(storage, options = {}) {
   const initialRaw = storage.read();
@@ -162,13 +166,17 @@ export function createAgentChatStore(storage, options = {}) {
 
   // 写锁保证单写者:刚打开存储时没有任何循环在跑,还挂着 running 的轮次
   // 一定是上个进程中断留下的,如实标为失败,免得界面永远轮询下去。
+  const interruptedText =
+    options.contentLanguage === "en"
+      ? "The process restarted; this turn was interrupted."
+      : "进程重启,这轮对话中断了。";
   const interrupted = snapshot.turns.filter((turn) => turn.status === "running");
   for (const turn of interrupted) {
     const at = new Date().toISOString();
     store.updateTurn(turn.id, (entry) => ({
       ...entry,
       status: "failed",
-      events: [...entry.events, { type: "error", at, text: "进程重启,这轮对话中断了。" }],
+      events: [...entry.events, { type: "error", at, text: interruptedText }],
       updatedAt: at
     }));
   }
@@ -412,6 +420,7 @@ async function runAgentChatTurn({
       text,
       client: askModelClient,
       tools,
+      contentLanguage,
       maxSteps: readAgentLoopMaxSteps(env),
       contextLines: [
         zh
@@ -553,8 +562,9 @@ export function buildAgentChatTools({
       argsHint: '{"query":"..."}',
       run(args) {
         const query = requireToolString(args.query, "query");
-        const posts = getKnowledgePosts(persistenceStore.getSnapshot().posts);
-        const matches = rankPostsByOverlap(posts, query)
+        const snapshot = persistenceStore.getSnapshot();
+        const posts = getKnowledgePosts(snapshot.posts);
+        const matches = rankPostsForQuestion(posts, query, snapshot.conceptAliases)
           .slice(0, 5)
           .map(({ postId, title, overlapScore }) => ({ postId, title, overlapScore }));
 
@@ -572,7 +582,7 @@ export function buildAgentChatTools({
         const requestedPostId = typeof args.postId === "string" && args.postId.trim() ? args.postId.trim() : undefined;
         const post = requestedPostId
           ? posts.find((candidate) => candidate.id === requestedPostId)
-          : rankPostsByOverlap(posts, question)[0]?.post;
+          : rankPostsForQuestion(posts, question, snapshot.conceptAliases)[0]?.post;
 
         if (!post) {
           return {
@@ -612,6 +622,23 @@ export function buildAgentChatTools({
         const now = new Date().toISOString();
         const snapshot = persistenceStore.getSnapshot();
         const candidate = normalizeSourceCandidate({ url, reason }, now);
+        // 先查重再扣费:同一 URL 已有排队/在跑的导入任务时,enqueuePlan 会按
+        // 语义键去重返回已有记录——任务没新建,预算却已经扣掉。照 preferences
+        // 判 alreadyQueued 的模式,这种情况直接复用,不碰预算。
+        const urlKey = normalizeUrlKey(candidate.source.url);
+        const existing = curationStore
+          .list()
+          .find(
+            (record) =>
+              record.job.kind === "import_source" &&
+              (record.status === "queued" || record.status === "running") &&
+              normalizeUrlKey(record.job.sourceCandidate?.source?.url ?? "") === urlKey
+          );
+
+        if (existing) {
+          return { queued: true, alreadyQueued: true, taskId: existing.id };
+        }
+
         const job = {
           // user-task- 前缀让任务台账把它认作用户发起的任务。
           id: `user-task-import-${hashText(`${candidate.id}|${now}`)}`,
@@ -775,26 +802,113 @@ export function buildAgentChatTools({
   };
 }
 
-// 照 selectResearchAnswerPost 的词面重合率打分,附带原卡供内部选卡用。
-function rankPostsByOverlap(posts, question) {
+// 选卡对齐确定性路径(runConversationTurn)的做法:先做概念命中——库内概念名
+// 与别名(含 conceptSurfaceForms 派生的缩写/中文写法,#168 验证过的原语)在问题
+// 里做贴边子串匹配;概念没命中再退词面重合。纯词面重合对中文全盲(没有空格
+// 分词,整句变成单个 token),所以补一路 CJK 字符二元组重合当补充信号。
+// 全部零命中就返回空,让调用方诚实报 found:false,不盲目兜底 posts[0]。
+function rankPostsForQuestion(posts, question, conceptAliases) {
+  const matchedSlugs = matchQuestionConceptSlugs(posts, question, conceptAliases);
+  const resolver = createConceptAliasResolver(conceptAliases ?? []);
   const questionTokens = tokenizeText(question);
+  const questionBigrams = cjkBigrams(question);
 
   return posts
     .map((post) => {
-      const haystack = tokenizeText(
-        [post.title, post.summary, post.keyTakeaway, (post.concepts ?? []).join(" ")].join(" ")
-      );
-      const overlap = questionTokens.size
-        ? Array.from(questionTokens).filter((token) => haystack.has(token)).length / questionTokens.size
+      const conceptHits = (post.concepts ?? []).filter((concept) =>
+        matchedSlugs.has(resolver.slugConcept(concept))
+      ).length;
+      const haystackText = [post.title, post.summary, post.keyTakeaway, (post.concepts ?? []).join(" ")].join(" ");
+      const haystackTokens = tokenizeText(haystackText);
+      const tokenOverlap = questionTokens.size
+        ? Array.from(questionTokens).filter((token) => haystackTokens.has(token)).length / questionTokens.size
         : 0;
+      const haystackBigrams = cjkBigrams(haystackText);
+      const bigramOverlap = questionBigrams.size
+        ? Array.from(questionBigrams).filter((bigram) => haystackBigrams.has(bigram)).length / questionBigrams.size
+        : 0;
+      const lexicalOverlap = Math.max(tokenOverlap, bigramOverlap);
 
-      return { postId: post.id, title: post.title, overlapScore: roundScore(overlap), post };
+      return {
+        postId: post.id,
+        title: post.title,
+        overlapScore: roundScore(Math.min(1, lexicalOverlap + conceptHits * 0.5)),
+        conceptHits,
+        lexicalOverlap,
+        post
+      };
     })
-    .filter((entry) => entry.overlapScore > 0)
+    .filter((entry) => entry.conceptHits > 0 || entry.lexicalOverlap > 0)
     .sort(
       (left, right) =>
-        right.overlapScore - left.overlapScore || right.post.createdAt.localeCompare(left.post.createdAt)
+        right.conceptHits - left.conceptHits ||
+        right.lexicalOverlap - left.lexicalOverlap ||
+        right.post.createdAt.localeCompare(left.post.createdAt)
     );
+}
+
+// 库内概念词表(概念名 + 用户合并的别名 + 表面形式)里,哪些在问题里被提到了。
+// 与 conversationAgent.extractConceptsFromQuestion 同一套公共原语的等价实现。
+function matchQuestionConceptSlugs(posts, question, conceptAliases) {
+  const resolver = createConceptAliasResolver(conceptAliases ?? []);
+  const aliasLabelsBySlug = new Map();
+
+  for (const record of conceptAliases ?? []) {
+    const slug = resolver.slugConcept(record.canonical);
+
+    if (!slug) continue;
+
+    aliasLabelsBySlug.set(slug, [
+      ...(aliasLabelsBySlug.get(slug) ?? []),
+      record.canonical,
+      ...record.aliases
+    ]);
+  }
+
+  const vocabulary = new Map();
+
+  for (const post of posts) {
+    for (const concept of post.concepts ?? []) {
+      const slug = resolver.slugConcept(concept);
+
+      if (slug && !vocabulary.has(slug)) {
+        vocabulary.set(slug, concept);
+      }
+    }
+  }
+
+  const matched = new Set();
+
+  for (const [slug, label] of vocabulary) {
+    const forms = new Set([label, ...(aliasLabelsBySlug.get(slug) ?? [])]);
+
+    for (const base of [...forms]) {
+      for (const derived of buildConceptSurfaceForms(base)) {
+        forms.add(derived);
+      }
+    }
+
+    if ([...forms].some((form) => textMentionsSurfaceForm(question, form))) {
+      matched.add(slug);
+    }
+  }
+
+  return matched;
+}
+
+const hanCharacter = /\p{Script=Han}/u;
+
+function cjkBigrams(value) {
+  const text = String(value);
+  const bigrams = new Set();
+
+  for (let index = 0; index < text.length - 1; index += 1) {
+    if (hanCharacter.test(text[index]) && hanCharacter.test(text[index + 1])) {
+      bigrams.add(text[index] + text[index + 1]);
+    }
+  }
+
+  return bigrams;
 }
 
 function requireToolString(value, fieldName) {
@@ -805,4 +919,4 @@ function requireToolString(value, fieldName) {
   return value.trim();
 }
 
-export const __testing = { decodeAgentChatStoreSnapshot, rankPostsByOverlap, capTurns };
+export const __testing = { decodeAgentChatStoreSnapshot, rankPostsForQuestion, matchQuestionConceptSlugs, capTurns };

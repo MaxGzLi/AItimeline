@@ -182,6 +182,23 @@ describe("runAgentLoop", () => {
     expect(result.modelCalls).toBe(3);
   });
 
+  it("emits English error copy when contentLanguage is en", async () => {
+    const client = createScriptedClient([
+      "nonsense",
+      '{"action":"tool","tool":"nope","args":{}}',
+      '{"action":"say","text":"ok","done":true}'
+    ]);
+    const result = await runAgentLoop({ text: "hi", client, tools: createEchoToolbox(), contentLanguage: "en" });
+
+    expect(result.status).toBe("succeeded");
+    const errorEvents = result.events.filter((event) => event.type === "error");
+    expect(errorEvents[0]?.text).toContain("Protocol parse failed");
+    expect(errorEvents[1]?.text).toContain("Unknown tool: nope");
+    for (const event of errorEvents) {
+      expect(event.text).not.toMatch(/\p{Script=Han}/u);
+    }
+  });
+
   it("keeps looping after a say with done:false", async () => {
     const client = createScriptedClient([
       '{"action":"say","text":"先看一眼库","done":false}',

@@ -245,7 +245,8 @@ export function createApiServer(options = {}) {
     const agentChatAdapter = createFileStorageAdapter(agentChatDataPath, { ownerId, backupCount: 3 });
     resources.push(agentChatAdapter);
     agentChatStore = createAgentChatStore(agentChatAdapter, {
-      onLoadIssue: (issue) => console.warn("[aitimeline] agent chat load issue", issue)
+      onLoadIssue: (issue) => console.warn("[aitimeline] agent chat load issue", issue),
+      contentLanguage: resolveContentLanguage(persistenceStore, process.env)
     });
     resources.push(agentChatStore);
     persistenceStore.flushMigration();

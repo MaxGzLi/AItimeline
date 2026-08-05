@@ -14,6 +14,7 @@ export * from "./graph/conceptAliases.js";
 export * from "./graph/conceptDigest.js";
 export * from "./graph/conceptMapLayout.js";
 export * from "./graph/conceptMentions.js";
+export * from "./graph/conceptSurfaceForms.js";
 export * from "./graph/knowledgeBoundary.js";
 export * from "./graph/knowledgeGraph.js";
 export * from "./graph/skillTree.js";

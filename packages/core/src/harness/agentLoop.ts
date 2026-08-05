@@ -1,3 +1,4 @@
+import type { ContentLanguage } from "./contentLanguage.js";
 import type { ModelClient, ModelMessage } from "./modelRunner.js";
 
 /**
@@ -37,6 +38,8 @@ export interface RunAgentLoopInput {
   tools: AgentLoopToolbox;
   /** Extra lines appended to the system prompt (user context, language policy...). */
   contextLines?: string[];
+  /** Language for engine-emitted error event copy. Defaults to "zh". */
+  contentLanguage?: ContentLanguage;
   maxSteps?: number;
   temperature?: number;
   now?: () => string;
@@ -54,6 +57,22 @@ export interface AgentLoopResult {
 export const defaultAgentLoopMaxSteps = 6;
 
 const maxToolResultFeedbackChars = 2000;
+
+// 引擎发出的 error 事件会原样进用户可见的事件流,所以文案跟着 contentLanguage 走。
+const agentLoopErrorCopy = {
+  zh: {
+    parseFailed: (detail: string) => `协议解析失败:${detail}`,
+    unknownTool: (tool: string) => `未知工具:${tool}`,
+    toolFailed: (tool: string, detail: string) => `工具 ${tool} 执行失败:${detail}`,
+    stepLimitNotClosed: () => "到达步数上限后模型仍未收尾。"
+  },
+  en: {
+    parseFailed: (detail: string) => `Protocol parse failed: ${detail}`,
+    unknownTool: (tool: string) => `Unknown tool: ${tool}`,
+    toolFailed: (tool: string, detail: string) => `Tool ${tool} failed: ${detail}`,
+    stepLimitNotClosed: () => "The model did not close with a say after reaching the step limit."
+  }
+} as const;
 
 /**
  * Shared JSON extraction for model replies: strips markdown fences, then falls
@@ -138,6 +157,7 @@ export function readAgentLoopMaxSteps(env: Record<string, string | undefined> = 
 
 export async function runAgentLoop(input: RunAgentLoopInput): Promise<AgentLoopResult> {
   const maxSteps = Math.max(1, input.maxSteps ?? defaultAgentLoopMaxSteps);
+  const errorCopy = agentLoopErrorCopy[input.contentLanguage ?? "zh"];
   const temperature = input.temperature ?? 0.2;
   const clock = input.now ?? (() => new Date().toISOString());
   const events: AgentLoopEvent[] = [];
@@ -171,7 +191,7 @@ export async function runAgentLoop(input: RunAgentLoopInput): Promise<AgentLoopR
     const parsed = parseAgentLoopDecision(content);
 
     if ("error" in parsed) {
-      emit({ type: "error", text: `协议解析失败:${parsed.error}` });
+      emit({ type: "error", text: errorCopy.parseFailed(parsed.error) });
       parseFailureStreak += 1;
 
       if (parseFailureStreak > 1) {
@@ -212,7 +232,7 @@ export async function runAgentLoop(input: RunAgentLoopInput): Promise<AgentLoopR
     const tool = input.tools[decision.tool];
 
     if (!tool) {
-      emit({ type: "error", text: `未知工具:${decision.tool}` });
+      emit({ type: "error", text: errorCopy.unknownTool(decision.tool) });
       messages.push({
         role: "user",
         content: `Unknown tool "${decision.tool}". Available tools: ${Object.keys(input.tools).join(", ")}. Reply with the protocol JSON.`
@@ -231,7 +251,7 @@ export async function runAgentLoop(input: RunAgentLoopInput): Promise<AgentLoopR
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      emit({ type: "error", text: `工具 ${decision.tool} 执行失败:${message}` });
+      emit({ type: "error", text: errorCopy.toolFailed(decision.tool, message) });
       messages.push({
         role: "user",
         content: `Tool result:\n${truncate(JSON.stringify({ tool: decision.tool, error: message }), maxToolResultFeedbackChars)}`
@@ -254,7 +274,7 @@ export async function runAgentLoop(input: RunAgentLoopInput): Promise<AgentLoopR
     return { status: "succeeded", events, finalText, modelCalls };
   }
 
-  emit({ type: "error", text: "到达步数上限后模型仍未收尾。" });
+  emit({ type: "error", text: errorCopy.stepLimitNotClosed() });
   return fail("model did not produce a closing say after the step limit.");
 }
 
