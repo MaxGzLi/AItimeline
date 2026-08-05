@@ -1,0 +1,69 @@
+{
+  "name": "@aitimeline/desktop",
+  "productName": "AITimeline",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Desktop shell for AITimeline.",
+  "main": "src/main.mjs",
+  "scripts": {
+    "build": "npm run typecheck",
+    "dev": "npm run build -w @aitimeline/core && npm run build -w @aitimeline/web && electron .",
+    "dist": "npm run build -w @aitimeline/core && npm run build -w @aitimeline/web && electron-builder --mac --arm64",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "electron": "40.8.0",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "com.aitimeline.desktop",
+    "productName": "AITimeline",
+    "asar": true,
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      {
+        "from": "../api/src",
+        "to": "apps/api/src",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "../../packages/core/dist",
+        "to": "packages/core/dist",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "../web/dist",
+        "to": "apps/web/dist",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.education",
+      "identity": null,
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ]
+    }
+  }
+}

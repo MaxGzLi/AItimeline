@@ -16,6 +16,7 @@ AITimeline 是一个 open-core AI 知识流项目：开源部分负责 agent 工
 
 ```text
 apps/api          Local MVP API and background worker surface
+apps/desktop      Electron desktop shell
 apps/web          Hosted App 的 Web 原型
 packages/core    可开源的知识流内核
 docs             产品、商业、架构和上线策略
@@ -52,6 +53,62 @@ npm run dev:api
 ```
 
 The API listens on `http://127.0.0.1:8787` by default and stores local JSON snapshots under `apps/api/data/` unless `AITIMELINE_DATA_PATH` or `AITIMELINE_CURATION_DATA_PATH` is set.
+
+## 桌面版
+
+桌面版把标准 Web 构建产物、API 和常驻 worker 装进同一个 Electron 应用。开发模式仍使用当前 worktree 的 `apps/api/data/`；打包版的数据和配置则放在 `~/Library/Application Support/AITimeline/`。关闭最后一个窗口不会退出 macOS 应用，使用 `Cmd+Q` 才会停止 worker 并释放数据锁。
+
+开发启动（会先构建 core 和 web）：
+
+```bash
+npm run dev -w @aitimeline/desktop
+```
+
+如果同一 worktree 的 `npm run dev:api` 正在运行，它会持有相同数据文件的写锁；先退出其中一个，再启动另一个。桌面 API 依次尝试 `127.0.0.1:8787` 与 `127.0.0.1:8788`，两个都被占用时才退到随机端口；浏览器插件只能访问 manifest 里声明的这两个端口，退到随机端口后插件将无法连上。Web 页面通过 preload 获得实际地址。
+
+生成未签名的 macOS Apple Silicon 安装包：
+
+```bash
+npm run dist -w @aitimeline/desktop
+```
+
+产物位于 `apps/desktop/dist/`，同时包含 DMG 和 ZIP。首期没有签名或公证；若 Gatekeeper 拦截，使用 Finder 的“右键 → 打开”。
+
+### 桌面配置
+
+把模型、搜索等变量写入 `~/Library/Application Support/AITimeline/config.env`，格式与仓库 `.env` 相同，然后完全退出并重新打开应用。例如：
+
+```dotenv
+AITIMELINE_MODEL_BASE_URL=https://api.openai.com/v1
+AITIMELINE_MODEL_NAME=your-model
+AITIMELINE_MODEL_API_KEY=your-api-key
+```
+
+`config.env` 不会覆盖启动环境中已经存在的同名变量。没有配置时，现有确定性回退仍然可用。开发模式还会读取仓库根目录的 `.env`，同样不覆盖已经加载的值。
+
+### 从浏览器版搬家
+
+搬家前先记录浏览器版的信息流卡片数、复习队列数和图谱概念数，并确保桌面应用和本地 API 都已退出。不要在任一进程仍运行时复制数据文件。
+
+1. 在浏览器版页面的开发者工具 Console 执行下面这行；它会把当前 origin 的全部 localStorage 复制到剪贴板，值保持为 localStorage 所需的原始字符串。
+
+   ```js
+   copy(JSON.stringify(Object.fromEntries(Object.entries(localStorage)), null, 2))
+   ```
+
+2. 创建用户数据目录，把剪贴板内容原样保存为 `~/Library/Application Support/AITimeline/import-localstorage.json`。文件顶层必须是对象；当前关键项是 `aitl-theme`、`aitl-language`、`aitimeline.mvp.v3` 和 `aitimeline.synced-signals.v1`。
+3. 在仓库根目录复制服务端快照、策展队列和媒体文件。目标目录若已有数据，先自行备份并确认应覆盖哪些文件。
+
+   ```bash
+   DESKTOP_DATA="$HOME/Library/Application Support/AITimeline"
+   mkdir -p "$DESKTOP_DATA/media"
+   cp apps/api/data/aitimeline.json "$DESKTOP_DATA/aitimeline.json"
+   cp apps/api/data/curation-jobs.json "$DESKTOP_DATA/curation-jobs.json"
+   cp -R apps/api/data/media/. "$DESKTOP_DATA/media/"
+   ```
+
+4. 打开桌面应用。首个窗口会在显示前导入 localStorage、重载并逐项验证；成功后输入文件会改名为 `import-localstorage.done`。如果导入失败，原 `.json` 会保留，便于修正后重试。
+5. 对照搬家前记录，检查信息流卡片数、复习队列和图谱概念数，并打开一条带媒体的卡片确认附件可读。确认无误前保留原浏览器数据和服务端目录备份。
 
 ## Model Client
 
@@ -95,13 +152,16 @@ npm run build
 npm run smoke:core
 npm run smoke:api
 npm run smoke:model
+npm run smoke:desktop
 ```
 
 `smoke:core` builds `@aitimeline/core`, imports the compiled `dist` output in Node, and checks source import, YouTube transcript import, article import, model repair, grounding validation, cross-card connections, the concept whole-view digest and background curation execution.
 
 `smoke:api` starts the local API on a temporary port and checks article import, timeline reads, memory edits, interaction signals, queued curation jobs, background source import persistence, grounded card Q&A (`POST /api/ask`), background source discovery through an injected search provider, and the agent entry (`POST /api/agent/ask`: grounded turns, dark-zone discovery proposals and turn metering).
 
-`smoke:model` injects a fake model client and checks that the article and YouTube transforms run the model-backed runner when given one (the model output reaches the card and passes schema + grounding), that grounded card Q&A (`askGrounded`) answers from the post's cited source chunks, that a stub CLI driven through the command runner reaches the card and fails closed on a non-zero exit, and that all paths fall back to deterministic behavior when no model is configured. `npm test` runs the core, API and model smokes together.
+`smoke:model` injects a fake model client and checks that the article and YouTube transforms run the model-backed runner when given one (the model output reaches the card and passes schema + grounding), that grounded card Q&A (`askGrounded`) answers from the post's cited source chunks, that a stub CLI driven through the command runner reaches the card and fails closed on a non-zero exit, and that all paths fall back to deterministic behavior when no model is configured.
+
+`smoke:desktop` uses only temporary directories and a random loopback port to check `config.env` merging, desktop CORS, API startup, HTTP health, clean lock release, and the documented server-data/localStorage migration copy. `npm test` runs the core, API, model, MCP and desktop smokes together.
 
 ## Current MVP
 

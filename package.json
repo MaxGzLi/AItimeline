@@ -19,8 +19,10 @@
     "smoke:model": "npm run build -w @aitimeline/core && node scripts/smoke-model.mjs",
     "smoke:mcp": "node scripts/smoke-mcp.mjs",
     "smoke:agent": "npm run build -w @aitimeline/core && node scripts/smoke-agent.mjs",
+    "smoke:desktop": "npm run build -w @aitimeline/core && node scripts/smoke-desktop.mjs",
     "test:unit": "vitest run",
-    "test": "npm run build -w @aitimeline/core && vitest run && node scripts/smoke-core.mjs && node scripts/smoke-api.mjs && node scripts/smoke-model.mjs && node scripts/smoke-mcp.mjs && node scripts/smoke-agent.mjs"
+    "test": "npm run build -w @aitimeline/core && vitest run && node scripts/smoke-core.mjs && node scripts/smoke-api.mjs && node scripts/smoke-model.mjs && node scripts/smoke-mcp.mjs && node scripts/smoke-agent.mjs && node scripts/smoke-desktop.mjs"
+
   },
   "devDependencies": {
     "typescript": "latest",
