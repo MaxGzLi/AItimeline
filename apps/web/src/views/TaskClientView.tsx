@@ -2,13 +2,19 @@ import { ArrowUp, LoaderCircle, RotateCcw } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { formatRelativeTime, formatShortTime } from "../lib/format";
 import { t } from "../lib/i18n";
-import { groupAgentTasks, type AgentTaskDetailResponse, type AgentTaskStatus, type AgentTaskSummary } from "../lib/tasks";
-import type { AgentDispatchReply } from "../lib/useAgentTasks";
+import {
+  groupAgentTasks,
+  type AgentDispatchReply,
+  type AgentTaskDetailResponse,
+  type AgentTaskStatus,
+  type AgentTaskSummary
+} from "../lib/tasks";
 
 // 状态点是一个小圆,不是字符也不是徽章。只有「有事要你看」才上强调色。
 const statusTone: Record<AgentTaskStatus, string> = {
   queued: "waiting",
   running: "live",
+  awaiting: "waiting",
   succeeded: "done",
   failed: "stuck",
   skipped: "done"
@@ -31,6 +37,8 @@ export interface TaskClientViewProps {
   onOpenCard: (cardId: string) => void;
   onRetry: (taskId: string) => void;
   onSelectTask: (taskId: string) => void;
+  /** 发出去还没回来的那句话:先上屏,下面跟一个「在想」的指示。 */
+  pendingQuestion: string | null;
   primaryNav: ReactNode;
   retryingId: string | null;
   runningCount: number;
@@ -79,6 +87,7 @@ export function TaskClientView({
   onOpenCard,
   onRetry,
   onSelectTask,
+  pendingQuestion,
   primaryNav,
   retryingId,
   runningCount,
@@ -107,7 +116,7 @@ export function TaskClientView({
     const stream = streamRef.current;
 
     if (stream) stream.scrollTop = stream.scrollHeight;
-  }, [detail?.task.id, lastReply]);
+  }, [detail?.task.id, lastReply, pendingQuestion]);
 
   // 桌面壳里系统标题栏是藏掉的(hiddenInset),红绿灯浮在内容左上角:
   // 侧栏要让出顶部一条,并给窗口一条可拖拽的顶带。浏览器里没有这回事。
@@ -247,10 +256,13 @@ export function TaskClientView({
             </article>
           ) : null}
 
-          {/* 你刚说的那句话和观察员的回话。答案正文不进快照,只活在这一次会话里。 */}
+          {/* 你刚说的那句话和观察员的回话。答案正文不进快照,只活在这一次会话里。
+              选中的正是这条任务时,详情里已经摆过你的问题,这里不再重复画一个气泡。 */}
           {lastReply ? (
             <article className="x-task-turn">
-              <p className="x-task-you">{lastReply.question}</p>
+              {lastReply.taskId === detail?.task.id && detail.task.title === lastReply.question ? null : (
+                <p className="x-task-you">{lastReply.question}</p>
+              )}
 
               <div className="x-task-agent">
                 <p className="x-task-answer">{lastReply.text}</p>
@@ -296,6 +308,20 @@ export function TaskClientView({
                   </div>
                 ) : null}
                 {lastReply.confirmedNote ? <p className="x-task-confirmed">{lastReply.confirmedNote}</p> : null}
+              </div>
+            </article>
+          ) : null}
+
+          {/* 发出去还没回来:话先摆上,下面三个点在呼吸,表示观察员在翻库。 */}
+          {pendingQuestion ? (
+            <article className="x-task-turn">
+              <p className="x-task-you">{pendingQuestion}</p>
+              <div className="x-task-agent">
+                <p aria-label={t("tasks.thinking")} className="x-task-thinking" role="status">
+                  <span />
+                  <span />
+                  <span />
+                </p>
               </div>
             </article>
           ) : null}

@@ -2692,6 +2692,7 @@ export function App() {
         onOpenCard={showDetail}
         onRetry={(taskId) => void agentTasks.retryTask(taskId)}
         onSelectTask={agentTasks.selectTask}
+        pendingQuestion={agentTasks.pendingQuestion}
         retryingId={agentTasks.retryingId}
         runningCount={agentTasks.runningCount}
         footerNav={[
