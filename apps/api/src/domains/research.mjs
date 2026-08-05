@@ -57,6 +57,7 @@ export async function handleAgentAsk(body, userId, persistenceStore, client, sea
       memory,
       userSignals: toUserSignals(snapshot.interactionSignals),
       previousTurns: getPreviousTurns(snapshot, userId, threadId),
+      conceptAliases: snapshot.conceptAliases,
       now
     },
     { client, contentLanguage }
@@ -249,7 +250,12 @@ function createResearchQuestionJob(turnRecord, choices, contentLanguage, now) {
     topicId: `question-${hashText(turnRecord.id)}`,
     conceptIds: [],
     priority: 1,
-    reason: "User confirmed a dark-zone question for background research.",
+    // 这条会显示在任务详情里当「为什么派这个活」,所以要跟别的理由一样说人话、
+    // 跟着内容语言走。frontier 现在也会走到这儿,不再只有 dark 区。
+    reason:
+      contentLanguage === "en"
+        ? `You confirmed background research for: ${turnRecord.question}`
+        : `你确认了要去查:${turnRecord.question}`,
     createdAt: now,
     runAfter: now,
     researchQuestion: {

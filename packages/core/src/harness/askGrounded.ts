@@ -1,5 +1,6 @@
 import { getChunksForSource, getRegistryChunk, getRegistrySource } from "../source/sourceRegistry.js";
 import type { KnowledgeChunk, KnowledgePost, KnowledgeThreadCitation, SourceRegistry } from "../types.js";
+import { extractJsonPayload } from "./agentLoop.js";
 import { getGroundedAnswerLanguagePolicy, type ContentLanguage } from "./contentLanguage.js";
 import { validateClaimSupport } from "./groundingGate.js";
 import type { ModelClient } from "./modelRunner.js";
@@ -118,7 +119,14 @@ async function buildModelAnswer(
         minOverlap: 1,
         minimumSharedTokens: 2,
         checkProperNouns: true,
-        allowBeyondSource: false
+        allowBeyondSource: false,
+        // An answer to a learner's question is paraphrase by nature, the same
+        // genre as a card — it restates the excerpt in the reader's words. The
+        // ordered word-order gate only accepts near-quotation, so it rejected
+        // every real answer and the feature always replied "not enough
+        // evidence". Anchor mode still traces every technical term, symbol and
+        // number back to the cited excerpts; only the connecting prose is free.
+        supportMode: "anchors"
       }
     );
 
@@ -184,6 +192,7 @@ export function getAskSystemPrompt(language: ContentLanguage = "zh"): string {
   return `You are the AITimeline study assistant.
 
 Answer the learner's question using only the numbered source excerpts provided. Do not use outside knowledge. Cite the excerpts you used by their number. If the excerpts do not contain the answer, say you cannot find it in the source instead of guessing.
+Write the answer as statements the excerpts support, and nothing else. Do not describe the excerpts themselves: no opening like "according to the material provided", no closing like "this answer is based on excerpts [1] and [2]", and no remarks about what the excerpts leave out. The numbers you put in citedExcerpts are the citation; they must not appear in the answer text. If the excerpts genuinely cannot answer the question, make that the entire answer rather than appending it to one.
 Write mathematical formulas in LaTeX: inline \`$...$\`, display \`$$...$$\`; do not flatten them into Unicode subscripts/superscripts.
 
 ${getGroundedAnswerLanguagePolicy(language).join("\n")}
@@ -241,28 +250,6 @@ function parseModelAnswer(content: string): ParsedModelAnswer | null {
   } catch {
     return null;
   }
-}
-
-function extractJsonPayload(content: string): string {
-  const trimmed = content.trim();
-  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
-
-  if (fenced?.[1]) {
-    return fenced[1].trim();
-  }
-
-  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-    return trimmed;
-  }
-
-  const objectStart = trimmed.indexOf("{");
-  const objectEnd = trimmed.lastIndexOf("}");
-
-  if (objectStart >= 0 && objectEnd > objectStart) {
-    return trimmed.slice(objectStart, objectEnd + 1);
-  }
-
-  return trimmed;
 }
 
 function mapCitedExcerpts(citedExcerpts: number[], excerpts: GroundedExcerpt[]): GroundedAnswerCitation[] {

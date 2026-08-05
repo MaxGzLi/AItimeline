@@ -649,11 +649,15 @@ assert.equal(
 );
 assert.deepEqual(askWithUnsupportedCitedAnswer.citations, [], "unsupported cited answers should expose no citations");
 
-const askWithTwoAnchorHallucination = await askGrounded(
+// 问答走锚点式之后,数字是最容易被编出来的东西,所以这条守数字。
+// 已知放行的口子(2026-08-04 拍板认了):一句纯英文、没有任何专名、数字和
+// 符号记号的空话,锚点式查不出锚点,会当叙述胶水放过去。想堵它就得回到词序
+// 硬门,而词序硬门连忠实转述都拦,问答会整个废掉。
+const askWithFabricatedNumber = await askGrounded(
   {
     post: deterministic.cards[0],
     registry: deterministic.sourceRegistry,
-    question: "What does the source material guarantee?"
+    question: "How much does it improve retention?"
   },
   {
     contentLanguage: "en",
@@ -661,7 +665,7 @@ const askWithTwoAnchorHallucination = await askGrounded(
       async complete() {
         return {
           content: JSON.stringify({
-            answer: "Source material guarantees immortality and cancer cures.",
+            answer: "An AI Agent keeps citations, which improves retention by 87% within three days.",
             citedExcerpts: [1]
           })
         };
@@ -671,14 +675,14 @@ const askWithTwoAnchorHallucination = await askGrounded(
 );
 
 assert.equal(
-  askWithTwoAnchorHallucination.grounded,
+  askWithFabricatedNumber.grounded,
   false,
-  "two retrieval anchors must not ground an unsupported ask answer"
+  "an ask answer must not invent a number that is absent from the cited evidence"
 );
 assert.deepEqual(
-  askWithTwoAnchorHallucination.citations,
+  askWithFabricatedNumber.citations,
   [],
-  "a rejected two-anchor ask hallucination must expose no citations"
+  "a rejected fabricated-number ask answer must expose no citations"
 );
 
 const askWithHighCopyHallucination = await askGrounded(
@@ -693,8 +697,9 @@ const askWithHighCopyHallucination = await askGrounded(
       async complete() {
         return {
           content: JSON.stringify({
+            // 尾巴上挂个来源里没有的机构和年份:抄得再像,多出来的那一句照样不算数。
             answer:
-              "An AI Agent can turn source material into durable knowledge when it keeps citations guaranteeing immortality.",
+              "An AI Agent can turn source material into durable knowledge when it keeps citations, as Stanford showed in 2019.",
             citedExcerpts: [1]
           })
         };

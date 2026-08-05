@@ -91,6 +91,13 @@ import {
   handleDiscoveryRun,
   handleIdeaResearchRequest
 } from "./domains/research.mjs";
+import { dispatchAgentTask, getAgentTask, listAgentTasks, retryAgentTask } from "./domains/agentTasks.mjs";
+import {
+  createAgentChatStore,
+  getAgentChatTurn,
+  handleAgentChatMessage,
+  listAgentChatTurns
+} from "./domains/agentChat.mjs";
 import { handlePostReply, handleUserNote } from "./domains/notes.mjs";
 import { handlePreferenceChat } from "./domains/preferences.mjs";
 import {
@@ -188,6 +195,7 @@ const minimumConfiguredWorkerIntervalMs = 5000;
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const defaultDataPath = resolve(currentDir, "../data/aitimeline.json");
 const defaultCurationDataPath = resolve(currentDir, "../data/curation-jobs.json");
+const defaultAgentChatDataPath = resolve(currentDir, "../data/agent-chat.json");
 const defaultMediaRoot = resolve(currentDir, "../data/media");
 const backlogManualBatchLimit = 5;
 
@@ -201,6 +209,15 @@ export function createApiServer(options = {}) {
   const dataPath = options.dataPath ?? process.env.AITIMELINE_DATA_PATH ?? defaultDataPath;
   const curationDataPath =
     options.curationDataPath ?? process.env.AITIMELINE_CURATION_DATA_PATH ?? defaultCurationDataPath;
+  // 默认名跟着 dataPath 走:测试经常给主快照传各自的临时路径同时不传本项,
+  // 如果这里固定指向一个共享文件,并存的测试服务就会在同一把写锁上撞车。
+  // 只有 dataPath 也是默认值时才用规范位置 data/agent-chat.json。
+  const agentChatDataPath =
+    options.agentChatDataPath ??
+    process.env.AITIMELINE_AGENT_CHAT_DATA_PATH ??
+    (dataPath === defaultDataPath
+      ? defaultAgentChatDataPath
+      : `${resolve(dataPath).replace(/\.json$/, "")}.agent-chat.json`);
   const mediaRootDir = resolve(options.mediaRootDir ?? process.env.AITIMELINE_MEDIA_ROOT ?? defaultMediaRoot);
   const enableFixtures = options.enableFixtures ?? process.env.AITIMELINE_ENABLE_FIXTURES === "1";
   const ownerId = options.ownerId ?? randomUUID();
@@ -208,6 +225,7 @@ export function createApiServer(options = {}) {
   const resources = [];
   let persistenceStore;
   let curationStore;
+  let agentChatStore;
   try {
     const persistenceAdapter = createFileStorageAdapter(dataPath, { ownerId, backupCount: 3 });
     resources.push(persistenceAdapter);
@@ -224,6 +242,13 @@ export function createApiServer(options = {}) {
       onLoadIssue: (issue) => console.warn("[aitimeline] curation queue load issue", issue)
     });
     resources.push(curationStore);
+    const agentChatAdapter = createFileStorageAdapter(agentChatDataPath, { ownerId, backupCount: 3 });
+    resources.push(agentChatAdapter);
+    agentChatStore = createAgentChatStore(agentChatAdapter, {
+      onLoadIssue: (issue) => console.warn("[aitimeline] agent chat load issue", issue),
+      contentLanguage: resolveContentLanguage(persistenceStore, process.env)
+    });
+    resources.push(agentChatStore);
     persistenceStore.flushMigration();
     curationStore.flushMigration?.();
     curationStore.recoverExpiredLeases(options.now ?? new Date());
@@ -1407,6 +1432,128 @@ export function createApiServer(options = {}) {
         return;
       }
 
+      // 任务客户端。列表和详情只回界面要显示的字段,让客户端不必再拉整份快照
+      // (那份现在近 20MB,开一次窗口就得等它传完)。
+      if (request.method === "GET" && url.pathname === "/api/agent/tasks") {
+        const limitParam = Number(url.searchParams.get("limit"));
+
+        sendJson(
+          response,
+          200,
+          listAgentTasks({
+            persistenceStore,
+            curationStore,
+            contentLanguage: resolveContentLanguage(persistenceStore, process.env),
+            limit: Number.isFinite(limitParam) && limitParam > 0 ? limitParam : undefined,
+            status: url.searchParams.get("status") ?? undefined
+          })
+        );
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/agent/tasks") {
+        const body = await readJsonBody(request);
+        requireString(body.text, "text");
+
+        sendJson(
+          response,
+          200,
+          await dispatchAgentTask({
+            body,
+            userId: typeof body.userId === "string" && body.userId.trim() ? body.userId : "local-user",
+            persistenceStore,
+            curationStore,
+            askModelClient,
+            searchProvider,
+            contentLanguage: resolveContentLanguage(persistenceStore, process.env)
+          })
+        );
+        return;
+      }
+
+      if (request.method === "POST" && /^\/api\/agent\/tasks\/[^/]+\/retry$/.test(url.pathname)) {
+        const taskId = decodeURIComponent(url.pathname.slice("/api/agent/tasks/".length, -"/retry".length));
+        const body = await readJsonBody(request);
+        const result = retryAgentTask({
+          id: taskId,
+          persistenceStore,
+          curationStore,
+          contentLanguage: resolveContentLanguage(persistenceStore, process.env),
+          now: typeof body.now === "string" ? body.now : new Date().toISOString()
+        });
+
+        sendJson(response, result.reason === "not_found" ? 404 : 200, result);
+        return;
+      }
+
+      if (request.method === "GET" && /^\/api\/agent\/tasks\/[^/]+$/.test(url.pathname)) {
+        const taskId = decodeURIComponent(url.pathname.replace(/^\/api\/agent\/tasks\//, ""));
+        const detail = getAgentTask({
+          id: taskId,
+          persistenceStore,
+          curationStore,
+          contentLanguage: resolveContentLanguage(persistenceStore, process.env)
+        });
+
+        if (!detail) {
+          sendJson(response, 404, { error: "Task not found." });
+          return;
+        }
+
+        sendJson(response, 200, detail);
+        return;
+      }
+
+      // agent 运行时 v1:对话循环的三个端点。POST 立即落一条 running 的 turn,
+      // 循环异步跑;界面 1-2 秒轮询详情直到终态;列表端点在刷新后重建对话流。
+      if (request.method === "POST" && url.pathname === "/api/agent/chat") {
+        const body = await readJsonBody(request);
+        requireString(body.text, "text");
+
+        sendJson(
+          response,
+          200,
+          handleAgentChatMessage({
+            body,
+            userId: typeof body.userId === "string" && body.userId.trim() ? body.userId.trim() : "local-user",
+            agentChatStore,
+            persistenceStore,
+            curationStore,
+            askModelClient,
+            searchProvider,
+            contentLanguage: resolveContentLanguage(persistenceStore, process.env)
+          })
+        );
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/agent/chat") {
+        const limitParam = Number(url.searchParams.get("limit"));
+
+        sendJson(
+          response,
+          200,
+          listAgentChatTurns({
+            agentChatStore,
+            limit: Number.isFinite(limitParam) && limitParam > 0 ? limitParam : undefined
+          })
+        );
+        return;
+      }
+
+      if (request.method === "GET" && /^\/api\/agent\/chat\/[^/]+$/.test(url.pathname)) {
+        const chatTurnId = decodeURIComponent(url.pathname.replace(/^\/api\/agent\/chat\//, ""));
+        const detail = getAgentChatTurn({ agentChatStore, id: chatTurnId });
+
+        if (!detail) {
+          sendJson(response, 404, { error: "Chat turn not found." });
+          return;
+        }
+
+        sendJson(response, 200, detail);
+        return;
+      }
+
       if (request.method === "POST" && url.pathname === "/api/agent/ask") {
         const body = await readJsonBody(request);
         requireString(body.question, "question");
@@ -1624,6 +1771,7 @@ export function createApiServer(options = {}) {
   server.aitimeline = {
     persistenceStore,
     curationStore,
+    agentChatStore,
     workerId,
     closeStores,
     security,

@@ -38,4 +38,5 @@ jobs:
       - run: npm run smoke:api
       - run: npm run smoke:model
       - run: npm run smoke:mcp
+      - run: npm run smoke:agent
       - run: npm run smoke:desktop

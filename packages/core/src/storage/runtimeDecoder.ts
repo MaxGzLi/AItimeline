@@ -1,4 +1,4 @@
-export type PersistenceSnapshotKind = "aitimeline" | "curation-jobs";
+export type PersistenceSnapshotKind = "aitimeline" | "curation-jobs" | "agent-chat";
 
 export interface PersistenceLoadIssue {
   snapshotKind: PersistenceSnapshotKind;

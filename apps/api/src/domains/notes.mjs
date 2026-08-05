@@ -45,6 +45,7 @@ export async function handleUserNote(body, userId, persistenceStore, client, sea
       registry,
       memory,
       userSignals: toUserSignals(snapshot.interactionSignals),
+      conceptAliases: snapshot.conceptAliases,
       now
     },
     { client, contentLanguage }
@@ -250,6 +251,7 @@ export async function handlePostReply(postId, body, userId, persistenceStore, cl
       registry,
       memory,
       userSignals: toUserSignals(snapshot.interactionSignals),
+      conceptAliases: snapshot.conceptAliases,
       now
     },
     { client, contentLanguage }
