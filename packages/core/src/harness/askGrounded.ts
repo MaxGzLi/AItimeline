@@ -3,7 +3,7 @@ import type { KnowledgeChunk, KnowledgePost, KnowledgeThreadCitation, SourceRegi
 import { extractJsonPayload } from "./agentLoop.js";
 import { getGroundedAnswerLanguagePolicy, type ContentLanguage } from "./contentLanguage.js";
 import { validateClaimSupport } from "./groundingGate.js";
-import type { ModelClient } from "./modelRunner.js";
+import type { ModelClient, ModelMessage } from "./modelRunner.js";
 
 export type GroundedAnswerCitation = KnowledgeThreadCitation;
 
@@ -33,6 +33,8 @@ interface GroundedExcerpt extends GroundedAnswerCitation {
 
 const defaultMaxChunks = 6;
 const maxQuoteLength = 280;
+// 一次原答 + 一次照着拒绝理由的重写。再多就是拿用户的等待时间赌模型。
+const maxAnswerAttempts = 2;
 
 export async function askGrounded(
   input: AskGroundedInput,
@@ -49,7 +51,15 @@ export async function askGrounded(
     return buildDeterministicAnswer(input, excerpts, contentLanguage);
   }
 
-  return buildModelAnswer(input, excerpts, options.client, options.temperature ?? 0.2, contentLanguage);
+  try {
+    return await buildModelAnswer(input, excerpts, options.client, options.temperature ?? 0.2, contentLanguage);
+  } catch {
+    // 供应商偶尔会回一个没有正文的响应,或者干脆超时。之前这里什么都不接,
+    // 异常一路抛到接口上,用户问一句话换来一个报错。概念简报早就是这么兜的:
+    // 模型不可用就退回确定性产物。这里退回的答案同样只由已登记的原文块拼成,
+    // 不引入模型知识,所以接地这件事没有放松。
+    return buildDeterministicAnswer(input, excerpts, contentLanguage);
+  }
 }
 
 function resolveExcerpts(post: KnowledgePost, registry: SourceRegistry, maxChunks: number): GroundedExcerpt[] {
@@ -100,17 +110,27 @@ async function buildModelAnswer(
   temperature: number,
   contentLanguage: ContentLanguage
 ): Promise<GroundedAnswer> {
-  const response = await client.complete({
-    messages: [
-      { role: "system", content: getAskSystemPrompt(contentLanguage) },
-      { role: "user", content: buildAskUserPrompt(input.post, input.question, excerpts) }
-    ],
-    responseFormat: "json_object",
-    temperature
-  });
-  const parsed = parseModelAnswer(response.content);
+  const baseMessages: ModelMessage[] = [
+    { role: "system", content: getAskSystemPrompt(contentLanguage) },
+    { role: "user", content: buildAskUserPrompt(input.post, input.question, excerpts) }
+  ];
+  // 门禁一次定生死的时候,同一个问题这次能答、下次就被拦,全看模型这回怎么措辞。
+  // 深读那条路径早就是「拦下来先让模型重写一次再判」,问答这条照抄这个做法:
+  // 把拒绝理由回传给模型,让它照着证据改写。仍然只多一轮,不会无限重试。
+  let rejection: string | undefined;
 
-  if (parsed) {
+  for (let attempt = 0; attempt < maxAnswerAttempts; attempt += 1) {
+    const messages: ModelMessage[] = rejection
+      ? [...baseMessages, { role: "user", content: buildAskRetryPrompt(rejection, contentLanguage) }]
+      : baseMessages;
+    const response = await client.complete({ messages, responseFormat: "json_object", temperature });
+    const parsed = parseModelAnswer(response.content);
+
+    if (!parsed) {
+      rejection = "The previous reply was not the required JSON object.";
+      continue;
+    }
+
     const citations = mapCitedExcerpts(parsed.citedExcerpts, excerpts);
     const support = validateClaimSupport(
       parsed.answer,
@@ -138,9 +158,25 @@ async function buildModelAnswer(
         runnerKind: "model"
       };
     }
+
+    rejection = citations.length
+      ? support.reason ?? "The previous answer was not supported by the cited excerpts."
+      : "The previous reply cited no excerpt by number.";
   }
 
   return buildInsufficientEvidenceAnswer(contentLanguage, "model");
+}
+
+function buildAskRetryPrompt(rejection: string, contentLanguage: ContentLanguage): string {
+  return [
+    `Your previous answer was rejected by the deterministic grounding check: ${rejection}`,
+    "Write the answer again using only what the numbered excerpts state.",
+    "Every technical term, proper noun and number in your answer must appear in the excerpts you cite; drop any claim you cannot point at.",
+    contentLanguage === "en"
+      ? "Keep writing in natural English."
+      : "继续用简体中文作答。",
+    "Return the same JSON object shape and nothing else."
+  ].join("\n");
 }
 
 function buildInsufficientEvidenceAnswer(
