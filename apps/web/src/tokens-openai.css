@@ -110,6 +110,13 @@
   /* Neutral interaction (nav rows, icon buttons, primary button) */
   --color-background-primary-ghost-hover: rgb(13 13 13 / 8%);
   --color-background-primary-ghost-active: rgb(13 13 13 / 12%);
+
+  /* 静息态的浅填充(气泡、选中行、行悬停)。
+     上游语义名只到 ghost 的 8% / 12%,但真身量下来气泡比底色只暗 8、选中行只暗 9,
+     换算过来约 3.5%——用 8%/12% 整屏就偏重偏脏。这两个是从上游同一条 alpha 刻度
+     (--alpha-02/04/05/06/08/...)上取的更低档,不是自己编的数。 */
+  --fill-quiet: rgb(13 13 13 / 4%); /* --alpha-04 */
+  --fill-select: rgb(13 13 13 / 6%); /* --alpha-06 */
   --color-background-primary-solid: #181818; /* light-dark(--gray-900, --gray-950) */
 
   /* Accent */
@@ -147,6 +154,10 @@
 
     --color-background-primary-ghost-hover: rgb(255 255 255 / 12%);
     --color-background-primary-ghost-active: rgb(255 255 255 / 16%);
+
+    /* 深色下上游整体高一档,这两个也跟着高一档。 */
+    --fill-quiet: rgb(255 255 255 / 6%); /* --alpha-06 */
+    --fill-select: rgb(255 255 255 / 8%); /* --alpha-08 */
     --color-background-primary-solid: #f3f3f3;
 
     --color-ring: #0285ff;
@@ -183,6 +194,8 @@
 
   --color-background-primary-ghost-hover: rgb(255 255 255 / 12%);
   --color-background-primary-ghost-active: rgb(255 255 255 / 16%);
+  --fill-quiet: rgb(255 255 255 / 6%); /* --alpha-06 */
+  --fill-select: rgb(255 255 255 / 8%); /* --alpha-08 */
   --color-background-primary-solid: #f3f3f3;
 
   --color-ring: #0285ff;

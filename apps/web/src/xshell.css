@@ -2877,26 +2877,27 @@ button.x-chip {
   background: var(--color-ring);
 }
 
-/* 侧栏里所有可点的行长一个样:细线图标 + 文字 + 可选数字。 */
+/* 侧栏里所有可点的行长一个样:细线图标 + 文字 + 可选数字。
+   行高按真身量到的 40px:9 上下内边距 + 14px 字 × 1.6 行高。原来 34px 偏挤。 */
 .x-task-quick button,
 .x-task-foot button {
   display: flex;
   align-items: center;
   gap: 10px;
   width: 100%;
-  padding: 6px 10px;
+  padding: 9px 10px;
   border: 0;
   border-radius: var(--radius-md);
   background: none;
   color: var(--color-text-secondary);
   font: inherit;
-  font-size: 13.5px;
+  font-size: var(--font-text-sm-size);
   text-align: left;
   cursor: pointer;
 }
 .x-task-quick button:hover,
 .x-task-foot button:hover {
-  background: var(--color-background-primary-ghost-hover);
+  background: var(--fill-quiet);
   color: var(--color-text);
 }
 .x-task-quick button em,
@@ -2943,22 +2944,22 @@ button.x-chip {
   align-items: center;
   gap: 9px;
   width: 100%;
-  padding: 6px 10px;
+  padding: 9px 10px;
   border: 0;
   border-radius: var(--radius-md);
   background: none;
   color: var(--color-text-secondary);
   font: inherit;
-  font-size: 13.5px;
+  font-size: var(--font-text-sm-size);
   text-align: left;
   cursor: pointer;
 }
 .x-task-row:hover {
-  background: var(--color-background-primary-ghost-hover);
+  background: var(--fill-quiet);
 }
 /* 选中态是一块浅灰圆角填充,不是左边一道竖条,也不加粗。 */
 .x-task-row.active {
-  background: var(--color-background-primary-ghost-active);
+  background: var(--fill-select);
   color: var(--color-text);
 }
 .x-task-dot {
@@ -3001,7 +3002,10 @@ button.x-chip {
   font-style: normal;
 }
 
-/* ---- 中栏:对话流 + 底部输入卡 ---- */
+/* ---- 中栏:对话流 + 底部输入卡 ----
+   中栏不是一张白纸。真身量下来三栏几乎同一个色(#eff4f9 / #eff1f5 / #eff1f5),
+   左栏和中栏之间只有一条 1px 的线;我原来把中栏做成纯白、跟侧栏差 6 级,
+   整窗看着就是「灰框里夹一张白纸」,这是最不像的一处。 */
 .x-task-main {
   /* 一句话、产出卡、输入框全都排在这一列上,宽度只有这一个来源。
      之前输入卡自己写了 768,比会话内容宽出 80px,左右各出头 40px 对不齐。 */
@@ -3010,7 +3014,7 @@ button.x-chip {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  background: var(--color-surface);
+  border-left: 1px solid var(--color-border-subtle);
 }
 /*
  * 从上往下排。之前试过让内容不满一屏时贴着输入框往上顶,结果只有一两句话的任务
@@ -3040,7 +3044,7 @@ button.x-chip {
   margin: 0 0 20px auto;
   padding: 10px 14px;
   border-radius: var(--radius-2xl);
-  background: var(--color-background-primary-ghost-hover);
+  background: var(--fill-quiet);
   white-space: pre-wrap;
 }
 .x-task-agent > * {
@@ -3163,7 +3167,9 @@ button.x-chip {
   font-style: normal;
 }
 
-/* 产出的卡:一块填充,不描边。 */
+/* 产出的卡:比底色亮一级,靠一根发丝线分界,不是一块重填充。
+   真身量下来卡内 #f0f1f5、底色 #eff1f5(只亮 1),边线 #e9eaef。我原来用 8% 填充、
+   一条线都没有,看着比真身"块"。 */
 .x-task-produced {
   display: flex;
   flex-direction: column;
@@ -3175,16 +3181,16 @@ button.x-chip {
   gap: 6px;
   width: 100%;
   padding: 14px 16px;
-  border: 0;
+  border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-xl);
-  background: var(--color-background-primary-ghost-hover);
+  background: var(--color-surface);
   color: inherit;
   font: inherit;
   text-align: left;
   cursor: pointer;
 }
 .x-task-card:hover {
-  background: var(--color-background-primary-ghost-active);
+  border-color: var(--color-border);
 }
 .x-task-cardtitle {
   font-size: 14.5px;
@@ -3272,12 +3278,14 @@ button.x-chip {
 .x-task-composer {
   padding: 8px 40px 20px;
 }
+/* 输入卡同理:亮一级 + 发丝线,不是灰填充。 */
 .x-task-composerbox {
   max-width: var(--task-col);
   margin: 0 auto;
   padding: 12px 14px 10px;
+  border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-2xl);
-  background: var(--color-background-primary-ghost-hover);
+  background: var(--color-surface);
 }
 .x-task-composerinput {
   display: block;
@@ -3442,7 +3450,7 @@ button.x-chip {
   cursor: pointer;
 }
 .x-task-client .x-task-rail .x-rail .x-mrow:hover {
-  background: var(--color-background-primary-ghost-hover);
+  background: var(--fill-quiet);
 }
 .x-task-client .x-task-rail .x-rail .x-mmain {
   min-width: 0;
