@@ -209,8 +209,15 @@ export function createApiServer(options = {}) {
   const dataPath = options.dataPath ?? process.env.AITIMELINE_DATA_PATH ?? defaultDataPath;
   const curationDataPath =
     options.curationDataPath ?? process.env.AITIMELINE_CURATION_DATA_PATH ?? defaultCurationDataPath;
+  // 默认名跟着 dataPath 走:测试经常给主快照传各自的临时路径同时不传本项,
+  // 如果这里固定指向一个共享文件,并存的测试服务就会在同一把写锁上撞车。
+  // 只有 dataPath 也是默认值时才用规范位置 data/agent-chat.json。
   const agentChatDataPath =
-    options.agentChatDataPath ?? process.env.AITIMELINE_AGENT_CHAT_DATA_PATH ?? defaultAgentChatDataPath;
+    options.agentChatDataPath ??
+    process.env.AITIMELINE_AGENT_CHAT_DATA_PATH ??
+    (dataPath === defaultDataPath
+      ? defaultAgentChatDataPath
+      : `${resolve(dataPath).replace(/\.json$/, "")}.agent-chat.json`);
   const mediaRootDir = resolve(options.mediaRootDir ?? process.env.AITIMELINE_MEDIA_ROOT ?? defaultMediaRoot);
   const enableFixtures = options.enableFixtures ?? process.env.AITIMELINE_ENABLE_FIXTURES === "1";
   const ownerId = options.ownerId ?? randomUUID();
