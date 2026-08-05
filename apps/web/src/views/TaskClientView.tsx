@@ -158,7 +158,8 @@ export function TaskClientView({
 
       <main className="x-task-main">
         <div className="x-task-stream" ref={streamRef}>
-          {!detail && detailLoading ? <p className="x-task-empty">{t("tasks.loading")}</p> : null}
+          {/* 屏幕上已经有回答了就别再挂一行「加载中」,那看着像出了两件事。 */}
+          {!detail && !lastReply && detailLoading ? <p className="x-task-empty">{t("tasks.loading")}</p> : null}
           {!detail && !detailLoading && !lastReply ? <p className="x-task-empty">{t("tasks.pickOne")}</p> : null}
 
           {detail ? (

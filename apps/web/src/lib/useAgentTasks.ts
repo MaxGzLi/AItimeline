@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiRequest, isAbortLikeError } from "./api";
 import { t } from "./i18n";
+import { detailForSelection } from "./tasks";
 import type { AgentTaskDetailResponse, AgentTaskListResponse, AgentTaskSummary } from "./tasks";
 
 const pollIntervalMs = 5000;
@@ -178,6 +179,9 @@ export function useAgentTasks(enabled: boolean) {
     if (!enabled || !selectedTaskId) return;
 
     const controller = new AbortController();
+
+    setDetail((current) => detailForSelection(current, selectedTaskId));
+    setDetailLoading(true);
 
     void loadDetail(selectedTaskId, controller.signal);
 

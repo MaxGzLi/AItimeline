@@ -2857,7 +2857,8 @@ button.x-chip {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  padding: 0 8px 8px;
+  /* 底部留够,不然最后一行贴着窗口边。 */
+  padding: 0 8px 16px;
 }
 .x-task-brand {
   display: flex;
@@ -3002,6 +3003,9 @@ button.x-chip {
 
 /* ---- 中栏:对话流 + 底部输入卡 ---- */
 .x-task-main {
+  /* 一句话、产出卡、输入框全都排在这一列上,宽度只有这一个来源。
+     之前输入卡自己写了 768,比会话内容宽出 80px,左右各出头 40px 对不齐。 */
+  --task-col: 688px;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -3009,9 +3013,8 @@ button.x-chip {
   background: var(--color-surface);
 }
 /*
- * 内容不满一屏时贴着输入框往上排,不要让对话吊在顶上、底下空一大片。
- * 用第一个孩子的 margin-top: auto 顶上去,不用 justify-content: flex-end——
- * 后者在可滚动的 flex 列里会把溢出的顶部裁掉且滚不回去。
+ * 从上往下排。之前试过让内容不满一屏时贴着输入框往上顶,结果只有一两句话的任务
+ * 上面会空掉大半屏、气泡吊在正中间,比下面空着更像坏了。聊天都是从上读的。
  */
 .x-task-stream {
   display: flex;
@@ -3021,18 +3024,18 @@ button.x-chip {
   overflow-y: auto;
   padding: 40px 0 8px;
 }
-.x-task-stream > :first-child {
-  margin-top: auto;
-}
 .x-task-turn {
   width: 100%;
-  max-width: 768px;
+  max-width: calc(var(--task-col) + 80px);
   margin: 0 auto 32px;
   padding: 0 40px;
 }
 
-/* 规则 4:你说的话是右对齐的一块浅填充,它的回答什么容器都没有。 */
+/* 规则 4:你说的话是右对齐的一块浅填充,它的回答什么容器都没有。
+   width 得是 fit-content:块级元素默认会把 max-width 撑满,
+   结果四个字的问题也拉成一条 500px 的长条。 */
 .x-task-you {
+  width: fit-content;
   max-width: min(72%, 520px);
   margin: 0 0 20px auto;
   padding: 10px 14px;
@@ -3270,7 +3273,7 @@ button.x-chip {
   padding: 8px 40px 20px;
 }
 .x-task-composerbox {
-  max-width: 768px;
+  max-width: var(--task-col);
   margin: 0 auto;
   padding: 12px 14px 10px;
   border-radius: var(--radius-2xl);
@@ -3343,14 +3346,18 @@ button.x-chip {
   color: var(--color-text-danger);
 }
 
-/* ---- 右栏:浮起的一张卡。用的是现有 ContextRail,只在这一屏里换皮 ----
-   ContextRail 原来是给三栏外壳写的:固定 350px 宽、sticky、模块自带底色和描边,
-   深色下还有一条 `:root[data-theme="dark"] .x-module` 的高权重规则。所以这里的
-   选择器都带 `.x-task-client .x-task-rail .x-rail` 前缀压过去,组件本身一行不动。 */
+/* ---- 右栏:跟左栏一样贴着边,不套框 ----
+   之前把它做成一张浮起来的圆角卡,卡和窗口之间那圈底色在深色下就是一条黑边,
+   而且卡顶从 12px 起、主列从 0 起,两边对不齐。现在去掉卡:右栏和左栏一样
+   坐在底色上,只有中间那列是抬起来的。
+
+   用的是现有 ContextRail,只在这一屏里换皮。它原来是给三栏外壳写的:固定 350px
+   宽、sticky、模块自带底色和描边,深色下还有一条 `:root[data-theme="dark"] .x-module`
+   的高权重规则。所以这里的选择器都带 `.x-task-client .x-task-rail .x-rail` 前缀
+   压过去,组件本身一行不动。 */
 .x-task-rail {
   min-width: 0;
   min-height: 0;
-  padding: 12px 12px 12px 0;
   overflow: hidden;
 }
 .x-task-client .x-task-rail .x-rail {
@@ -3361,10 +3368,11 @@ button.x-chip {
   box-sizing: border-box;
   width: 100%;
   height: 100%;
-  padding: 14px;
+  /* 顶部 16px 和左栏站名的 padding-top 一样,两侧栏的第一件东西齐头。 */
+  padding: 16px 16px 20px 4px;
   border: 0;
-  border-radius: var(--radius-2xl);
-  background: var(--color-surface-elevated);
+  border-radius: 0;
+  background: none;
   overflow-y: auto;
 }
 .x-task-client .x-task-rail .x-rail .x-search {
@@ -3507,10 +3515,11 @@ button.x-chip {
   font-size: 11.5px;
   font-weight: 400;
 }
+/* 右栏不套框之后,这块的底色不能再用底色本身,否则就看不见了。 */
 .x-task-client .x-task-rail .x-rail .x-localgraph {
   margin: 4px 0;
   border-radius: var(--radius-lg);
-  background: var(--color-surface-secondary);
+  background: var(--color-background-primary-ghost-hover);
   overflow: hidden;
 }
 .x-task-client .x-task-rail .x-rail .x-raillinks {

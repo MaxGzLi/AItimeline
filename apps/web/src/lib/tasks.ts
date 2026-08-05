@@ -88,3 +88,16 @@ export function groupAgentTasks(tasks: AgentTaskSummary[], now: Date): AgentTask
     .filter((key) => groups[key].length > 0)
     .map((key) => ({ key, tasks: groups[key] }));
 }
+
+/**
+ * 换一条任务时,该不该把手上这份详情留在屏幕上。
+ *
+ * 高亮是点下去就动的,详情还要等一趟请求回来。中间这段如果把上一条的内容
+ * 留着,看到的就是「高亮在新行、正文是旧的」,会让人以为读的是选中的这条。
+ */
+export function detailForSelection(
+  current: AgentTaskDetailResponse | null,
+  selectedTaskId: string | null
+): AgentTaskDetailResponse | null {
+  return current && current.task.id === selectedTaskId ? current : null;
+}
