@@ -6,7 +6,7 @@ import {
   createSourceRegistry,
   runConversationTurn
 } from "../../../packages/core/dist/index.js";
-import { __testing, buildAgentChatTools, createAgentChatStore } from "../src/domains/agentChat.mjs";
+import { __testing, buildAgentChatTools, createAgentChatStore, handleAgentChatMessage } from "../src/domains/agentChat.mjs";
 
 const now = new Date().toISOString();
 const source = {
@@ -48,6 +48,24 @@ function createFakePersistenceStore(overrides = {}) {
       userMemories: [],
       autoJobBudget: [],
       curationJobs: [],
+      interactionSignals: [],
+      agentTurns: [],
+      // summarizeSnapshot 逐字段读 length,确定性兜底全流程要走到它
+      sourceImports: [],
+      harnessRuns: [],
+      topicStates: [],
+      dismissedPosts: [],
+      reviewStates: [],
+      sourceCandidates: [],
+      notifications: [],
+      conceptMergeSuggestions: [],
+      sourceQualityVerdicts: [],
+      mergedSources: [],
+      conceptBriefs: [],
+      deepReadArticles: [],
+      weeklyRecaps: [],
+      subscriptions: [],
+      learningGoals: [],
       ...overrides
     },
     savedCurationRecords: [],
@@ -57,6 +75,15 @@ function createFakePersistenceStore(overrides = {}) {
   return {
     state,
     getSnapshot: () => state.snapshot,
+    saveInteractionSignalRecords() {
+      return state.snapshot;
+    },
+    saveUserMemory() {
+      return state.snapshot;
+    },
+    saveAgentTurnRecords() {
+      return state.snapshot;
+    },
     saveDailyAutoJobBudgetRecords(records) {
       state.savedBudgets.push(...records);
       const byDate = new Map(state.snapshot.autoJobBudget.map((record) => [record.date, record]));
@@ -216,5 +243,52 @@ describe("中断轮次文案(缺陷 3 回归)", () => {
 
     expect(turn.status).toBe("failed");
     expect(turn.events.at(-1).text).toContain("进程重启");
+  });
+});
+
+describe("模型基础设施故障退确定性兜底", () => {
+  async function waitForTerminalTurn(store, id) {
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      const turn = store.get(id);
+
+      if (turn && turn.status !== "running") {
+        return turn;
+      }
+
+      await new Promise((resolveWait) => setTimeout(resolveWait, 10));
+    }
+
+    throw new Error("turn never reached a terminal status");
+  }
+
+  it("模型客户端抛异常(超时/断连):整轮以确定性答案 succeeded 收尾,不是 failed", async () => {
+    const adapter = createMemoryRevisionedStorageAdapter(JSON.stringify({ version: 2, revision: 0, turns: [] }));
+    const agentChatStore = createAgentChatStore(adapter, { contentLanguage: "zh" });
+    const throwingClient = {
+      complete: async () => {
+        throw new Error("model command timed out after 120000ms: claude -p");
+      }
+    };
+
+    const { chatTurnId } = handleAgentChatMessage({
+      body: { text: "什么是注意力机制?" },
+      userId: "local-user",
+      agentChatStore,
+      persistenceStore: createFakePersistenceStore(),
+      curationStore: createInMemoryBackgroundCurationJobStore(),
+      askModelClient: throwingClient,
+      searchProvider: undefined,
+      contentLanguage: "zh",
+      env: {}
+    });
+
+    const turn = await waitForTerminalTurn(agentChatStore, chatTurnId);
+
+    // 确定性路由答完可能附确认动作(awaiting_confirmation),两种都算活着;
+    // 修复前这里是 failed + 一句「这一轮失败了」,没有任何答案。
+    expect(["succeeded", "awaiting_confirmation"]).toContain(turn.status);
+    expect(turn.events.some((event) => event.type === "error" && event.text.includes("模型调用失败"))).toBe(true);
+    expect(turn.events.some((event) => event.type === "error" && event.text.includes("确定性路径"))).toBe(true);
+    expect(turn.answer?.text).toBeTruthy();
   });
 });

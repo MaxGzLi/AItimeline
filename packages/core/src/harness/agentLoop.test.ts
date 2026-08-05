@@ -210,4 +210,39 @@ describe("runAgentLoop", () => {
     expect(result.events.filter((event) => event.type === "say")).toHaveLength(2);
     expect(result.finalText).toBe("看完了");
   });
+
+  it("returns failed instead of throwing when the model client throws", async () => {
+    const client = {
+      complete: async () => {
+        throw new Error("model command timed out after 120000ms: claude -p");
+      }
+    };
+    const result = await runAgentLoop({ text: "hi", client, tools: createEchoToolbox() });
+
+    expect(result.status).toBe("failed");
+    expect(result.failureReason).toContain("model call failed");
+    expect(result.failureReason).toContain("timed out");
+    const errorEvents = result.events.filter((event) => event.type === "error");
+    expect(errorEvents).toHaveLength(1);
+    expect(errorEvents[0]?.text).toContain("模型调用失败");
+  });
+
+  it("returns failed instead of throwing when the forced closing call throws", async () => {
+    let calls = 0;
+    const client = {
+      complete: async () => {
+        calls += 1;
+        if (calls > 2) {
+          throw new Error("connection reset");
+        }
+
+        return { content: '{"action":"tool","tool":"echo","args":{"value":"a"}}' };
+      }
+    };
+    const result = await runAgentLoop({ text: "hi", client, tools: createEchoToolbox(), maxSteps: 2 });
+
+    expect(result.status).toBe("failed");
+    expect(result.failureReason).toContain("model call failed");
+    expect(result.events.filter((event) => event.type === "tool_result")).toHaveLength(2);
+  });
 });

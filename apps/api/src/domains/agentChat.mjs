@@ -445,13 +445,15 @@ async function runAgentChatTurn({
       at: new Date().toISOString(),
       text: zh ? "模型循环没能完成,改用确定性路径收尾。" : "The model loop did not finish; falling back to the deterministic path."
     });
+    // 兜底必须彻底无模型:模型这一轮刚证明了不可靠(超时/断连/协议失守),
+    // 再把它传回去,里面的有据问答还会再等一次超时才轮到自己的回退。
     finalize(
       await runDeterministicChatTurn({
         text,
         userId,
         persistenceStore,
         curationStore,
-        askModelClient,
+        askModelClient: undefined,
         searchProvider,
         contentLanguage,
         appendEvent
