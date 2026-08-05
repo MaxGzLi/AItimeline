@@ -62,7 +62,18 @@ export function toInjectCard(post) {
     savedAt: post.createdAt,
     topicId: slugConcept(post.concepts?.[0] ?? "") || "general",
     conceptIds: Array.isArray(post.concepts) ? post.concepts : [],
-    ...(post.reviewDueAt ? { reviewDueAt: post.reviewDueAt } : {})
+    ...(post.reviewDueAt ? { reviewDueAt: post.reviewDueAt } : {}),
+    // 注入面要排出版面层次(眉题/导语/正文/边栏数据),光靠 title + summary 排不出来。
+    // 全部可选:老的注入面读不到就当没有,不会因为某张卡缺字段而渲染失败。
+    ...(post.hook ? { hook: post.hook } : {}),
+    ...(post.keyTakeaway ? { keyTakeaway: post.keyTakeaway } : {}),
+    ...(post.shortBody ? { shortBody: post.shortBody } : {}),
+    ...(typeof post.estimatedReadMinutes === "number"
+      ? { estimatedReadMinutes: post.estimatedReadMinutes }
+      : {}),
+    ...(post.difficulty ? { difficulty: post.difficulty } : {}),
+    ...(post.trustState ? { trustState: post.trustState } : {}),
+    ...(post.reviewPrompts?.[0]?.prompt ? { reviewPrompt: post.reviewPrompts[0].prompt } : {})
   };
 }
 

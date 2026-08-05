@@ -9,7 +9,8 @@ export default defineConfig({
       "packages/core/src/**/*.test.ts",
       "apps/api/test/**/*.test.mjs",
       "apps/web/src/lib/**/*.test.ts",
-      "apps/extension/test/**/*.test.mjs"
+      "apps/extension/test/**/*.test.mjs",
+      "apps/notch-extension/test/**/*.test.mjs"
     ]
   }
 });

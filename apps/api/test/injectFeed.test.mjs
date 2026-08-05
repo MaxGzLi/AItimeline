@@ -82,6 +82,43 @@ describe("toInjectCard", () => {
     });
   });
 
+  it("passes through the layout fields the notch surface needs, flattening the first review prompt", () => {
+    const card = toInjectCard(
+      makePost("post-rich", {
+        hook: "Hook line",
+        keyTakeaway: "The one sentence that matters.",
+        shortBody: "A longer body paragraph.",
+        estimatedReadMinutes: 4,
+        difficulty: "intermediate",
+        trustState: "supported",
+        reviewPrompts: [
+          { id: "r1", kind: "recall", prompt: "What is the mechanism?" },
+          { id: "r2", kind: "compare", prompt: "How does it differ?" }
+        ]
+      })
+    );
+
+    expect(card.hook).toBe("Hook line");
+    expect(card.keyTakeaway).toBe("The one sentence that matters.");
+    expect(card.shortBody).toBe("A longer body paragraph.");
+    expect(card.estimatedReadMinutes).toBe(4);
+    expect(card.difficulty).toBe("intermediate");
+    expect(card.trustState).toBe("supported");
+    expect(card.reviewPrompt).toBe("What is the mechanism?");
+    expect(card.reviewPrompts).toBeUndefined();
+  });
+
+  it("omits every layout field the post does not carry instead of emitting nulls", () => {
+    const card = toInjectCard(makePost("post-bare", { estimatedReadMinutes: 0, reviewPrompts: [] }));
+
+    for (const key of ["hook", "keyTakeaway", "shortBody", "difficulty", "trustState", "reviewPrompt"]) {
+      expect(key in card).toBe(false);
+    }
+
+    // 0 分钟是真值,不能被当成缺失丢掉。
+    expect(card.estimatedReadMinutes).toBe(0);
+  });
+
   it("falls back to the general topic when the card has no concepts", () => {
     const card = toInjectCard(makePost("post-2", { concepts: [] }));
 
