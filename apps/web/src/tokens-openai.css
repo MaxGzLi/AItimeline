@@ -69,6 +69,21 @@
   --radius-4xl: 1.5rem; /* 24px */
   --radius-full: 9999px;
 
+  /* Control + type scale — upstream variables-semantic.css, same in both themes.
+     These are the numbers the official <Input> is built out of; sizes used to be
+     hand-guessed here, which is how the search field ended up not matching. */
+  --control-size-sm: 1.75rem; /* 28px */
+  --control-size-md: 2rem; /* 32px */
+  --control-gutter-2xs: 0.375rem; /* 6px */
+  --control-gutter-xs: 0.5rem; /* 8px */
+  --control-gutter-sm: 0.625rem; /* 10px */
+  --control-gutter-md: 0.75rem; /* 12px */
+  --control-gutter-pill-scaling: 1.33;
+  --input-gap-md: 0.5rem; /* 8px */
+  --font-text-xs-size: 0.75rem; /* 12px */
+  --font-text-sm-size: 0.875rem; /* 14px */
+  --font-text-md-size: 1rem; /* 16px */
+
   /* Blue accent — the primitives, identical in both themes */
   --blue-400: #0285ff;
   --blue-500: #0169cc;
