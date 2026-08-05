@@ -65,7 +65,7 @@
 开放问题:
 - CI 要不要加真开 GUI 的冒烟(xvfb 起 Electron):第一期只冒烟无头链路,GUI 冒烟另评。
 - MCP 等外部消费者怎么拿到桌面版的实际端口(第一期不解,API 保持真 HTTP 监听已留好口子)。
-- (已决,见「方案」段:网页供给走 `app://` 静态 + API 跨源直连、preload 注入端口;localStorage 搬家走首启检测注入;端口 8791 默认+随机退避。)
+- (已决,见「方案」段:网页供给走 `app://` 静态 + API 跨源直连、preload 注入端口;localStorage 搬家走首启检测注入;端口按 8787、8788 顺序试,都被占才退随机端口。)
 
 ## 方案
 
@@ -73,7 +73,7 @@
 
 **进程结构**
 - 新 workspace `apps/desktop`(`@aitimeline/desktop`),主进程纯 `.mjs` + `@ts-check`,与 apps/api 同风格,无构建步骤。
-- 主进程以库方式调用 `createApiServer(options)`(apps/api/src/server.mjs 导出,options 支持 dataPath / curationDataPath / mediaRootDir / worker / workerIntervalMs;库模式 worker 默认关,需显式 `worker: true`)。HTTP 只监听 127.0.0.1;默认端口 8791(避开 dev 的 8787),被占则退到随机端口(listen 0)。
+- 主进程以库方式调用 `createApiServer(options)`(apps/api/src/server.mjs 导出,options 支持 dataPath / curationDataPath / mediaRootDir / worker / workerIntervalMs;库模式 worker 默认关,需显式 `worker: true`)。HTTP 只监听 127.0.0.1;端口按 8787、8788 的顺序试,两个都被占才退到随机端口(listen 0)——浏览器插件只能访问它在 manifest 里声明的这两个端口。
 - 渲染进程 = 现有 web 应用的**标准构建产物**(不需要构建变体):真实 API 端口在运行时经最小 preload(contextBridge 暴露 `apiOrigin`)注入,`api.ts` 的 `apiBaseUrl` 优先取注入值,无注入(浏览器)行为不变。这是 apps/web 唯一改动。
 
 **稳定 origin:`app://` 只供静态,API 跨源直连(关键取舍,2026-08-04 修订)**

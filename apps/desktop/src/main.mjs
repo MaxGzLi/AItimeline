@@ -65,8 +65,16 @@ if (!hasSingleInstanceLock) {
   app.quit();
 } else {
   app.on("second-instance", () => {
+    // A shutting-down instance can no longer serve a window, and holding the
+    // single-instance lock any longer would swallow this launch and every one
+    // after it. Give up the lock instead.
+    if (shutdownPromise) {
+      app.exit(0);
+      return;
+    }
+
     if (!mainWindow) {
-      if (!apiOrigin || shutdownPromise) return;
+      if (!apiOrigin) return;
       void createMainWindow().catch(handleFatalStartupError);
       return;
     }
@@ -322,7 +330,12 @@ function beginShutdown(waitForStartup) {
     await closeApiServer();
   })().finally(() => {
     allowQuit = true;
-    app.quit();
+    // Once `before-quit` has been prevented, macOS abandons the quit it started:
+    // the app.quit() that used to run here closed the window and then stopped at
+    // `window-all-closed`, never reaching `will-quit`, so the process stayed
+    // alive without a window and kept the single-instance lock. The API server
+    // and its writer locks are already released above, so exit outright.
+    app.exit(0);
   });
 }
 
