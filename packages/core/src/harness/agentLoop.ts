@@ -64,13 +64,15 @@ const agentLoopErrorCopy = {
     parseFailed: (detail: string) => `协议解析失败:${detail}`,
     unknownTool: (tool: string) => `未知工具:${tool}`,
     toolFailed: (tool: string, detail: string) => `工具 ${tool} 执行失败:${detail}`,
-    stepLimitNotClosed: () => "到达步数上限后模型仍未收尾。"
+    stepLimitNotClosed: () => "到达步数上限后模型仍未收尾。",
+    modelCallFailed: (detail: string) => `模型调用失败:${detail}`
   },
   en: {
     parseFailed: (detail: string) => `Protocol parse failed: ${detail}`,
     unknownTool: (tool: string) => `Unknown tool: ${tool}`,
     toolFailed: (tool: string, detail: string) => `Tool ${tool} failed: ${detail}`,
-    stepLimitNotClosed: () => "The model did not close with a say after reaching the step limit."
+    stepLimitNotClosed: () => "The model did not close with a say after reaching the step limit.",
+    modelCallFailed: (detail: string) => `Model call failed: ${detail}`
   }
 } as const;
 
@@ -185,9 +187,26 @@ export async function runAgentLoop(input: RunAgentLoopInput): Promise<AgentLoopR
     modelCalls,
     failureReason
   });
+  // 模型层的基础设施错误(超时、命令非零退出、网络)以 failed 结果返回而不是
+  // 往外抛,调用方靠既有的 failed 分支退确定性兜底;抛出去会绕过那条兜底。
+  const completeOrFail = async (): Promise<{ content: string } | { failure: AgentLoopResult }> => {
+    try {
+      return { content: await complete() };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      emit({ type: "error", text: errorCopy.modelCallFailed(message) });
+      return { failure: fail(`model call failed: ${message}`) };
+    }
+  };
 
   while (modelCalls < maxSteps) {
-    const content = await complete();
+    const attempt = await completeOrFail();
+
+    if ("failure" in attempt) {
+      return attempt.failure;
+    }
+
+    const content = attempt.content;
     const parsed = parseAgentLoopDecision(content);
 
     if ("error" in parsed) {
@@ -265,8 +284,13 @@ export async function runAgentLoop(input: RunAgentLoopInput): Promise<AgentLoopR
     role: "user",
     content: 'Step limit reached. Reply now with {"action":"say","text":"...","done":true} summarizing where things stand, and nothing else.'
   });
-  const closingContent = await complete();
-  const closingParsed = parseAgentLoopDecision(closingContent);
+  const closingAttempt = await completeOrFail();
+
+  if ("failure" in closingAttempt) {
+    return closingAttempt.failure;
+  }
+
+  const closingParsed = parseAgentLoopDecision(closingAttempt.content);
 
   if ("decision" in closingParsed && closingParsed.decision.action === "say") {
     emit({ type: "say", text: closingParsed.decision.text });
