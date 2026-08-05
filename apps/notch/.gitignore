@@ -1,0 +1,3 @@
+# XcodeGen 从 project.yml 生成,不进仓库
+*.xcodeproj/
+build/

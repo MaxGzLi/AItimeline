@@ -1,0 +1,34 @@
+name: AITimelineNotch
+options:
+  bundleIdPrefix: com.aitimeline
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+
+targets:
+  AITimelineNotch:
+    type: application
+    platform: macOS
+    sources:
+      - Sources
+    info:
+      path: Info.plist
+      properties:
+        CFBundleName: AITimeline
+        CFBundleDisplayName: AITimeline
+        # 不进 Dock、不抢焦点:这个应用只有刘海一个界面。
+        LSUIElement: true
+        NSHumanReadableCopyright: ""
+        # 本机接口走明文 HTTP 打 127.0.0.1,苹果对回环地址不拦,这条只是把意图写明。
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.aitimeline.notch
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.0"
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_STYLE: Manual
+        ENABLE_HARDENED_RUNTIME: NO
+        COMBINE_HIDPI_IMAGES: YES
