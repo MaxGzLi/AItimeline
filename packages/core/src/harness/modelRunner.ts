@@ -8,6 +8,7 @@ import type {
   KnowledgePostAgentRunner,
   SourceRegistry
 } from "../types.js";
+import { extractJsonPayload } from "./agentLoop.js";
 import { createAgentHarnessConfig, selectAgentHarnessInputChunks, validateHarnessPosts } from "./runner.js";
 import { knowledgePostJsonSchema } from "./schema.js";
 import { getAgentHarnessSystemPrompt } from "./systemPrompt.js";
@@ -439,28 +440,6 @@ function parseModelPosts(content: string): ParsedModelPosts {
       ]
     };
   }
-}
-
-function extractJsonPayload(content: string): string {
-  const trimmed = content.trim();
-  const fencedJson = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
-
-  if (fencedJson?.[1]) {
-    return fencedJson[1].trim();
-  }
-
-  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-    return trimmed;
-  }
-
-  const objectStart = trimmed.indexOf("{");
-  const objectEnd = trimmed.lastIndexOf("}");
-
-  if (objectStart >= 0 && objectEnd > objectStart) {
-    return trimmed.slice(objectStart, objectEnd + 1);
-  }
-
-  return trimmed;
 }
 
 function extractPostsArray(parsed: unknown): unknown[] {

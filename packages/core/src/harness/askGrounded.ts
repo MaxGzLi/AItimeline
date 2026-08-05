@@ -1,5 +1,6 @@
 import { getChunksForSource, getRegistryChunk, getRegistrySource } from "../source/sourceRegistry.js";
 import type { KnowledgeChunk, KnowledgePost, KnowledgeThreadCitation, SourceRegistry } from "../types.js";
+import { extractJsonPayload } from "./agentLoop.js";
 import { getGroundedAnswerLanguagePolicy, type ContentLanguage } from "./contentLanguage.js";
 import { validateClaimSupport } from "./groundingGate.js";
 import type { ModelClient } from "./modelRunner.js";
@@ -249,28 +250,6 @@ function parseModelAnswer(content: string): ParsedModelAnswer | null {
   } catch {
     return null;
   }
-}
-
-function extractJsonPayload(content: string): string {
-  const trimmed = content.trim();
-  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
-
-  if (fenced?.[1]) {
-    return fenced[1].trim();
-  }
-
-  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-    return trimmed;
-  }
-
-  const objectStart = trimmed.indexOf("{");
-  const objectEnd = trimmed.lastIndexOf("}");
-
-  if (objectStart >= 0 && objectEnd > objectStart) {
-    return trimmed.slice(objectStart, objectEnd + 1);
-  }
-
-  return trimmed;
 }
 
 function mapCitedExcerpts(citedExcerpts: number[], excerpts: GroundedExcerpt[]): GroundedAnswerCitation[] {
