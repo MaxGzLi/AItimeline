@@ -108,10 +108,54 @@ describe("toInjectCard", () => {
     expect(card.reviewPrompts).toBeUndefined();
   });
 
+  it("passes thread knowledge blocks through as readable sections", () => {
+    const card = toInjectCard(
+      makePost("post-thread", {
+        thread: [
+          { id: "t1", kind: "explain", title: "为什么能替代", body: "核心机制是给每个 expert 加一个 bias。", grounded: true },
+          { id: "t2", kind: "example", title: "过载时会怎样", body: "假设 expert A 吸引了过多 token。", grounded: false }
+        ]
+      })
+    );
+
+    expect(card.sections).toEqual([
+      { title: "为什么能替代", body: "核心机制是给每个 expert 加一个 bias。" },
+      { title: "过载时会怎样", body: "假设 expert A 吸引了过多 token。" }
+    ]);
+  });
+
+  // 全库 570 段 thread 里只有 105 段带引文。要是按 grounded 过滤,122 张卡有 95 张
+  // 一段正文都读不到 —— 等于这个功能没做。卡片整体已经过了接地门禁。
+  it("keeps blocks that carry no citation of their own", () => {
+    const card = toInjectCard(
+      makePost("post-ungrounded", {
+        thread: [{ id: "t1", kind: "explain", title: "讲解", body: "一段没有引文的讲解。", grounded: false }]
+      })
+    );
+
+    expect(card.sections).toHaveLength(1);
+  });
+
+  it("drops conversation turns and empty blocks so the notch only gets prose", () => {
+    const card = toInjectCard(
+      makePost("post-mixed", {
+        thread: [
+          { id: "t1", kind: "explain", title: "讲解", body: "真正的正文。" },
+          { id: "t2", kind: "user_comment", title: "", body: "我的评论。" },
+          { id: "t3", kind: "agent_reply", title: "", body: "观察员的回复。" },
+          { id: "t4", kind: "quiz", title: "小测", body: "   " },
+          { id: "t5", kind: "extension", title: "延伸" }
+        ]
+      })
+    );
+
+    expect(card.sections).toEqual([{ title: "讲解", body: "真正的正文。" }]);
+  });
+
   it("omits every layout field the post does not carry instead of emitting nulls", () => {
     const card = toInjectCard(makePost("post-bare", { estimatedReadMinutes: 0, reviewPrompts: [] }));
 
-    for (const key of ["hook", "keyTakeaway", "shortBody", "difficulty", "trustState", "reviewPrompt"]) {
+    for (const key of ["hook", "keyTakeaway", "shortBody", "difficulty", "trustState", "reviewPrompt", "sections"]) {
       expect(key in card).toBe(false);
     }
 

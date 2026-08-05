@@ -332,6 +332,93 @@ describe("pagesOf", () => {
     }
   });
 
+  // 刘海之前只印 summary/shortBody(中位 119 字),thread 那 5 段(中位 487 字)一个字没露。
+  it("puts each thread section after the lead, with its own subhead, before the concepts page", () => {
+    const card = {
+      ...richCard,
+      sections: [
+        { title: "为什么 bias 循环能替代 auxiliary loss？", body: "核心机制是在 top-K 路由前给每个 expert 加 bias。" },
+        { title: "一个 expert 过载时会发生什么？", body: "假设某层里 expert A 吸引了过多 token，负载明显高于其他 expert。" }
+      ]
+    };
+
+    const pages = pagesOf(card);
+    const subheads = pages.filter((page) => page.subhead).map((page) => page.subhead);
+
+    expect(subheads).toEqual([
+      "为什么 bias 循环能替代 auxiliary loss？",
+      "一个 expert 过载时会发生什么？"
+    ]);
+    // 导语正文在最前,概念页在最后,小题段落夹在中间。
+    expect(pages[0].subhead).toBeUndefined();
+    expect(pages[pages.length - 1].kind).toBe("concepts");
+    expect(pages.findIndex((page) => page.subhead)).toBeGreaterThan(0);
+  });
+
+  it("keeps every character of every section across its pages", () => {
+    // 一页装得下约 216 个字宽,这里堆到约 750,保证真的切了页而不是空跑一遍断言。
+    const long = "这一段特别长，长到一页放不下，需要切成好几页才读得完。".repeat(28);
+    const pages = pagesOf({ ...richCard, sections: [{ title: "长段", body: long }] });
+    const joined = pages
+      .filter((page) => page.subhead === "长段")
+      .map((page) => page.text)
+      .join("")
+      .replace(/\s/g, "");
+
+    expect(pages.filter((page) => page.subhead === "长段").length).toBeGreaterThan(1);
+    expect(joined).toBe(long.replace(/\s/g, ""));
+  });
+
+  // 真机渲染出来看到的:一段 333 字的 thread 切成「装满的一页 + 只有一行的一页」,
+  // 第二页下面一大片黑。按上限硬切必然这样,要先算出至少几页再均分。
+  it("splits an overflowing section evenly instead of leaving a one-line page", () => {
+    const body = "这一段有三百多个字，一页装不下，会被切开。".repeat(16);
+    const pages = pagesOf({ ...richCard, sections: [{ title: "长段", body }] }).filter(
+      (page) => page.subhead === "长段"
+    );
+    const sizes = pages.map((page) => page.text.length);
+
+    expect(pages.length).toBeGreaterThan(1);
+    // 最短的一页不许短于最长那页的六成 —— 这就是「碎页」的判据。
+    expect(Math.min(...sizes)).toBeGreaterThan(Math.max(...sizes) * 0.6);
+  });
+
+  it("keeps the lead on the front page only when sections follow it", () => {
+    const withSections = pagesOf({ ...richCard, sections: [{ title: "细说", body: "这一段把概要展开讲。" }] });
+
+    // 概要只占头版一页,第二页起就是带小题的段落。
+    expect(withSections[0].subhead).toBeUndefined();
+    expect(withSections[1].subhead).toBe("细说");
+  });
+
+  it("still pages the lead to the end when the card has no sections", () => {
+    // 首页只装得下约 162 个字宽,这里给到约 500,保证真的要翻页。
+    const lead = "概要写得很长，一页装不下，没有段落接着的时候必须翻页读完。".repeat(18);
+    const pages = pagesOf({ ...richCard, shortBody: lead, summary: lead });
+
+    expect(pages.filter((page) => page.kind === "body").length).toBeGreaterThan(1);
+    // 最后剩一行时会并到概念页上(转版页),所以拼回原文要把概念页那截也算上。
+    expect(pages.map((page) => page.text || "").join("").replace(/\s/g, "")).toBe(lead.replace(/\s/g, ""));
+  });
+
+  it("skips sections with no prose instead of emitting a blank page", () => {
+    const pages = pagesOf({
+      ...richCard,
+      sections: [{ title: "空的", body: "   " }, { title: "有内容", body: "真的有正文。" }]
+    });
+
+    expect(pages.filter((page) => page.subhead).map((page) => page.subhead)).toEqual(["有内容"]);
+  });
+
+  it("never merges a subheaded page into the concepts page", () => {
+    // 尾页并进概念页是给「导语正文只剩一句」准备的;带小题的页并过去,小题就没了。
+    const pages = pagesOf({ ...richCard, sections: [{ title: "小题", body: "短。" }] });
+    const concepts = pages[pages.length - 1];
+
+    expect(concepts.kind).toBe("concepts");
+    expect(concepts.text).toBeUndefined();
+  });
+
   it("keeps every character of the body across its pages", () => {
     const joined = pagesOf(richCard)
       .filter((page) => page.kind === "body")

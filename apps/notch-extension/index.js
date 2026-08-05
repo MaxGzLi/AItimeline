@@ -408,28 +408,76 @@ function layoutOf(card) {
 }
 
 // 一张卡有几页:正文若干页,有概念的再加一页词条页。
+// 续版页的正文行数。首页要让给 26 点大标题和导语,续版页只印一行接排题,
+// 省下来的高度全给正文:面板 172 - 报头 25 - 接排题 16 - 分隔线和间距 11 - 页脚 25。
+var CONT_LINES = Math.floor((PANEL_H - 25 - 16 - 11 - 25) / LH_BODY);
+// 带小题的续版页再让出「小题 16 + 间距 2」。
+var CONT_SECTION_LINES = Math.floor((PANEL_H - 25 - 16 - 11 - 18 - 25) / LH_BODY);
+
+// 把一段文字切成页数尽量少、而且每页都装得差不多满的若干页。
+// 直接按上限切会切出「一整页 + 一行」的碎页:先算出至少要几页,再按均分的份额切。
+function balancedPages(text, cap) {
+  if (!text) {
+    return [];
+  }
+
+  var count = Math.max(1, Math.ceil(textUnits(text) / cap));
+
+  return paginate(text, Math.max(cap / 3, Math.ceil(textUnits(text) / count)));
+}
+
+// thread 段落(接口里叫 sections)。每段自带一个小标题,正好当报纸的分栏小题。
+function sectionsOf(card) {
+  var sections = card.sections || [];
+  var out = [];
+
+  for (var i = 0; i < sections.length; i += 1) {
+    var body = (sections[i].body || "").trim();
+
+    if (body) {
+      out.push({ title: (sections[i].title || "").trim(), body: body });
+    }
+  }
+
+  return out;
+}
+
 function pagesOf(card) {
   var view = layoutOf(card);
   var text = bodyTextOf(card);
-  // 第一页要跟导语挤,少给一行;后面几页导语不再重复,行数放开。
+  // 第一页要跟导语挤,少给一行;后面几页导语和大标题都不再重复,行数放开。
   var firstUnits = (view.bodyLines * PANEL_W) / 11;
-  var laterCap = ((view.bodyLines + view.deckLines) * PANEL_W) / 11;
+  var laterCap = (CONT_LINES * PANEL_W) / 11;
   // 余量必须按第一页**真正**切到哪里来算。第一页会提前在句号处断,
   // 拿估算的余量去平摊,后面每页只剩十几个字,一段正文能切出十页。
   var firstEnd = pageEnd(text, 0, firstUnits);
   var rest = text.slice(firstEnd);
-  var restUnits = textUnits(rest);
-  var laterPages = Math.ceil(restUnits / laterCap);
-  var laterUnits = laterPages > 0 ? Math.max(laterCap / 3, Math.ceil(restUnits / laterPages)) : laterCap;
 
+  var sections = sectionsOf(card);
   var pages = [];
 
   if (text) {
     pages.push({ kind: "body", text: text.slice(0, firstEnd) });
-    paginate(rest, laterUnits).forEach(function (page) {
-      pages.push({ kind: "body", text: page });
-    });
+
+    // 概要印不完的部分只有在「后面没有 thread 段落」时才单开续版页。有段落的时候,
+    // 那几段把同样的内容讲得更细,再为概要的尾巴开一页,只会得到一行字加一片黑
+    // (真机上量到过:264 字的概要切成「装满一页 + 一行」)。
+    if (!sections.length) {
+      balancedPages(rest, laterCap).forEach(function (page) {
+        pages.push({ kind: "body", text: page });
+      });
+    }
   }
+
+  // thread 段落跟在导语正文后面,一段一个小题。续版页印的是接排题(一行 13 点),
+  // 不是首页那个 26 点大标题,所以正文能多拿两行 —— 见 CONT_LINES。
+  var sectionCap = (CONT_SECTION_LINES * PANEL_W) / 11;
+
+  sections.forEach(function (section) {
+    balancedPages(section.body, sectionCap).forEach(function (part) {
+      pages.push({ kind: "body", subhead: section.title, text: part });
+    });
+  });
 
   if (card.conceptIds && card.conceptIds.length) {
     // 最后一页只剩一句话时,把它并到概念页上 —— 报纸的转版页就是一段接续正文加一个索引框,
@@ -438,7 +486,8 @@ function pagesOf(card) {
     var rowsFree = Math.floor((middleHeight(view) - LH_BODY - 6 - 13 - 4) / LH_BODY);
     var rowsNeeded = card.conceptIds.length < 5 ? card.conceptIds.length : Math.ceil(card.conceptIds.length / 2);
 
-    if (tail && lineCount(tail.text, PANEL_W, 11) <= 1 && rowsNeeded <= rowsFree) {
+    // 带小题的页不并 —— 并过去小题就没地方放了,读者会看不出这段是哪一节的。
+    if (tail && !tail.subhead && lineCount(tail.text, PANEL_W, 11) <= 1 && rowsNeeded <= rowsFree) {
       pages.pop();
       pages.push({ kind: "concepts", text: tail.text });
     } else {
@@ -757,13 +806,19 @@ function fullExpandedView() {
   var view = layoutOf(card);
   var pages = pagesOf(card);
   var page = pages[state.page] || pages[0];
+  // 首页印大标题;续版页只印一行接排题(报纸的 jump head),把省下的两行还给正文。
+  var isJump = state.page > 0;
   var children = [
     flagRow(card, view, PANEL_W, true),
     gap(3),
-    rule(PANEL_W, 2, RULE_C),
+    rule(PANEL_W, isJump ? 1 : 2, RULE_C),
     gap(5),
     View.frame(
-      View.text(view.head, { style: view.big ? "largeTitle" : "title", color: TEXT, lineLimit: 2 }),
+      View.text(view.head, {
+        style: isJump ? "subtitle" : view.big ? "largeTitle" : "title",
+        color: isJump ? DECK_C : TEXT,
+        lineLimit: isJump ? 1 : 2
+      }),
       { maxWidth: 9999, alignment: "leading" }
     ),
     gap(5),
@@ -785,13 +840,27 @@ function fullExpandedView() {
       children.push(gap(3));
     }
 
+    // 小题:thread 那一段的标题,当报纸的分栏小题用。13 点中黑压在 11 点正文上面,
+    // 一眼能看出「现在读的是哪一节」。
+    if (page.subhead) {
+      children.push(
+        View.frame(View.text(page.subhead, { style: "subtitle", color: TEXT, lineLimit: 1 }), {
+          maxWidth: 9999,
+          alignment: "leading"
+        })
+      );
+      children.push(gap(2));
+    }
+
+    var bodyLimit = view.bodyLines;
+
+    if (isJump) {
+      bodyLimit = page.subhead ? CONT_SECTION_LINES : CONT_LINES;
+    }
+
     children.push(
       View.frame(
-        View.text(page.text, {
-          style: "caption",
-          color: BODY_C,
-          lineLimit: state.page === 0 ? view.bodyLines : view.bodyLines + view.deckLines
-        }),
+        View.text(page.text, { style: "caption", color: BODY_C, lineLimit: bodyLimit }),
         { maxWidth: 9999, alignment: "leading" }
       )
     );

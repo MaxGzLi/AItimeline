@@ -50,8 +50,31 @@ export function selectInjectableCards(rankedPosts, limit) {
  *
  * @param {Record<string, any>} post
  */
+/**
+ * thread 里的知识段落(讲解/例子/对比/延伸/小测)。用户评论和观察员回复不算正文,
+ * 网页详情页也是这么滤的(PostDetailView.tsx:121-123),两个面口径保持一致。
+ * 不按 grounded 过滤:全库 570 段里只有 105 段带引文,滤掉就等于没有这个功能;
+ * 卡片整体已经过了接地门禁,单段有没有引文是另一回事。
+ *
+ * @param {Record<string, any>} post
+ */
+function readableSections(post) {
+  if (!Array.isArray(post.thread)) {
+    return [];
+  }
+
+  return post.thread
+    .filter((block) => block.kind !== "user_comment" && block.kind !== "agent_reply")
+    .filter((block) => typeof block.body === "string" && block.body.trim())
+    .map((block) => ({
+      title: typeof block.title === "string" ? block.title : "",
+      body: block.body
+    }));
+}
+
 export function toInjectCard(post) {
   const source = post.sources[0];
+  const sections = readableSections(post);
 
   return {
     id: post.id,
@@ -73,7 +96,10 @@ export function toInjectCard(post) {
       : {}),
     ...(post.difficulty ? { difficulty: post.difficulty } : {}),
     ...(post.trustState ? { trustState: post.trustState } : {}),
-    ...(post.reviewPrompts?.[0]?.prompt ? { reviewPrompt: post.reviewPrompts[0].prompt } : {})
+    ...(post.reviewPrompts?.[0]?.prompt ? { reviewPrompt: post.reviewPrompts[0].prompt } : {}),
+    // 刘海之前只拿到 summary/shortBody(中位 119 字),而一张卡实际能读的有 614 字,
+    // 多出来的都在 thread 里。不给这个字段,面板再大也没东西可读。
+    ...(sections.length ? { sections } : {})
   };
 }
 
