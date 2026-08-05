@@ -1,0 +1,89 @@
+diff --git a/ExtensionHost/ExtensionManifest.swift b/ExtensionHost/ExtensionManifest.swift
+index 798bdf7..04175ce 100644
+--- a/ExtensionHost/ExtensionManifest.swift
++++ b/ExtensionHost/ExtensionManifest.swift
+@@ -16,6 +16,12 @@ struct ExtensionManifest: Codable, Identifiable, Hashable {
+         var settings: Bool = true
+         // If enabled, the extension is hidden from module slots and uses the shared Notifications module.
+         var notificationFeed: Bool = false
++        // Opt-in override for the full-expanded panel. Extensions that render long-form
++        // content (articles, transcripts, logs) need more than the default 658x180;
++        // extensions that don't declare this keep the default, so nothing else changes.
++        // Clamped against the screen in AppState.contentSize(for:).
++        var fullExpandedWidth: Double?
++        var fullExpandedHeight: Double?
+ 
+         private enum CodingKeys: String, CodingKey {
+             case compact
+@@ -25,6 +31,8 @@ struct ExtensionManifest: Codable, Identifiable, Hashable {
+             case backgroundRefresh
+             case settings
+             case notificationFeed
++            case fullExpandedWidth
++            case fullExpandedHeight
+         }
+ 
+         init() {}
+@@ -38,6 +46,8 @@ struct ExtensionManifest: Codable, Identifiable, Hashable {
+             backgroundRefresh = try container.decodeIfPresent(Bool.self, forKey: .backgroundRefresh) ?? true
+             settings = try container.decodeIfPresent(Bool.self, forKey: .settings) ?? true
+             notificationFeed = try container.decodeIfPresent(Bool.self, forKey: .notificationFeed) ?? false
++            fullExpandedWidth = try container.decodeIfPresent(Double.self, forKey: .fullExpandedWidth)
++            fullExpandedHeight = try container.decodeIfPresent(Double.self, forKey: .fullExpandedHeight)
+         }
+ 
+         func encode(to encoder: Encoder) throws {
+@@ -49,6 +59,8 @@ struct ExtensionManifest: Codable, Identifiable, Hashable {
+             try container.encode(backgroundRefresh, forKey: .backgroundRefresh)
+             try container.encode(settings, forKey: .settings)
+             try container.encode(notificationFeed, forKey: .notificationFeed)
++            try container.encodeIfPresent(fullExpandedWidth, forKey: .fullExpandedWidth)
++            try container.encodeIfPresent(fullExpandedHeight, forKey: .fullExpandedHeight)
+         }
+     }
+ 
+diff --git a/SuperIsland/App/AppState.swift b/SuperIsland/App/AppState.swift
+index d4f6b38..ef58af3 100644
+--- a/SuperIsland/App/AppState.swift
++++ b/SuperIsland/App/AppState.swift
+@@ -1089,7 +1089,7 @@ final class AppState: ObservableObject {
+         case .expanded:
+             return Constants.expandedSize
+         case .fullExpanded:
+-            let base = Constants.fullExpandedSize
++            let base = declaredFullExpandedSize ?? Constants.fullExpandedSize
+             // On non-notch Macs the toolbar is inline (no shoulder area),
+             // so it eats into content height. Add space for it.
+             if usesOutwardTopCorners && !presentationHasNotch {
+@@ -1099,6 +1099,31 @@ final class AppState: ObservableObject {
+         }
+     }
+ 
++    /// A panel size the active extension asked for in its manifest, clamped so it can
++    /// never grow past the screen. Extensions rendering long-form content (articles,
++    /// transcripts, logs) can't say what they need otherwise — the default 658x180 is
++    /// about five lines of body text. Extensions that declare nothing get the default.
++    private var declaredFullExpandedSize: CGSize? {
++        guard case .extension_(let extensionID) = activeModule,
++              let capabilities = ExtensionManager.shared.installed.first(where: { $0.id == extensionID })?.capabilities,
++              let width = capabilities.fullExpandedWidth,
++              let height = capabilities.fullExpandedHeight
++        else { return nil }
++
++        // The window adds gutters and shadow padding on top of this (see windowSize(for:)),
++        // so leave room for them rather than letting the island run off the display.
++        let screen = presentationScreenFrame != .zero
++            ? presentationScreenFrame.size
++            : (NSScreen.main?.frame.size ?? CGSize(width: 1440, height: 900))
++        let maxWidth = screen.width - (Constants.moduleCyclerGutterWidth * 2) - 40
++        let maxHeight = screen.height - Constants.expandedShadowBottomPadding - 40
++
++        return CGSize(
++            width: min(max(width, Constants.fullExpandedSize.width), maxWidth),
++            height: min(max(height, Constants.fullExpandedSize.height), maxHeight)
++        )
++    }
++
+     var windowSize: CGSize {
+         windowSize(for: currentState)
+     }
