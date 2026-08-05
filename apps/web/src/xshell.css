@@ -2877,6 +2877,23 @@ button.x-chip {
   background: var(--color-ring);
 }
 
+/* ---- 桌面壳(hiddenInset):红绿灯浮在左上角,内容自己让位 ---- */
+/* 顶带只盖左、中两栏:右栏搜索框顶到窗口顶,盖住它就点不着了。
+   36px 高度和原生标题栏相当,双击放大等系统行为由 app-region 自带。 */
+.x-task-client.is-desktop .x-task-dragstrip {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 340px;
+  height: 36px;
+  z-index: 40;
+  -webkit-app-region: drag;
+}
+/* 品牌行落到红绿灯下面一行(照真身:红绿灯一行、品牌一行)。 */
+.x-task-client.is-desktop .x-task-side {
+  padding-top: 36px;
+}
+
 /* 侧栏里所有可点的行长一个样:细线图标 + 文字 + 可选数字。
    行高按真身量到的 40px:9 上下内边距 + 14px 字 × 1.6 行高。原来 34px 偏挤。 */
 .x-task-quick button,
