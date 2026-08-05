@@ -3634,7 +3634,12 @@ button.x-chip {
   min-height: 0;
   margin: 0 auto;
 }
-/* 桌面壳:fixed 的 36px 拖拽带会盖住 sticky 在 top:0 的列头,让列头往下让。 */
+/* 桌面壳:fixed 的 36px 拖拽带会盖住 sticky 在 top:0 的列头。光把列头的吸附位
+   往下挪是不够的——吸顶元素占位还在原处,画下来 36px 就压住下面的话题条。
+   所以内容整体让出 36px,列头的自然位置和吸附位置对齐,谁也不压谁。 */
+.x-task-client.is-desktop .x-task-embed .x-main {
+  padding-top: 36px;
+}
 .x-task-client.is-desktop .x-task-embed .x-colhead {
   top: 36px;
 }
