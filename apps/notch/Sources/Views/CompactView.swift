@@ -15,12 +15,29 @@ struct CompactView: View {
     @State private var pulsing = false
 
     var body: some View {
+        Group {
+            if let gap = appState.compactMetrics?.notchGap {
+                wings(gap: gap)
+            } else {
+                pill
+            }
+        }
+        .frame(maxHeight: .infinity)
+        .onChange(of: store.dueCount, initial: true) { old, new in
+            guard !reduceMotion, old == 0, new > 0 else { return }
+
+            startPulse()
+        }
+    }
+
+    /// 有刘海的屏:内容分在刘海两侧,中间让开。
+    private func wings(gap: CGFloat) -> some View {
         HStack(spacing: 0) {
             CardStackMark(pulsing: pulsing, dimmed: store.isOffline)
                 .padding(.leading, 22)
 
             // 中间让给刘海。这一段屏幕物理上不显示,画什么都白画。
-            Spacer(minLength: appState.compactMetrics?.notchGap ?? 0)
+            Spacer(minLength: gap)
 
             if !store.isOffline {
                 Text(count)
@@ -30,14 +47,24 @@ struct CompactView: View {
                     .padding(.trailing, 22)
             }
         }
-        .frame(maxHeight: .infinity)
         // 两翼内容的中心线要和菜单栏两侧的图标对齐。条比刘海多探出 4,所以往上让 1。
         .offset(y: -1)
-        .onChange(of: store.dueCount, initial: true) { old, new in
-            guard !reduceMotion, old == 0, new > 0 else { return }
+    }
 
-            startPulse()
+    /// 没有刘海的屏:一颗从顶边中央挂下来的药丸,内容居中排。
+    /// 中间没有东西挡着,所以卡叠标记和数字靠在一起,不像有刘海时那样分居两侧。
+    private var pill: some View {
+        HStack(spacing: 10) {
+            CardStackMark(pulsing: pulsing, dimmed: store.isOffline)
+
+            if !store.isOffline {
+                Text(count)
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(countInk)
+            }
         }
+        .frame(maxWidth: .infinity)
     }
 
     /// 呼吸只跑 6 秒就停。屏幕最顶上一直动的东西,看久了是骚扰,也白耗电。

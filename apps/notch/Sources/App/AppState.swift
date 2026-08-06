@@ -189,7 +189,7 @@ final class AppState: ObservableObject {
     func size(for state: IslandState) -> CGSize {
         switch state {
         case .compact:
-            return compactMetrics?.size ?? Constants.compactSize
+            return compactMetrics?.size ?? pillSize
         case .expanded:
             return Constants.expandedSize
         case .fullExpanded:
@@ -232,10 +232,28 @@ final class AppState: ObservableObject {
     }
 
     var topCornerRadius: CGFloat {
-        usesShoulders ? Constants.shoulderCornerRadius : baseCornerRadius
+        if usesShoulders { return Constants.shoulderCornerRadius }
+        if isPill { return Constants.pillTopCornerRadius }
+
+        return baseCornerRadius
     }
 
-    var bottomCornerRadius: CGFloat { baseCornerRadius }
+    var bottomCornerRadius: CGFloat {
+        isPill ? Constants.pillBottomCornerRadius : baseCornerRadius
+    }
+
+    /// 没刘海的屏上,静默态是一颗从顶边挂下来的药丸。
+    var isPill: Bool {
+        currentState == .compact && !hasNotch
+    }
+
+    /// 顶角往外拐,两侧的墙各往里缩一个顶角半径,所以窗口要比肉眼可见的宽出两个半径。
+    private var pillSize: CGSize {
+        CGSize(
+            width: Constants.pillVisibleSize.width + Constants.pillTopCornerRadius * 2,
+            height: Constants.pillVisibleSize.height
+        )
+    }
 
     private var baseCornerRadius: CGFloat {
         switch currentState {

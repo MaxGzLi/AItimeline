@@ -23,6 +23,14 @@ enum Constants {
     static let compactNotchBottomCornerRadius: CGFloat = 12
     static let compactNotchMinimumWidth: CGFloat = 168
     static let compactNotchMinimumHeight: CGFloat = 32
+    /// 没有物理刘海的屏上,静默条是从顶边中央挂下来的一颗药丸(肉眼可见的尺寸)。
+    ///
+    /// **不画假刘海**。原版试过挖一个假缺口,那段代码还在但参数被写死成 0、成了死路径 ——
+    /// 它最后选的就是这颗药丸,靠顶角外拐让它看着是从菜单栏长出来的。
+    /// 顺着它走,还顺带消掉了「假刘海该多宽多高」这个伪问题。
+    static let pillVisibleSize = CGSize(width: 132, height: 30)
+    static let pillTopCornerRadius: CGFloat = 15
+    static let pillBottomCornerRadius: CGFloat = 12
     /// 静默条要在刘海**两侧**各伸出这么宽。
     /// 刘海那块屏幕是物理上不显示的 —— 画在刘海里面的东西截图能看到、肉眼看不到。
     /// 所以图标和数字必须落在这两条伸出来的地方,中间留给刘海本身。

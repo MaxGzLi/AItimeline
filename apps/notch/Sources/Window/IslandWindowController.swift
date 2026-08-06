@@ -13,6 +13,7 @@ final class IslandWindowController {
     private var panel: IslandPanel?
     private var shrinkWork: DispatchWorkItem?
     private var screenObserver: NSObjectProtocol?
+    private var wakeObserver: NSObjectProtocol?
     private var cancellables = Set<AnyCancellable>()
 
     init(appState: AppState) {
@@ -20,7 +21,9 @@ final class IslandWindowController {
     }
 
     func start() {
-        guard let screen = ScreenDetector.preferredScreen else { return }
+        ScreenDetector.dropStaleDisplayPreference()
+
+        guard let screen = targetScreen else { return }
 
         appState.updateScreen(screen)
 
@@ -44,6 +47,10 @@ final class IslandWindowController {
     // MARK: - 摆位
 
     /// 窗口的锚点是刘海的中线和顶边:面板从刘海底下长出来,左右对称。
+    /// 没有刘海的屏上锚在屏幕顶边中线,那颗药丸从菜单栏正中挂下来。
+    ///
+    /// 纵向一律用 `screen.frame.maxY`(物理顶边)而**不是** `visibleFrame` ——
+    /// 窗口层级在菜单栏之上,菜单栏自动隐藏、变高变矮都不用管,位置恒定。
     private func applyFrame(size: CGSize, screen: NSScreen) {
         guard let panel else { return }
 
@@ -58,13 +65,27 @@ final class IslandWindowController {
     }
 
     private func applyFrame(size: CGSize) {
-        guard let screen = currentScreen else { return }
+        guard let screen = targetScreen else { return }
 
         applyFrame(size: size, screen: screen)
     }
 
-    private var currentScreen: NSScreen? {
-        panel?.screen ?? ScreenDetector.preferredScreen
+    /// 该画在哪块屏。**不用 `panel.screen`** —— 那是「窗口现在在哪」,
+    /// 用户改了选择或者屏幕拔插之后它还是旧的,面板会赖在原地不走。
+    private var targetScreen: NSScreen? {
+        ScreenDetector.preferredScreen
+    }
+
+    /// 换屏:屏幕的几何、有没有刘海、静默条多大都要跟着换,所以先更新状态再摆位。
+    func relocate() {
+        ScreenDetector.dropStaleDisplayPreference()
+
+        guard let screen = targetScreen else { return }
+
+        appState.updateScreen(screen)
+        applyFrame(size: appState.windowSize, screen: screen)
+        refreshTrackingAreas()
+        panel?.orderFrontRegardless()
     }
 
     // MARK: - 状态变化
@@ -104,16 +125,24 @@ final class IslandWindowController {
     // MARK: - 屏幕拔插
 
     private func observeScreenChanges() {
+        // 插拔、合盖、改分辨率、改显示器排列都走这一条。合盖没有专门的通知 ——
+        // 合盖会让内建屏从 NSScreen.screens 里消失,发的就是这条。
         screenObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self, let screen = ScreenDetector.preferredScreen else { return }
+            MainActor.assumeIsolated { self?.relocate() }
+        }
 
-                self.appState.updateScreen(screen)
-                self.applyFrame(size: self.appState.windowSize, screen: screen)
+        // 睡醒之后屏幕几何有时要过一会儿才稳,立刻算会摆错位置,所以缓一下再来一次。
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                MainActor.assumeIsolated { self?.relocate() }
             }
         }
     }
