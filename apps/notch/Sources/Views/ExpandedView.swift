@@ -83,7 +83,9 @@ struct ExpandedView: View {
     private var trailingMeta: some View {
         switch appState.selectedFace {
         case .agents:
-            tail(agents.sessions.isEmpty ? "" : "\(agents.sessions.count) 个会话")
+            // 三档口径要一样。静默条数的是「要你动手 / 干完了没看」,这里也先报那个数,
+            // 会话总数放在后面 —— 不然条上写 1、悬停写 5、点开又是一组数,看着像在乱跳。
+            tail(agents.summary)
         case .shelf:
             tail(shelf.items.isEmpty ? "" : "\(shelf.items.count) 条")
         case .focus:
@@ -157,7 +159,7 @@ struct ExpandedView: View {
         case .agents:
             if let session = agents.headline {
                 peek(
-                    session.state == .waiting ? "hand.raised" : appState.selectedFace.symbol,
+                    session.state.needsYou ? "hand.raised" : appState.selectedFace.symbol,
                     "\(session.project) · \(session.state.title)",
                     session.shortPath
                 )

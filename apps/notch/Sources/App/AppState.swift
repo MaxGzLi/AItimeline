@@ -130,8 +130,7 @@ final class AppState: ObservableObject {
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.isHovering, self.currentState == .compact else { return }
 
-            // 静默条上显示的是哪个面,掉下来就得是哪个面 —— 不然那一条就是骗人的。
-            self.selectedFace = StripPriority.face
+            self.syncFaceToStrip()
             self.transition(to: .expanded)
         }
 
@@ -144,12 +143,29 @@ final class AppState: ObservableObject {
         hoverWorkItem = nil
     }
 
+    /// 上一次跟着静默条同步过去的那个面。
+    ///
+    /// 用来分辨「用户自己挑的面」和「条上换了东西」:只要条上还是同一个面,
+    /// 就不去动用户挑的那个。不这么记的话 —— 点开面板挑了知识卡、鼠标移开、
+    /// 一秒后收起、手再蹭过刘海,0.3 秒后又被强行切回去。手伸向菜单栏一天要蹭几十次。
+    private var syncedStripFace: NotchFace?
+
     func select(_ face: NotchFace) {
         guard face != selectedFace else { return }
 
         withAnimation(Constants.contentSwap) {
             selectedFace = face
         }
+    }
+
+    /// 条上显示的是哪个面,掉下来就得是哪个面 —— 但**只在条上真的换了东西的时候**才抢。
+    private func syncFaceToStrip() {
+        let face = StripPriority.face
+
+        guard face != syncedStripFace else { return }
+
+        syncedStripFace = face
+        selectedFace = face
     }
 
     /// 东西拖到刘海上:立刻把收集面推到眼前,让用户看见落点。
@@ -179,7 +195,7 @@ final class AppState: ObservableObject {
     func handleTap() {
         switch currentState {
         case .compact:
-            selectedFace = StripPriority.face
+            syncFaceToStrip()
             transition(to: .fullExpanded)
         case .expanded:
             transition(to: .fullExpanded)
