@@ -46,6 +46,14 @@ enum Constants {
     /// 面板顶边要贴着它,所以肩膀不能是大圆角。
     static let shoulderCornerRadius: CGFloat = 10
 
+    /// 全展开档内容离 frame 左右边的距离。
+    ///
+    /// **不是随便定的数**:PillShape 的外扩圆角让面板真正涂黑的范围比 frame 各窄一个圆角
+    /// (实测 900 宽的面板只有 92…912 这 820 点是黑的)。所以内容至少要缩进 40,
+    /// 再加 6 点空气。之前写 32,左右两边各有 8 点内容被切掉 —— 页脚的
+    /// 「在网页里打开」就是这么少了半个字的。
+    static let fullExpandedSidePadding: CGFloat = fullExpandedCornerRadius + 6
+
     // MARK: - 窗口留白
 
     /// 面板左右各留这么宽给阴影和以后的翻页按钮。

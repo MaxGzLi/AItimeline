@@ -12,6 +12,9 @@ import SwiftUI
 struct ExpandedView: View {
     @EnvironmentObject private var appState: AppState
     @ObservedObject private var store = CardStore.shared
+    @ObservedObject private var shelf = ShelfStore.shared
+    @ObservedObject private var timer = FocusTimer.shared
+    @ObservedObject private var agenda = AgendaStore.shared
 
     /// 左右各留 34。原版是容器 26 + 内容 8 两级叠出来的,408 宽里内容只占 340(83%)。
     /// 留白靠绝对像素,不靠百分比 —— 小面板用百分比会在窄档显得挤、宽档显得空。
@@ -65,7 +68,7 @@ struct ExpandedView: View {
     }
 
     private var sourceLine: some View {
-        Text(store.current?.sourceTitle ?? "")
+        Text(appState.selectedFace == .cards ? (store.current?.sourceTitle ?? "") : appState.selectedFace.title)
             .font(.system(size: 10, weight: .medium))
             .foregroundStyle(NotchInk.weak)
             .lineLimit(1)
@@ -74,6 +77,27 @@ struct ExpandedView: View {
 
     @ViewBuilder
     private var trailingMeta: some View {
+        switch appState.selectedFace {
+        case .shelf:
+            tail(shelf.items.isEmpty ? "" : "\(shelf.items.count) 条")
+        case .focus:
+            tail("今天 \(timer.roundsToday) 轮")
+        case .agenda:
+            tail(AgendaStore.label(agenda.now, "EEEMMMd"))
+        case .cards:
+            cardMeta
+        }
+    }
+
+    private func tail(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 10, weight: .medium))
+            .monospacedDigit()
+            .foregroundStyle(NotchInk.ghost)
+    }
+
+    @ViewBuilder
+    private var cardMeta: some View {
         if let card = store.current {
             HStack(spacing: 8) {
                 // 状态不做成实心徽章。深色面板上的实心色块是整版最模板化的一处,
@@ -111,22 +135,77 @@ struct ExpandedView: View {
 
     @ViewBuilder
     private var content: some View {
-        if let card = store.current {
-            HStack(alignment: .center, spacing: 12) {
-                SourceTile(letter: card.sourceLetter, size: tileSize)
+        switch appState.selectedFace {
+        case .shelf:
+            // 刚往刘海上扔完东西,悬停要看的是「它落地了没有」,不是知识卡。
+            peek(
+                "tray",
+                shelf.items.first?.title ?? "架子是空的",
+                shelf.items.first.map { "\($0.detail) · \($0.status)" } ?? "把链接或截图拖上来"
+            )
+        case .focus:
+            peek(
+                timer.phase.symbol,
+                "\(timer.clock) · \(timer.phase.title)",
+                timer.running ? "今天已经 \(timer.roundsToday) 轮" : "停着,点开继续"
+            )
+        case .agenda:
+            if let next = agenda.nextEvent {
+                peek("calendar", next.title, "\(next.timeLabel) · \(next.countdown(from: agenda.now))")
+            } else {
+                peek("calendar", AgendaStore.hhmm(agenda.now), agenda.access == .granted ? "接下来没安排" : "还没拿到日历权限")
+            }
+        case .cards:
+            if let card = store.current {
+                HStack(alignment: .center, spacing: 12) {
+                    SourceTile(letter: card.sourceLetter, size: tileSize)
 
-                Text(card.lead)
+                    Text(card.lead)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(NotchInk.body)
+                        .lineLimit(2)
+                        .truncationMode(.tail)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(height: tileSize)
+            } else {
+                empty
+            }
+        }
+    }
+
+    /// 知识卡以外的面,悬停这一档都是同一个形状:一个方块图标 + 一行结论 + 一行细账。
+    private func peek(_ symbol: String, _ headline: String, _ detail: String) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            RoundedRectangle(cornerRadius: tileSize * 0.15, style: .continuous)
+                .fill(NotchSurface.tile)
+                .overlay(
+                    RoundedRectangle(cornerRadius: tileSize * 0.15, style: .continuous)
+                        .stroke(NotchSurface.tileEdge, lineWidth: 1)
+                )
+                .overlay(
+                    Image(systemName: symbol)
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.62))
+                )
+                .frame(width: tileSize, height: tileSize)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(headline)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(NotchInk.body)
-                    .lineLimit(2)
-                    .truncationMode(.tail)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .lineLimit(1)
+
+                Text(detail)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(NotchInk.faint)
+                    .lineLimit(1)
             }
-            .frame(height: tileSize)
-        } else {
-            empty
+
+            Spacer(minLength: 0)
         }
+        .frame(height: tileSize)
     }
 
     private var empty: some View {

@@ -7,6 +7,10 @@ import SwiftUI
 struct IslandContainerView: View {
     @EnvironmentObject private var appState: AppState
     @ObservedObject private var store = CardStore.shared
+    @ObservedObject private var shelf = ShelfStore.shared
+
+    /// 拖拽在两个放置区之间挪动时会先「离开」再「进入」,不防抖的话面板会抖一下。
+    @State private var leaveWork: DispatchWorkItem?
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -14,7 +18,8 @@ struct IslandContainerView: View {
 
             // 翻页钮放在面板外面那两条空槽里。收起时必须从视图树里拿掉,
             // 只设透明度的话那 24×24 会挡住底下应用的点击。
-            if appState.currentState == .fullExpanded, store.cards.count > 1 {
+            // 它翻的是知识卡,所以别的面上不许出现 —— 番茄钟旁边挂一对翻页箭头是在骗人。
+            if appState.currentState == .fullExpanded, appState.selectedFace == .cards, store.cards.count > 1 {
                 gutterButtons
             }
         }
@@ -50,7 +55,20 @@ struct IslandContainerView: View {
         // 静默条不打阴影。它靠贴住屏幕顶边成立,底下垫一层模糊反而露馅。
         .shadow(color: .black.opacity(compact ? 0 : 0.28), radius: compact ? 0 : 18, y: compact ? 0 : 8)
         .shadow(color: .black.opacity(compact ? 0 : 0.16), radius: compact ? 0 : 3, y: compact ? 0 : 1)
+        // 有东西悬在刘海上:整块描一圈虚线,让用户看见落点在哪。
+        .overlay(
+            shape
+                .stroke(
+                    shelf.isTargeted ? Color.white.opacity(0.55) : .clear,
+                    style: StrokeStyle(lineWidth: 2, dash: [6, 4])
+                )
+                .padding(1)
+                .animation(.easeOut(duration: 0.18), value: shelf.isTargeted)
+        )
         .contentShape(shape)
+        .onDrop(of: ShelfStore.acceptedTypes, isTargeted: dropTarget) { providers in
+            shelf.handleDrop(providers)
+        }
         .onContinuousHover { phase in
             switch phase {
             case .active:
@@ -62,6 +80,31 @@ struct IslandContainerView: View {
         .onTapGesture {
             appState.handleTap()
         }
+    }
+
+    /// 东西一悬上来就把收集面推到眼前;移开等 0.35 秒再收,免得抖。
+    private var dropTarget: Binding<Bool> {
+        Binding(
+            get: { shelf.isTargeted },
+            set: { targeted in
+                leaveWork?.cancel()
+                shelf.isTargeted = targeted
+
+                guard !targeted else {
+                    appState.beginDrag()
+                    return
+                }
+
+                let work = DispatchWorkItem {
+                    guard !shelf.isTargeted else { return }
+
+                    appState.endDrag()
+                }
+
+                leaveWork = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
+            }
+        )
     }
 
     private var shape: PillShape {

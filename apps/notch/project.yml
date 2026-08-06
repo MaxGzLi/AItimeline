@@ -16,12 +16,21 @@ targets:
       properties:
         CFBundleName: AITimeline
         CFBundleDisplayName: AITimeline
+        # 界面通篇是中文,得声明出来。不声明的话 `Locale.current` 退回英文,
+        # 日程面的星期就成了 "Thursday, Aug 6"。
+        CFBundleDevelopmentRegion: zh_CN
+        CFBundleLocalizations:
+          - zh-Hans
+          - en
         # 不进 Dock、不抢焦点:这个应用只有刘海一个界面。
         LSUIElement: true
         NSHumanReadableCopyright: ""
         # 本机接口走明文 HTTP 打 127.0.0.1,苹果对回环地址不拦,这条只是把意图写明。
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
+        # 日程面读系统日历。两条都要:新系统看 FullAccess 那条,旧的看另一条。
+        NSCalendarsFullAccessUsageDescription: 刘海上的日程面要读你的系统日历,只读不改。
+        NSCalendarsUsageDescription: 刘海上的日程面要读你的系统日历,只读不改。
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.aitimeline.notch

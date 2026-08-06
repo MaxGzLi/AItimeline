@@ -29,6 +29,19 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// 现在露的是哪个面。肩上那排图标切它。
+    @Published private(set) var selectedFace: NotchFace = .cards
+
+    /// 有东西正拖在刘海上。拖拽期间任何自动收起都要挡掉 ——
+    /// 东西还没松手面板就没了,是原版也专门处理过的一处。
+    @Published var isDragActive = false {
+        didSet {
+            guard isDragActive else { return }
+
+            cancelAutoDismiss()
+        }
+    }
+
     /// 窗口控制器挂在这里:状态一变就来改窗口尺寸。
     var didChangeState: ((IslandState, IslandState) -> Void)?
 
@@ -116,6 +129,9 @@ final class AppState: ObservableObject {
 
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.isHovering, self.currentState == .compact else { return }
+
+            // 静默条上显示的是哪个面,掉下来就得是哪个面 —— 不然那一条就是骗人的。
+            self.selectedFace = StripPriority.face
             self.transition(to: .expanded)
         }
 
@@ -128,10 +144,44 @@ final class AppState: ObservableObject {
         hoverWorkItem = nil
     }
 
+    func select(_ face: NotchFace) {
+        guard face != selectedFace else { return }
+
+        withAnimation(Constants.contentSwap) {
+            selectedFace = face
+        }
+    }
+
+    /// 东西拖到刘海上:立刻把收集面推到眼前,让用户看见落点。
+    func beginDrag() {
+        isDragActive = true
+        selectedFace = .shelf
+
+        if currentState != .fullExpanded {
+            transition(to: .fullExpanded)
+        }
+    }
+
+    func endDrag() {
+        isDragActive = false
+        scheduleAutoDismiss()
+    }
+
+    /// 番茄钟换档了:自己弹出来报一声,停 2 秒再收。
+    /// 比平时的 1 秒长 —— 这一下不是用户召唤的,得给他反应时间。
+    func announceFocus() {
+        selectedFace = .focus
+        transition(to: .fullExpanded)
+        scheduleAutoDismiss(after: 2.0)
+    }
+
     /// 点一下:静默/小条 → 半屏面板;已经在面板上就收起。
     func handleTap() {
         switch currentState {
-        case .compact, .expanded:
+        case .compact:
+            selectedFace = StripPriority.face
+            transition(to: .fullExpanded)
+        case .expanded:
             transition(to: .fullExpanded)
         case .fullExpanded:
             dismiss()
@@ -139,6 +189,8 @@ final class AppState: ObservableObject {
     }
 
     func dismiss() {
+        guard !isDragActive else { return }
+
         cancelHoverPeek()
         cancelAutoDismiss()
         transition(to: .compact)
@@ -156,12 +208,11 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func scheduleAutoDismiss() {
+    private func scheduleAutoDismiss(after delay: TimeInterval = Constants.autoDismissDelay) {
         cancelAutoDismiss()
 
-        guard currentState != .compact else { return }
+        guard currentState != .compact, !isDragActive else { return }
 
-        let delay = Constants.autoDismissDelay
         let work = DispatchWorkItem { [weak self] in
             guard let self, !self.isHovering else { return }
             self.dismiss()
