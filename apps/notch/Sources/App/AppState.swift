@@ -51,7 +51,7 @@ final class AppState: ObservableObject {
     func startHoverAudit() {
         hoverAuditTimer?.invalidate()
 
-        let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: Constants.hoverAuditInterval, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.auditHover() }
         }
 
@@ -161,10 +161,7 @@ final class AppState: ObservableObject {
 
         guard currentState != .compact else { return }
 
-        let delay = currentState == .fullExpanded
-            ? Constants.fullExpandedAutoDismissDelay
-            : Constants.expandedAutoDismissDelay
-
+        let delay = Constants.autoDismissDelay
         let work = DispatchWorkItem { [weak self] in
             guard let self, !self.isHovering else { return }
             self.dismiss()

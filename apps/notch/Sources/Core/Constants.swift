@@ -64,10 +64,12 @@ enum Constants {
 
     /// 鼠标停在刘海上多久才展开。SuperIsland 默认 0.3 秒。
     static let hoverPeekDelay: TimeInterval = 0.3
-    /// 展开档在鼠标移开后多久自动收起。
-    static let expandedAutoDismissDelay: TimeInterval = 1.5
-    /// 半屏面板在鼠标移开后多久自动收起。读东西的时候手会离开,所以给得长。
-    static let fullExpandedAutoDismissDelay: TimeInterval = 4.0
+    /// 鼠标移开后多久自动收起。**小条和半屏面板是同一个数**,照抄 SuperIsland
+    /// (`AppState.swift:291` 的 `expandedAutoDismissDelay`,默认 1.0,展开和全展开共用一个)。
+    /// 之前给面板留了 4 秒「让人读」,结果是手移开半天框还杵在那儿 —— 读的时候手本来就在面板上。
+    static let autoDismissDelay: TimeInterval = 1.0
+    /// 拿真实指针位置校对的周期。0.5 秒太粗:收起最多要多等半秒,手感上就是「反应慢」。
+    static let hoverAuditInterval: TimeInterval = 0.12
     /// 收起动画放完再把窗口缩回去,免得动画中途被窗口边缘裁掉。
     static let shrinkDelay: TimeInterval = 0.55
 }
