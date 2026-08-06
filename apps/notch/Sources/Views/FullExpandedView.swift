@@ -38,6 +38,8 @@ struct FullExpandedView: View {
     @ViewBuilder
     private var face: some View {
         switch appState.selectedFace {
+        case .agents:
+            AgentsFace()
         case .cards:
             CardsFace()
         case .shelf:
@@ -52,6 +54,8 @@ struct FullExpandedView: View {
     @ViewBuilder
     private var trailing: some View {
         switch appState.selectedFace {
+        case .agents:
+            AgentsShoulderTrailing()
         case .cards:
             CardsShoulderTrailing()
         case .shelf:

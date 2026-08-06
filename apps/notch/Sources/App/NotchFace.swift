@@ -6,6 +6,8 @@ import SwiftUI
 /// 全展开档左肩上一排图标标签。这样番茄钟、日程、收集就不用和知识卡抢静默条右边
 /// 那 34 点宽 —— 静默条只显示**当下最该看的那个面**,谁最该看由优先级定。
 enum NotchFace: String, CaseIterable, Identifiable {
+    /// AI 进程:Claude Code 在干什么。排第一,因为它是唯一会**卡住等你**的东西。
+    case agents
     /// 知识回流:该复习的卡。
     case cards
     /// 收集:拖进来的链接、文字、截图。
@@ -22,6 +24,7 @@ enum NotchFace: String, CaseIterable, Identifiable {
 
     var symbol: String {
         switch self {
+        case .agents: return "chevron.left.forwardslash.chevron.right"
         case .cards: return "book.closed"
         case .shelf: return "tray"
         case .focus: return "timer"
@@ -31,6 +34,7 @@ enum NotchFace: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
+        case .agents: return "AI 进程"
         case .cards: return "知识"
         case .shelf: return "收集"
         case .focus: return "专注"

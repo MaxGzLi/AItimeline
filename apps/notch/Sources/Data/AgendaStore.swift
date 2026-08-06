@@ -68,12 +68,28 @@ final class AgendaStore: ObservableObject {
     private init() {
         startClock()
 
+        // 一起来就把已经给过的权限捡起来、把今天的日程读进来。
+        //
+        // **不能等日程面被点开才读**:静默条要靠「一刻钟内有日程」抢位,
+        // 而日程面可能一整天都没人点。之前就是这样 —— 权限明明给了,
+        // 但只要没手动点过日程标签,`nextEvent` 永远是 nil,静默条就永远轮不到它。
+        refreshAccess()
+
         NotificationCenter.default.addObserver(
             forName: .EKEventStoreChanged,
             object: store,
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in self?.reload() }
+        }
+
+        // 换日子了要把「今天」挪过去,不然半夜之后看到的还是昨天的安排。
+        NotificationCenter.default.addObserver(
+            forName: .NSCalendarDayChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.backToToday() }
         }
     }
 
@@ -230,8 +246,19 @@ final class AgendaStore: ObservableObject {
 
     private func startClock() {
         // 20 秒对一次,分钟跳变最多晚 20 秒 —— 刘海上够用,不值得每秒唤醒一次。
+        // 顺便每 30 圈(10 分钟)把日程重读一遍,照原版的 600 秒兜底。
+        var ticks = 0
+
         let timer = Timer(timeInterval: 20, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.now = Date() }
+            ticks += 1
+
+            Task { @MainActor in
+                guard let self else { return }
+
+                self.now = Date()
+
+                if ticks % 30 == 0 { self.reload() }
+            }
         }
 
         RunLoop.main.add(timer, forMode: .common)

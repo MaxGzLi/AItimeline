@@ -7,14 +7,18 @@ import SwiftUI
 ///
 /// 版面账(有刘海时):
 /// - 上面 37 是让开刘海的带子,元信息(来源、状态、页码)就装在这条带子的两翼里;
-/// - 下面 51 只放一个来源方块和两行结论。88 高刨掉 37 只剩 51,
+/// - 下面 51 只放一个来源方块、两行结论,和右端四个切面按钮。88 高刨掉 37 只剩 51,
 ///   元信息再挤进来必然裁字 —— 搬进带子之后反而多出 11 点空气。
+///
+/// 横向账:340 减去方块 36、两道 12 的间距、按钮排 118,正文还剩 162 —— 两行 13 号字
+/// 大约二十四个汉字。切面按钮是这一档的导航,不能等点开半屏面板才出现(见 `FaceStrip`)。
 struct ExpandedView: View {
     @EnvironmentObject private var appState: AppState
     @ObservedObject private var store = CardStore.shared
     @ObservedObject private var shelf = ShelfStore.shared
     @ObservedObject private var timer = FocusTimer.shared
     @ObservedObject private var agenda = AgendaStore.shared
+    @ObservedObject private var agents = AgentStore.shared
 
     /// 左右各留 34。原版是容器 26 + 内容 8 两级叠出来的,408 宽里内容只占 340(83%)。
     /// 留白靠绝对像素,不靠百分比 —— 小面板用百分比会在窄档显得挤、宽档显得空。
@@ -78,6 +82,8 @@ struct ExpandedView: View {
     @ViewBuilder
     private var trailingMeta: some View {
         switch appState.selectedFace {
+        case .agents:
+            tail(agents.sessions.isEmpty ? "" : "\(agents.sessions.count) 个会话")
         case .shelf:
             tail(shelf.items.isEmpty ? "" : "\(shelf.items.count) 条")
         case .focus:
@@ -131,11 +137,37 @@ struct ExpandedView: View {
         .frame(height: 12)
     }
 
-    // MARK: - 一句结论
+    // MARK: - 一句结论 + 一排切面按钮
+
+    /// 左边一句结论,右边四个切面按钮。
+    ///
+    /// 按钮放在这一行、不放肩栏:肩栏两翼各只有 82 点,四个按钮塞不下(见 `FaceStrip`)。
+    private var content: some View {
+        HStack(spacing: 12) {
+            face
+
+            FaceStrip()
+        }
+        .frame(height: tileSize)
+    }
 
     @ViewBuilder
-    private var content: some View {
+    private var face: some View {
         switch appState.selectedFace {
+        case .agents:
+            if let session = agents.headline {
+                peek(
+                    session.state == .waiting ? "hand.raised" : appState.selectedFace.symbol,
+                    "\(session.project) · \(session.state.title)",
+                    session.shortPath
+                )
+            } else {
+                peek(
+                    appState.selectedFace.symbol,
+                    agents.hooked ? "现在没有会话" : "还没接上 Claude Code",
+                    agents.hooked ? "开一个 Claude Code 就会出现" : "点开这个面接一下"
+                )
+            }
         case .shelf:
             // 刚往刘海上扔完东西,悬停要看的是「它落地了没有」,不是知识卡。
             peek(

@@ -14,6 +14,7 @@ struct CompactView: View {
     @ObservedObject private var timer = FocusTimer.shared
     @ObservedObject private var agenda = AgendaStore.shared
     @ObservedObject private var shelf = ShelfStore.shared
+    @ObservedObject private var agents = AgentStore.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var pulsing = false
@@ -65,6 +66,8 @@ struct CompactView: View {
     @ViewBuilder
     private var mark: some View {
         switch StripPriority.face {
+        case .agents:
+            glyph(agents.strip.symbol)
         case .focus:
             glyph(timer.phase.symbol)
         case .agenda:
@@ -87,6 +90,16 @@ struct CompactView: View {
     @ViewBuilder
     private var readout: some View {
         switch StripPriority.face {
+        case .agents:
+            // 等你回话的那一档给琥珀 —— 整个界面里那点颜色只绑一件事:轮到你动手了。
+            Text(agents.strip.text)
+                .font(.system(size: 13, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(
+                    agents.strip.urgent
+                        ? NotchAccent.amber.opacity(0.95)
+                        : .white.opacity(0.80)
+                )
         case .focus:
             // 等宽,不然秒一跳整条会横着抖。
             Text(timer.clock)
