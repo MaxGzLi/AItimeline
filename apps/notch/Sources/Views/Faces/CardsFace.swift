@@ -405,7 +405,9 @@ struct CardsFace: View {
 
                 Spacer(minLength: 12)
 
-                if card.reviewPrompt?.isEmpty == false, card.topicId?.isEmpty == false {
+                // 只对**到期**的卡出这个按钮。没到期的卡服务端还没有复习记录,
+                // 按下去只会拿到一个 404 —— 一个点了没反应的按钮比没有按钮更糟。
+                if card.isReviewDue, card.reviewPrompt?.isEmpty == false {
                     footerAction(marked ? "已记下" : "标记已复习", icon: marked ? "checkmark" : nil) {
                         Task {
                             marked = await store.markReviewed(card)

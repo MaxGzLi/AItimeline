@@ -275,6 +275,17 @@ final class AgendaStore: ObservableObject {
         label(date, "jmm")
     }
 
+    /// 静默条上那个时钟。和 `hhmm` 的差别只有一处:**不带上午/下午**。
+    ///
+    /// 翼只有 34 点宽,「14:23」用条上现役的 11 号等宽字正好 34.00 —— 一点不剩。
+    /// 再挂一个「下午」或者「PM」,多出来的那一截会画到刘海底下,屏幕物理上不显示。
+    /// 12 还是 24 小时仍然跟着系统走(`j` 决定的是数字部分),只是把那个词摘掉。
+    nonisolated static func stripClock(_ date: Date) -> String {
+        let pattern = DateFormatter.dateFormat(fromTemplate: "j", options: 0, locale: .current) ?? "H"
+
+        return label(date, pattern.contains("H") ? "Hm" : "hm")
+    }
+
     nonisolated static func label(_ date: Date, _ template: String) -> String {
         let formatter = DateFormatter()
 

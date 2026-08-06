@@ -3,7 +3,10 @@ import SwiftUI
 /// 静默态:贴着刘海的一条,左边一个记号,右边一个数。
 ///
 /// 这一档只回答一件事:**眼下最急的那样东西怎么样了**。一个字都不用读。
-/// 「最急的是哪样」由 `StripPriority` 定,同时只显示一个。
+/// 「最急的是哪样」由 `StripPriority` 定,同时只显示一个;**一件都没有就报时间**。
+///
+/// 报时是这一条的静息状态,不是一个功能:一个不变的数字挂在屏幕最顶上,看一眼就知道
+/// 「没事」,不用去猜它什么意思。左边那个记号在报时的时候照常在 —— 它认的是应用,不是内容。
 ///
 /// 量尺:面板 295 宽,但 `PillShape` 的顶角是往外拐的,侧墙在边界往里缩一个顶角半径,
 /// 所以肉眼可见的黑体只有 x ∈ [12, 283]。刘海本体占中间 183,两翼真正能用的是 44 宽,
@@ -65,16 +68,18 @@ struct CompactView: View {
 
     @ViewBuilder
     private var mark: some View {
-        switch StripPriority.face {
-        case .agents:
+        switch StripPriority.subject {
+        case .face(.agents):
             glyph(agents.strip?.symbol ?? "chevron.left.forwardslash.chevron.right")
-        case .focus:
+        case .face(.focus):
             glyph(timer.phase.symbol)
-        case .agenda:
+        case .face(.agenda):
             glyph("calendar")
-        case .shelf:
+        case .face(.shelf):
             glyph("tray.and.arrow.down")
-        case .cards:
+        // 报时的时候左边还是这个记号。它认的是「这条黑边是谁」,不是「现在有几张卡」,
+        // 所以两种情形共用一个:换掉它,条看起来就像换了一个应用。
+        case .face(.cards), .clock:
             CardStackMark(pulsing: pulsing, dimmed: store.isOffline)
         }
     }
@@ -89,8 +94,8 @@ struct CompactView: View {
 
     @ViewBuilder
     private var readout: some View {
-        switch StripPriority.face {
-        case .agents:
+        switch StripPriority.subject {
+        case .face(.agents):
             // 琥珀只给「要你动手」(要权限、这轮挂了)。「干完了」是白的 ——
             // 它可以等,你什么时候抬头看都行,不该拿最扎眼的颜色去催。
             if let strip = agents.strip {
@@ -103,28 +108,34 @@ struct CompactView: View {
                             : .white.opacity(0.80)
                     )
             }
-        case .focus:
+        case .face(.focus):
             // 等宽,不然秒一跳整条会横着抖。
             Text(timer.clock)
                 .font(.system(size: 11, weight: .semibold, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.88))
-        case .agenda:
+        case .face(.agenda):
             Text(minutesToNext)
                 .font(.system(size: 13, weight: .bold, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(.white.opacity(0.80))
-        case .shelf:
+        case .face(.shelf):
             Text("\(shelf.inFlight)")
                 .font(.system(size: 13, weight: .bold, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(.white.opacity(0.80))
-        case .cards:
-            if !store.isOffline {
-                Text(count)
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(countInk)
-            }
+        case .face(.cards):
+            // 走到这里只有一种情形:有卡到复习期了。所以这个数天生是琥珀的 ——
+            // 条上不再出现「攒了几张」那种不痛不痒的白数字。
+            Text(store.dueCount > 99 ? "99+" : "\(store.dueCount)")
+                .font(.system(size: 13, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(NotchAccent.amber.opacity(0.95))
+        case .clock:
+            // 和番茄钟同一个位子、同一号字 —— 番茄钟一停,那一格自然接上时间,不跳字号。
+            // 比番茄钟淡一档:它在倒数,是要你看的;时间只是「这里现在没事」。
+            Text(AgendaStore.stripClock(agenda.now))
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundStyle(NotchInk.meta)
         }
     }
 
@@ -147,19 +158,4 @@ struct CompactView: View {
         }
     }
 
-    private var count: String {
-        guard store.hasLoadedOnce else { return "…" }
-        guard !store.cards.isEmpty else { return "—" }
-
-        let value = store.dueCount > 0 ? store.dueCount : store.cards.count
-
-        return value > 99 ? "99+" : "\(value)"
-    }
-
-    private var countInk: Color {
-        guard store.hasLoadedOnce else { return .white.opacity(0.30) }
-        guard !store.cards.isEmpty else { return .white.opacity(0.25) }
-
-        return store.dueCount > 0 ? NotchAccent.amber.opacity(0.95) : .white.opacity(0.38)
-    }
 }

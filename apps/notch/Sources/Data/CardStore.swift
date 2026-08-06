@@ -18,7 +18,6 @@ final class CardStore: ObservableObject {
     @Published var page = 0
 
     private let endpoint = URL(string: "http://127.0.0.1:8787/api/inject/cards")!
-    private let signalsEndpoint = URL(string: "http://127.0.0.1:8787/api/signals")!
     private var timer: Timer?
 
     private init() {}
@@ -84,36 +83,30 @@ final class CardStore: ObservableObject {
         page = 0
     }
 
-    /// 「标记已复习」回传一条行为信号,和浏览器插件走的是同一个接口、同一套字段
-    /// (`apps/notch-extension/index.js` 的 `sendOpenSignal`),只是 `reviewed` 为真。
-    /// 接口那边按整条信号的内容做去重,所以同一张卡先看后标不会被当成重复丢掉。
+    /// 「标记已复习」走复习排期接口,**不是**行为信号接口。
+    ///
+    /// 这两个接口长得像,管的事完全不同:`/api/signals` 只记「用户干过什么」,
+    /// 记完到期时间一动不动 —— 之前这里发的就是它,所以每按一次都记下了一笔,
+    /// 卡的到期时间却永远钉在原地,条上那个琥珀色的数字自然一直消不掉。
+    /// 真正把到期时间往后推的是这一个(和网页端用的是同一个,见 `apps/web/src/App.tsx`
+    /// 的 `completeReview`):间隔 1 天推到 3 天,并写上 `lastReviewedAt`。
+    /// 它自己会记一条 reviewed 信号(`apps/api/src/domains/review.mjs`),
+    /// 所以这里**不能**再补发一条,否则同一次复习记两遍账。
+    ///
+    /// 只对到期的卡调。卡上带 `reviewDueAt` 等价于「服务端有这张卡的复习记录、而且已经到期」,
+    /// 没有记录的卡调过去是 404。
     func markReviewed(_ card: Card) async -> Bool {
-        guard let topicId = card.topicId, !topicId.isEmpty, !card.conceptIds.isEmpty else {
-            return false
-        }
+        guard card.isReviewDue, let endpoint = Self.reviewEndpoint(card.id) else { return false }
 
-        let now = ISO8601DateFormatter().string(from: Date())
-        let signal: [String: Any] = [
-            "postId": card.id,
-            "topicId": topicId,
-            "conceptIds": card.conceptIds,
-            "impression": true,
-            "dwellTimeMs": 9_000,
-            "openedThread": true,
-            "liked": false,
-            "saved": false,
-            "askedQuestion": false,
-            "reviewed": true,
-            "skippedQuickly": false,
-            "createdAt": now
-        ]
+        let now = Date()
         let payload: [String: Any] = [
-            "generatedAt": now,
-            "signal": signal,
-            "sourceCandidates": []
+            "reviewedAt": ISO8601DateFormatter().string(from: now),
+            "grade": "remembered",
+            // 防连按:同一张卡同一秒按两下算同一次,不会把间隔连推两级。
+            "reviewEventId": "\(card.id)-\(Int(now.timeIntervalSince1970))"
         ]
 
-        var request = URLRequest(url: signalsEndpoint)
+        var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.timeoutInterval = 4
         request.setValue("application/json", forHTTPHeaderField: "content-type")
@@ -131,5 +124,17 @@ final class CardStore: ObservableObject {
         } catch {
             return false
         }
+    }
+
+    /// 卡号是拼进路径里的,得逐段转义。用未保留字符集,不能用 `.urlPathAllowed` ——
+    /// 那一档放行斜杠,卡号里真出现斜杠就会把路径拆成两段。
+    private static func reviewEndpoint(_ postId: String) -> URL? {
+        let unreserved = CharacterSet(charactersIn: "-._~").union(.alphanumerics)
+
+        guard let escaped = postId.addingPercentEncoding(withAllowedCharacters: unreserved) else {
+            return nil
+        }
+
+        return URL(string: "http://127.0.0.1:8787/api/review/\(escaped)/complete")
     }
 }
