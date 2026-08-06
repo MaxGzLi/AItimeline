@@ -1,0 +1,27 @@
+{
+  "id": "com.aitimeline.notch",
+  "name": "AITimeline",
+  "version": "0.1.0",
+  "minAppVersion": "1.0.0",
+  "main": "index.js",
+  "author": {
+    "name": "AITimeline"
+  },
+  "description": "把本机知识库里该回来的知识卡藏在刘海里,鼠标甩上去才展开。数据来自 127.0.0.1:8787,不外发。",
+  "license": "MIT",
+  "categories": ["productivity"],
+  "permissions": ["network"],
+  "capabilities": {
+    "compact": true,
+    "expanded": true,
+    "fullExpanded": true,
+    "minimalCompact": true,
+    "backgroundRefresh": true,
+    "settings": false,
+    "notificationFeed": false,
+    "fullExpandedWidth": 900,
+    "fullExpandedHeight": 520
+  },
+  "refreshInterval": 60.0,
+  "activationTriggers": ["manual", "timer"]
+}
