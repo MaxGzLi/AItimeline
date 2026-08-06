@@ -46,13 +46,16 @@ enum Constants {
     /// 面板顶边要贴着它,所以肩膀不能是大圆角。
     static let shoulderCornerRadius: CGFloat = 10
 
-    /// 全展开档内容离 frame 左右边的距离。
+    /// 内容离侧墙留多少空气。侧墙在哪由 `AppState.contentSidePadding` 算,这里只管留白。
+    static let contentAirGap: CGFloat = 16
+
+    /// 底通栏离面板下沿抬多高。
     ///
-    /// **不是随便定的数**:PillShape 的外扩圆角让面板真正涂黑的范围比 frame 各窄一个圆角
-    /// (实测 900 宽的面板只有 92…912 这 820 点是黑的)。所以内容至少要缩进 40,
-    /// 再加 6 点空气。之前写 32,左右两边各有 8 点内容被切掉 —— 页脚的
-    /// 「在网页里打开」就是这么少了半个字的。
-    static let fullExpandedSidePadding: CGFloat = fullExpandedCornerRadius + 6
+    /// **这是个几何题,不是审美题**:下面两个角是 40 的圆角,越靠近底边、黑色的左右边界
+    /// 往里缩得越狠(离底 12 点的地方缩 11.4 点)。页脚原来就贴在底边上,于是那一行字
+    /// 正好落在圆角弧线里,看着就是「沾满了左下角右下角」。抬到离底 30 点,弧线只剩 1.3 点,
+    /// 那一行才算站在直墙上。
+    static let footerBottomInset: CGFloat = 18
 
     // MARK: - 窗口留白
 

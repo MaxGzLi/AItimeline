@@ -13,6 +13,7 @@ struct CompactView: View {
     @ObservedObject private var store = CardStore.shared
     @ObservedObject private var timer = FocusTimer.shared
     @ObservedObject private var agenda = AgendaStore.shared
+    @ObservedObject private var shelf = ShelfStore.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var pulsing = false
@@ -65,16 +66,20 @@ struct CompactView: View {
     private var mark: some View {
         switch StripPriority.face {
         case .focus:
-            Image(systemName: timer.phase.symbol)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.white.opacity(0.82))
+            glyph(timer.phase.symbol)
         case .agenda:
-            Image(systemName: "calendar")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.white.opacity(0.82))
-        default:
+            glyph("calendar")
+        case .shelf:
+            glyph("tray.and.arrow.down")
+        case .cards:
             CardStackMark(pulsing: pulsing, dimmed: store.isOffline)
         }
+    }
+
+    private func glyph(_ symbol: String) -> some View {
+        Image(systemName: symbol)
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(.white.opacity(0.82))
     }
 
     // MARK: - 右边的数
@@ -92,7 +97,12 @@ struct CompactView: View {
                 .font(.system(size: 13, weight: .bold, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(.white.opacity(0.80))
-        default:
+        case .shelf:
+            Text("\(shelf.inFlight)")
+                .font(.system(size: 13, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.white.opacity(0.80))
+        case .cards:
             if !store.isOffline {
                 Text(count)
                     .font(.system(size: 13, weight: .bold, design: .rounded))

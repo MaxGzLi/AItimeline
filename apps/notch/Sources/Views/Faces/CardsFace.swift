@@ -22,7 +22,7 @@ struct CardsFace: View {
     @State private var sectionOffsets: [Int: CGFloat] = [:]
     @State private var marked = false
 
-    private let sidePadding = Constants.fullExpandedSidePadding
+    private var sidePadding: CGFloat { appState.contentSidePadding }
     private let columnGap: CGFloat = 20
     private let sideWidth: CGFloat = 236
     /// 挂式缩进:正文文字统一钉在离栏左边 15 的地方,锚点竖条挂在 0。
@@ -39,6 +39,7 @@ struct CardsFace: View {
 
                 footer(card)
                     .padding(.horizontal, sidePadding)
+                    .padding(.bottom, Constants.footerBottomInset)
             } else {
                 empty
             }

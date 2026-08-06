@@ -11,7 +11,7 @@ struct FocusFace: View {
     @EnvironmentObject private var appState: AppState
     @ObservedObject private var timer = FocusTimer.shared
 
-    private let sidePadding = Constants.fullExpandedSidePadding
+    private var sidePadding: CGFloat { appState.contentSidePadding }
     private let columnGap: CGFloat = 20
     private let sideWidth: CGFloat = 236
 
@@ -24,6 +24,7 @@ struct FocusFace: View {
 
             footer
                 .padding(.horizontal, sidePadding)
+                .padding(.bottom, Constants.footerBottomInset)
         }
     }
 

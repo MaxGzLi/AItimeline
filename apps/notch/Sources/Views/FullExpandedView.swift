@@ -8,12 +8,12 @@ import SwiftUI
 struct FullExpandedView: View {
     @EnvironmentObject private var appState: AppState
 
-    private let sidePadding = Constants.fullExpandedSidePadding
+    private var sidePadding: CGFloat { appState.contentSidePadding }
 
     var body: some View {
         VStack(spacing: 0) {
             if appState.contentTopInset > 0 {
-                ShoulderBar(sidePadding: Constants.fullExpandedSidePadding, trailingWidth: 240) {
+                ShoulderBar(sidePadding: sidePadding, trailingWidth: 240) {
                     FaceTabs()
                 } trailing: {
                     trailing

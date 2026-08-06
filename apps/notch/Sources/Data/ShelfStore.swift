@@ -53,6 +53,7 @@ final class ShelfStore: ObservableObject {
     private let base = URL(string: "http://127.0.0.1:8787")!
     private let store: URL
     private let imageDirectory: URL
+    private var poller: Timer?
 
     private init() {
         let support = FileManager.default
@@ -65,6 +66,7 @@ final class ShelfStore: ObservableObject {
         try? FileManager.default.createDirectory(at: imageDirectory, withIntermediateDirectories: true)
 
         load()
+        pollWhileInFlight()
     }
 
     // MARK: - 收下
@@ -96,6 +98,7 @@ final class ShelfStore: ObservableObject {
 
         items.insert(item, at: 0)
         persist()
+        pollWhileInFlight()
 
         Task { await send(item.id) }
     }
@@ -123,6 +126,13 @@ final class ShelfStore: ObservableObject {
     // MARK: - 发出去
 
     static let sending = "正在存…"
+
+    /// 还在路上的有几条。静默条靠它决定要不要占条 —— 「正在动的」才配上那一条。
+    static let onTheWay: Set<String> = [sending, "排队中", "正在转化"]
+
+    var inFlight: Int {
+        items.filter { Self.onTheWay.contains($0.status) }.count
+    }
 
     private func send(_ id: String) async {
         guard let index = items.firstIndex(where: { $0.id == id }) else { return }
@@ -161,7 +171,7 @@ final class ShelfStore: ObservableObject {
         Task { await send(id) }
     }
 
-    /// 存进去的链接后来怎么样了。只在收集面露脸的时候问,不常驻轮询。
+    /// 存进去的链接后来怎么样了。收集面露脸时问一次,另外只要还有东西在路上就 20 秒问一次。
     ///
     /// 接口返回的形状是 `{ records: [{ status, candidate: { source: { url } } }] }` ——
     /// 网址埋在两层里面,别在顶层找。
@@ -206,6 +216,31 @@ final class ShelfStore: ObservableObject {
         case "dismissed": return ("被丢掉了", true)
         default: return (status, false)
         }
+    }
+
+    /// 有东西在路上的时候才轮询,落地了就停。
+    ///
+    /// 不能只在收集面露脸时才对状态 —— 静默条靠 `inFlight` 决定要不要占条,
+    /// 状态不刷新的话,一条早就转化完的东西会一直挂在那儿说「排队中」,静默条就赖着不还给知识卡。
+    private func pollWhileInFlight() {
+        guard poller == nil else { return }
+
+        let timer = Timer(timeInterval: 20, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+
+                guard self.inFlight > 0 else {
+                    self.poller?.invalidate()
+                    self.poller = nil
+                    return
+                }
+
+                await self.refreshStatuses()
+            }
+        }
+
+        RunLoop.main.add(timer, forMode: .common)
+        poller = timer
     }
 
     private func update(_ id: String, _ change: (inout ShelfItem) -> Void) {

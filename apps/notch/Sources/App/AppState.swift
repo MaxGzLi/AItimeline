@@ -293,6 +293,16 @@ final class AppState: ObservableObject {
         isPill ? Constants.pillBottomCornerRadius : baseCornerRadius
     }
 
+    /// 内容离 frame 左右边该缩进多少。
+    ///
+    /// `PillShape` 的顶角是**往外拐**的,两侧的墙就在离边界一个顶角半径的地方 ——
+    /// 实测 900 宽的面板在没刘海的屏上只有 x ∈ [92, 912] 是黑的,正好缩进 40。
+    /// 而有刘海的屏顶角是 10 的肩膀,墙只缩进 10。**两种机器的可用宽度不一样**,
+    /// 所以这个数只能算不能写死:写死 32 的时候,没刘海的机器上左右各有 8 点内容被切掉。
+    var contentSidePadding: CGFloat {
+        topCornerRadius + Constants.contentAirGap
+    }
+
     /// 没刘海的屏上,静默态是一颗从顶边挂下来的药丸。
     var isPill: Bool {
         currentState == .compact && !hasNotch

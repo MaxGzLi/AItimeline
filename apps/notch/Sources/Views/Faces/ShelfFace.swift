@@ -9,7 +9,7 @@ struct ShelfFace: View {
     @EnvironmentObject private var appState: AppState
     @ObservedObject private var shelf = ShelfStore.shared
 
-    private let sidePadding = Constants.fullExpandedSidePadding
+    private var sidePadding: CGFloat { appState.contentSidePadding }
     private let columnGap: CGFloat = 20
     private let sideWidth: CGFloat = 236
 
@@ -22,6 +22,7 @@ struct ShelfFace: View {
 
             footer
                 .padding(.horizontal, sidePadding)
+                .padding(.bottom, Constants.footerBottomInset)
         }
         .task {
             await shelf.refreshStatuses()
@@ -202,8 +203,7 @@ struct ShelfShoulderTrailing: View {
     @ObservedObject private var shelf = ShelfStore.shared
 
     var body: some View {
-        let onTheWay: Set<String> = [ShelfStore.sending, "排队中", "正在转化"]
-        let pending = shelf.items.filter { onTheWay.contains($0.status) }.count
+        let pending = shelf.inFlight
         let failed = shelf.items.filter(\.failed).count
 
         HStack(spacing: 12) {

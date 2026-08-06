@@ -9,7 +9,7 @@ struct AgendaFace: View {
     @EnvironmentObject private var appState: AppState
     @ObservedObject private var agenda = AgendaStore.shared
 
-    private let sidePadding = Constants.fullExpandedSidePadding
+    private var sidePadding: CGFloat { appState.contentSidePadding }
     private let columnGap: CGFloat = 20
     private let sideWidth: CGFloat = 236
     private let gridWidth: CGFloat = 246
@@ -23,6 +23,7 @@ struct AgendaFace: View {
 
             footer
                 .padding(.horizontal, sidePadding)
+                .padding(.bottom, Constants.footerBottomInset)
         }
         .task {
             await agenda.requestAccess()
