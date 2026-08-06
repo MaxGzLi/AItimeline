@@ -1,78 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiRequest, isAbortLikeError } from "./api";
 import { t } from "./i18n";
-import type { AgentTaskDetailResponse, AgentTaskListResponse, AgentTaskSummary } from "./tasks";
+import { detailForSelection, extractDispatchReply } from "./tasks";
+import type {
+  AgentDispatchReply,
+  AgentTaskDetailResponse,
+  AgentTaskListResponse,
+  AgentTaskSummary,
+  DispatchResponse
+} from "./tasks";
 
 const pollIntervalMs = 5000;
-
-export interface AgentConfirmQuestion {
-  id: string;
-  label: string;
-  options: Array<{ id: string; label: string }>;
-}
-
-export interface AgentDispatchReply {
-  taskId: string | null;
-  text: string;
-  quote: string | null;
-  sourceTitle: string | null;
-  /** 库里答不全、要往外搜时才有:先问过用户才动网络。 */
-  confirm: { turnId: string; questions: AgentConfirmQuestion[] } | null;
-  confirmedNote: string | null;
-}
-
-interface DispatchResponse {
-  route?: "preference" | "question";
-  taskId?: string | null;
-  reply?: string;
-  turnRecord?: { id?: string } | null;
-  turn?: {
-    answer?: {
-      answer?: string;
-      citations?: Array<{ quote?: string; sourceTitle?: string }>;
-    } | null;
-    actions?: Array<{ kind?: string; questions?: AgentConfirmQuestion[] }>;
-  };
-}
-
-/**
- * 派活后观察员说了什么。两条路的回话长得不一样:调喜好那条回一句确认,提问那条
- * 回一段有出处的答案。答案正文并没有存进快照(agentTurns 只存问题和状态),所以
- * 这里接住这一次的回话拿去显示,刷新后就只剩任务记录——这是本期的已知限制。
- */
-function extractDispatchReply(result: DispatchResponse): AgentDispatchReply | null {
-  const answer = result.turn?.answer;
-  const confirmAction = result.turn?.actions?.find((action) => action.kind === "confirm_discovery");
-  const turnId = result.turnRecord?.id;
-  const confirm =
-    confirmAction?.questions?.length && turnId ? { turnId, questions: confirmAction.questions } : null;
-
-  if (answer?.answer) {
-    const citation = answer.citations?.find((entry) => entry.quote);
-
-    return {
-      taskId: result.taskId ?? null,
-      text: answer.answer,
-      quote: citation?.quote ?? null,
-      sourceTitle: citation?.sourceTitle ?? null,
-      confirm,
-      confirmedNote: null
-    };
-  }
-
-  if (result.reply) {
-    return {
-      taskId: result.taskId ?? null,
-      text: result.reply,
-      quote: null,
-      sourceTitle: null,
-      confirm,
-      confirmedNote: null
-    };
-  }
-
-  return null;
-}
 
 /**
  * 任务客户端的数据面。列表轮询只在这一屏开着时跑,离开就停——后台任务几秒才动
@@ -92,6 +30,9 @@ export function useAgentTasks(enabled: boolean) {
   const [dispatchError, setDispatchError] = useState<string | null>(null);
   const [retryingId, setRetryingId] = useState<string | null>(null);
   const [lastReply, setLastReply] = useState<AgentDispatchReply | null>(null);
+  // 发出去还没回来的那句话。派活要重写整份快照,一等就是好几秒,这期间
+  // 你说的话必须先上屏,不然看起来就是「发了但石沉大海」。
+  const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
   // 轮询回来的列表不能覆盖用户刚点开的那条详情,所以选中项存一份 ref 给回调用。
   const selectedRef = useRef<string | null>(null);
 
@@ -173,6 +114,9 @@ export function useAgentTasks(enabled: boolean) {
 
     const controller = new AbortController();
 
+    setDetail((current) => detailForSelection(current, selectedTaskId));
+    setDetailLoading(true);
+
     void loadDetail(selectedTaskId, controller.signal);
 
     return () => controller.abort();
@@ -186,6 +130,9 @@ export function useAgentTasks(enabled: boolean) {
 
       setDispatchPending(true);
       setDispatchError(null);
+      // 像聊天一样:话先上屏、输入框立刻清空。失败时再把话退回输入框。
+      setPendingQuestion(trimmed);
+      setDispatchText("");
 
       try {
         const result = await apiRequest<DispatchResponse>("/api/agent/tasks", {
@@ -195,8 +142,7 @@ export function useAgentTasks(enabled: boolean) {
           timeoutMs: 60000
         });
 
-        setDispatchText("");
-        setLastReply(extractDispatchReply(result));
+        setLastReply(extractDispatchReply(result, trimmed));
 
         const refreshed = await refreshTasks();
 
@@ -205,7 +151,9 @@ export function useAgentTasks(enabled: boolean) {
         }
       } catch {
         setDispatchError(t("tasks.dispatchFailed"));
+        setDispatchText(trimmed);
       } finally {
+        setPendingQuestion(null);
         setDispatchPending(false);
       }
     },
@@ -280,6 +228,7 @@ export function useAgentTasks(enabled: boolean) {
     failedCount,
     lastReply,
     listError,
+    pendingQuestion,
     retryTask,
     retryingId,
     runningCount,

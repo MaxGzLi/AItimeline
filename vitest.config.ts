@@ -10,6 +10,7 @@ export default defineConfig({
       "apps/api/test/**/*.test.mjs",
       "apps/web/src/lib/**/*.test.ts",
       "apps/extension/test/**/*.test.mjs",
+      "apps/desktop/test/**/*.test.mjs",
       "apps/notch-extension/test/**/*.test.mjs"
     ]
   }

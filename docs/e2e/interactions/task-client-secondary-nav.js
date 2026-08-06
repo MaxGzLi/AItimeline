@@ -4,11 +4,11 @@
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   for (let i = 0; i < 40; i += 1) {
-    if (document.querySelector(".x-task-secondary")) break;
+    if (document.querySelector(".x-task-foot")) break;
     await sleep(500);
   }
 
-  const entry = Array.from(document.querySelectorAll(".x-task-secondary button")).find((button) =>
+  const entry = Array.from(document.querySelectorAll(".x-task-foot button")).find((button) =>
     /时间线|Feed|Timeline/.test(button.textContent ?? "")
   );
 

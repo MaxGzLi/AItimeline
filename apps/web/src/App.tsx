@@ -38,6 +38,8 @@ import {
   Compass,
   GitBranch,
   Home,
+  Inbox,
+  Library,
   ListChecks,
   Newspaper,
   Pause,
@@ -49,6 +51,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import type { AgentReplyAction, DiscoveryRunState } from "./components/AgentReplyThread";
 import { ConceptDigestPanel } from "./components/ConceptDigestPanel";
+import { ContextRail } from "./components/ContextRail";
 import type { SupplyRefillState } from "./components/SupplyDroughtCard";
 import { buildWikilinkAutocompleteCandidates } from "./components/WikilinkAutocomplete";
 import { DiscoverView } from "./views/DiscoverView";
@@ -261,6 +264,9 @@ export function App() {
   const [conceptView, setConceptView] = useState<string | null>(null);
   // 任务客户端是默认首屏:先看观察员替你干了什么、干到哪一步了。
   const [activeView, setActiveView] = useState<ViewKey>("tasks");
+  // 中栏当前显示谁:对话流,还是嵌进来的今天/复习/收集箱。老壳和新客户端
+  // 风格差太多,常去的三个地方不再甩回老壳,直接在中栏里换内容。
+  const [taskPane, setTaskPane] = useState<"chat" | "timeline" | "review" | "agent">("chat");
   const agentTasks = useAgentTasks(activeView === "tasks");
   const [graphRequestedTab, setGraphRequestedTab] = useState<"graph" | "boundary" | "skillTree">("graph");
   const [feedTab, setFeedTab] = useState<"foryou" | "latest" | "saved">("foryou");
@@ -1936,7 +1942,12 @@ export function App() {
   }
 
   function openAgentSection(section: "import" | "subscriptions") {
-    setActiveView("agent");
+    // 任务客户端里收集箱嵌在中栏,不跳回老壳。
+    if (activeView === "tasks") {
+      setTaskPane("agent");
+    } else {
+      setActiveView("agent");
+    }
     setSelectedCardId(null);
     const elementId = section === "subscriptions" ? "agent-subscriptions" : "agent-source-import";
 
@@ -2051,9 +2062,18 @@ export function App() {
       detailReturnScrollY.current = window.scrollY;
     }
 
-    setActiveView("timeline");
+    // 任务客户端里看详情:留在客户端,中栏切到嵌着的时间线(选中卡时它就是详情页)。
+    if (activeView === "tasks") {
+      setTaskPane("timeline");
+    } else {
+      setActiveView("timeline");
+    }
     setSelectedCardId(cardId);
-    requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "auto" }));
+    requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, behavior: "auto" });
+      // 嵌入槽自己滚动,窗口滚不动它;不回顶的话详情会停在上一页翻到的位置。
+      document.querySelector(".x-task-embed")?.scrollTo({ top: 0, behavior: "auto" });
+    });
   }
 
   function handleOpenCard(card: RankedKnowledgeCard) {
@@ -2628,46 +2648,313 @@ export function App() {
     </p>
   ) : null;
 
-  // 任务客户端自带左右两栏,不走三栏外壳;八个旧视图收进它左栏底部的次级入口。
+  // 任务客户端自带三栏,不走通用外壳。左栏顶部是常去的三个地方,底部收其余旧视图。
+  // 概念弹层是浮在整个应用上面的,老壳和任务客户端都要能弹出来。
+  const conceptDigestElement =
+    conceptDigest && conceptDigest.cardCount > 0 ? (
+      <ConceptDigestPanel
+        conceptAliases={conceptAliases}
+        backlinks={conceptBacklinks}
+        brief={selectedConceptBrief}
+        briefQueued={selectedConceptBriefQueued}
+        digest={conceptDigest}
+        onClose={() => setConceptView(null)}
+        onUnmergeAlias={unmergeConceptAlias}
+        onOpenCardId={handleOpenCardFromConcept}
+      />
+    ) : null;
+
+  // 今天/复习/收集箱这三个老视图,新旧两个壳共用同一份配置:老壳整页渲染,
+  // 任务客户端把它们嵌进中栏(嵌入时时间线不带右栏,客户端右栏自己有)。
+  const timelineViewElement = (
+    <TimelineView
+      hideRail={activeView === "tasks"}
+      headerActions={headerActions}
+      scoutLedger={scoutLedger}
+      selectedCard={selectedCard}
+      feedTab={feedTab}
+      onCloseDetail={handleCloseDetail}
+      onFeedTabChange={setFeedTab}
+      selectedAsset={selectedAsset}
+      selectedBacklinks={selectedBacklinks}
+      allCards={allCards}
+      selectedChunks={selectedChunks}
+      connectionsByCard={connectionsByCard}
+      selectedEvidenceFailed={selectedEvidenceFailed}
+      selectedEvidenceLedger={selectedEvidenceLedger}
+      selectedFeedback={selectedFeedback}
+      linkedGraph={linkedGraph}
+      selectedThread={selectedThread}
+      onAskAi={handleAskAi}
+      onAskThreadBlock={handleAskThreadBlock}
+      onLike={handleLike}
+      onOpenCardId={handleOpenCardId}
+      onOpenConcept={handleOpenConcept}
+      onPromptChange={handlePromptChange}
+      onReply={handleReply}
+      onRetryEvidence={handleRetryEvidence}
+      onSave={handleSave}
+      selectedPrompt={selectedCard ? aiPromptByCard[selectedCard.id] ?? "" : ""}
+      selectedQuoteText={selectedCard ? quoteByCard[selectedCard.id] : undefined}
+      selectedSignal={selectedSignal}
+      wikilinkCandidates={wikilinkCandidates}
+      topicFilter={topicFilter}
+      topicFilterOptions={topicFilterOptions}
+      onTopicFilterChange={setTopicFilter}
+      composerInputRef={composerInputRef}
+      isAgentAsking={isAgentAsking}
+      composerMode={composerMode}
+      onComposerModeChange={(mode) => {
+        setComposerMode(mode);
+        if (mode === "idea") {
+          setPendingThreadId(null);
+        }
+      }}
+      onAgentQuestionChange={setAgentQuestion}
+      onAgentAsk={handleAgentAsk}
+      agentQuestion={agentQuestion}
+      agentMessage={agentMessage}
+      agentResponse={agentResponse}
+      agentAskedQuestion={agentAskedQuestion}
+      discoveryRun={discoveryRun}
+      onConfirmDiscovery={handleConfirmDiscovery}
+      onDiscoverSources={handleDiscoverSources}
+      onDismissAgentReply={() => {
+        setAgentResponse(null);
+        setAgentAskedQuestion("");
+        setPendingThreadId(null);
+        setDiscoveryRun({ status: "idle" });
+      }}
+      onOpenDiscover={() => setActiveView("discover")}
+      onIdeaProbe={handleIdeaProbe}
+      onResearchIdea={handleResearchIdea}
+      currentAgentTurnStatus={currentAgentTurnStatus}
+      pendingCards={pendingCards}
+      onShowPendingCards={handleShowPendingCards}
+      queuedJobCount={queuedJobCount}
+      autoScoutEnabled={autoScoutEnabled}
+      productionPeak={productionPeakRef.current}
+      supplyStatus={supplyStatus}
+      supplyRefillState={supplyRefillState}
+      onOpenImport={() => openAgentSection("import")}
+      onOpenReview={() => (activeView === "tasks" ? setTaskPane("review") : setActiveView("review"))}
+      onRefillCandidates={() => {
+        void handleSupplyRefill();
+      }}
+      onOpenSubscriptions={() => openAgentSection("subscriptions")}
+      weeklyRecap={weeklyRecap}
+      onDismissWeeklyRecap={dismissWeeklyRecap}
+      theme={theme}
+      visibleCards={visibleCards}
+      searchQuery={searchQuery}
+      apiStatus={apiStatus}
+      activeDismissedPostIds={activeDismissedPostIds}
+      focusedIndex={focusedIndex}
+      onDwell={handleDwell}
+      onImpression={handleImpression}
+      onOpenCard={handleOpenCard}
+      onRestorePost={restoreDismissedPost}
+      onReviewComplete={handleReviewComplete}
+      onSkip={handleSkip}
+      quoteByCard={quoteByCard}
+      interactionSignals={interactionSignals}
+      boundary={boundary}
+      selectedLocalGraph={selectedLocalGraph}
+      graph={graph}
+      learningGoals={learningGoals}
+      onOpenGraph={() => {
+        setGraphRequestedTab("graph");
+        setActiveView("graph");
+      }}
+      onOpenSkillTree={() => {
+        setGraphRequestedTab("skillTree");
+        setActiveView("graph");
+      }}
+      onSearchChange={setSearchQuery}
+      reviewQueue={reviewQueue}
+    />
+  );
+  const reviewViewElement = (
+    <ReviewView
+      cardsById={reviewCardsById}
+      onReviewed={completeReview}
+      queue={reviewQueue}
+    />
+  );
+  const agentViewElement = (
+    <AgentView
+      apiMessage={apiMessage}
+      apiStatus={apiStatus}
+      autoScoutEnabled={autoScoutEnabled}
+      candidateConcept={candidateConcept}
+      candidateMessage={candidateMessage}
+      candidateUrl={candidateUrl}
+      cardCount={importedCards.length}
+      curationMessage={workerStatusMessage}
+      hasQueuedScoutWork={hasQueuedScoutWork}
+      importError={importError}
+      isImporting={isImporting}
+      isRunningCuration={isRunningCuration}
+      isSavingCandidate={isSavingCandidate}
+      isSavingSubscription={isSavingSubscription}
+      lastScoutAt={null}
+      memoryMessage={memoryMessage}
+      onAutoScoutChange={(enabled) => {
+        void handleAutoScoutChange(enabled);
+      }}
+      onCandidateConceptChange={setCandidateConcept}
+      onCandidateUrlChange={setCandidateUrl}
+      backlogBusyIds={backlogBusyIds}
+      backlogViews={backlogViews}
+      expandedBacklogIds={expandedBacklogIds}
+      onCatalogBacklog={(id) => {
+        void handleCatalogBacklog(id);
+      }}
+      onDeleteSubscription={(id) => {
+        void handleDeleteSubscription(id);
+      }}
+      onDigestBacklog={(id) => {
+        void handleDigestBacklog(id);
+      }}
+      onPrioritizeBacklogEntry={(subscriptionId, candidateId) => {
+        void handlePrioritizeBacklogEntry(subscriptionId, candidateId);
+      }}
+      onToggleBacklog={handleToggleBacklog}
+      onImportSubmit={handleImport}
+      onRunCuration={handleRunCuration}
+      onSaveCandidate={handleSaveCandidate}
+      onSourceUrlChange={setSourceUrl}
+      onSubscriptionFilterChange={(id, filterMode) => {
+        void handleSubscriptionFilterChange(id, filterMode);
+      }}
+      onSubscriptionSubmit={handleAddSubscription}
+      onSubscriptionUrlChange={setSubscriptionUrl}
+      agentTurnCount={agentTurnCount}
+      deletingSubscriptionIds={deletingSubscriptionIds}
+      queuedJobCount={queuedJobCount}
+      sourceCandidates={sourceCandidates}
+      sourceImports={sourceImports}
+      sourceUrl={sourceUrl}
+      subscriptionMessage={subscriptionMessage}
+      subscriptionMessageIsError={subscriptionMessageIsError}
+      subscriptions={subscriptions}
+      subscriptionUrl={subscriptionUrl}
+      todayLedgerLine={todayLedgerLine}
+      updatingSubscriptionIds={updatingSubscriptionIds}
+    />
+  );
+
   if (activeView === "tasks") {
+    // 今天/复习/收集箱嵌在中栏里换内容,其余入口仍去老壳整页。
+    const embeddedPanes: ViewKey[] = ["timeline", "review", "agent"];
+    const openView = (key: ViewKey) => {
+      if (embeddedPanes.includes(key)) {
+        setTaskPane(key as "timeline" | "review" | "agent");
+        setSelectedCardId(null);
+        return;
+      }
+      setActiveView(key);
+      setSelectedCardId(null);
+    };
+    const renderEntry = (
+      key: ViewKey,
+      labelKey: string,
+      Icon: typeof Home,
+      count?: number
+    ) => (
+      <button
+        className={embeddedPanes.includes(key) && taskPane === key ? "active" : undefined}
+        key={key}
+        onClick={() => openView(key)}
+        type="button"
+      >
+        <Icon size={15} strokeWidth={1.8} />
+        <span>{t(labelKey)}</span>
+        {count ? <em>{count}</em> : null}
+      </button>
+    );
+    const embed =
+      taskPane === "timeline" ? (
+        timelineViewElement
+      ) : taskPane === "review" || taskPane === "agent" ? (
+        <div className="x-task-embedcol">
+          <header className="x-task-pagehead">
+            <h1>{t(taskPane === "review" ? "tasks.entry.review" : "tasks.entry.inbox")}</h1>
+          </header>
+          {taskPane === "review" ? reviewViewElement : agentViewElement}
+        </div>
+      ) : undefined;
+
     return (
+      <>
       <TaskClientView
+        contextRail={
+          <ContextRail
+            boundary={boundary}
+            detailCard={selectedCard}
+            detailGraph={selectedLocalGraph}
+            graph={graph}
+            learningGoals={learningGoals}
+            onOpenCardId={handleOpenCardId}
+            onOpenConcept={handleOpenConcept}
+            onOpenGraph={() => {
+              setGraphRequestedTab("graph");
+              setActiveView("graph");
+            }}
+            onOpenSkillTree={() => {
+              setGraphRequestedTab("skillTree");
+              setActiveView("graph");
+            }}
+            onOpenReview={() => setTaskPane("review")}
+            onSearchChange={setSearchQuery}
+            reviewQueue={reviewQueue}
+            searchQuery={searchQuery}
+          />
+        }
         detail={agentTasks.detail}
         detailLoading={agentTasks.detailLoading}
         dispatchError={agentTasks.dispatchError}
         dispatchPending={agentTasks.dispatchPending}
         dispatchText={agentTasks.dispatchText}
+        embed={embed}
         failedCount={agentTasks.failedCount}
         lastReply={agentTasks.lastReply}
         listError={agentTasks.listError}
         onConfirmDiscovery={(turnId, choices) => void agentTasks.confirmDiscovery(turnId, choices)}
         onDispatchSubmit={(event) => {
           event.preventDefault();
+          setTaskPane("chat");
           void agentTasks.dispatchTask(agentTasks.dispatchText);
         }}
         onDispatchTextChange={agentTasks.setDispatchText}
         onOpenCard={showDetail}
         onRetry={(taskId) => void agentTasks.retryTask(taskId)}
-        onSelectTask={agentTasks.selectTask}
+        onSelectTask={(taskId) => {
+          // 点了具体任务就回到对话流,嵌着的页面让位。
+          setTaskPane("chat");
+          agentTasks.selectTask(taskId);
+        }}
+        pendingQuestion={agentTasks.pendingQuestion}
         retryingId={agentTasks.retryingId}
         runningCount={agentTasks.runningCount}
-        secondaryNav={navItems.map((item) => (
-          <button
-            key={item.key}
-            onClick={() => {
-              setActiveView(item.key);
-              setSelectedCardId(null);
-            }}
-            type="button"
-          >
-            <item.icon size={15} strokeWidth={1.9} />
-            <span>{t(item.labelKey)}</span>
-          </button>
-        ))}
+        footerNav={[
+          renderEntry("graph", "tasks.entry.library", Library),
+          renderEntry("base", "nav.base", Home),
+          renderEntry("discover", "nav.discover", Compass),
+          renderEntry("notifications", "nav.notifications", Bell, unreadNotificationCount),
+          renderEntry("settings", "tasks.entry.settings", Settings)
+        ]}
+        primaryNav={[
+          renderEntry("timeline", "tasks.entry.today", Newspaper),
+          renderEntry("review", "tasks.entry.review", Brain, reviewQueue.length),
+          renderEntry("agent", "tasks.entry.inbox", Inbox, pendingDiscoverCount)
+        ]}
         selectedTaskId={agentTasks.selectedTaskId}
         tasks={agentTasks.tasks}
         tasksLoading={agentTasks.tasksLoading}
       />
+        {conceptDigestElement}
+      </>
     );
   }
 
@@ -2747,111 +3034,7 @@ export function App() {
       </nav>
 
       {activeView === "timeline" ? (
-        <TimelineView
-          headerActions={headerActions}
-          scoutLedger={scoutLedger}
-          selectedCard={selectedCard}
-          feedTab={feedTab}
-          onCloseDetail={handleCloseDetail}
-          onFeedTabChange={setFeedTab}
-          selectedAsset={selectedAsset}
-          selectedBacklinks={selectedBacklinks}
-          allCards={allCards}
-          selectedChunks={selectedChunks}
-          connectionsByCard={connectionsByCard}
-          selectedEvidenceFailed={selectedEvidenceFailed}
-          selectedEvidenceLedger={selectedEvidenceLedger}
-          selectedFeedback={selectedFeedback}
-          linkedGraph={linkedGraph}
-          selectedThread={selectedThread}
-          onAskAi={handleAskAi}
-          onAskThreadBlock={handleAskThreadBlock}
-          onLike={handleLike}
-          onOpenCardId={handleOpenCardId}
-          onOpenConcept={handleOpenConcept}
-          onPromptChange={handlePromptChange}
-          onReply={handleReply}
-          onRetryEvidence={handleRetryEvidence}
-          onSave={handleSave}
-          selectedPrompt={selectedCard ? aiPromptByCard[selectedCard.id] ?? "" : ""}
-          selectedQuoteText={selectedCard ? quoteByCard[selectedCard.id] : undefined}
-          selectedSignal={selectedSignal}
-          wikilinkCandidates={wikilinkCandidates}
-          topicFilter={topicFilter}
-          topicFilterOptions={topicFilterOptions}
-          onTopicFilterChange={setTopicFilter}
-          composerInputRef={composerInputRef}
-          isAgentAsking={isAgentAsking}
-          composerMode={composerMode}
-          onComposerModeChange={(mode) => {
-            setComposerMode(mode);
-            if (mode === "idea") {
-              setPendingThreadId(null);
-            }
-          }}
-          onAgentQuestionChange={setAgentQuestion}
-          onAgentAsk={handleAgentAsk}
-          agentQuestion={agentQuestion}
-          agentMessage={agentMessage}
-          agentResponse={agentResponse}
-          agentAskedQuestion={agentAskedQuestion}
-          discoveryRun={discoveryRun}
-          onConfirmDiscovery={handleConfirmDiscovery}
-          onDiscoverSources={handleDiscoverSources}
-          onDismissAgentReply={() => {
-            setAgentResponse(null);
-            setAgentAskedQuestion("");
-            setPendingThreadId(null);
-            setDiscoveryRun({ status: "idle" });
-          }}
-          onOpenDiscover={() => setActiveView("discover")}
-          onIdeaProbe={handleIdeaProbe}
-          onResearchIdea={handleResearchIdea}
-          currentAgentTurnStatus={currentAgentTurnStatus}
-          pendingCards={pendingCards}
-          onShowPendingCards={handleShowPendingCards}
-          queuedJobCount={queuedJobCount}
-          autoScoutEnabled={autoScoutEnabled}
-          productionPeak={productionPeakRef.current}
-          supplyStatus={supplyStatus}
-          supplyRefillState={supplyRefillState}
-          onOpenImport={() => openAgentSection("import")}
-          onOpenReview={() => setActiveView("review")}
-          onRefillCandidates={() => {
-            void handleSupplyRefill();
-          }}
-          onOpenSubscriptions={() => openAgentSection("subscriptions")}
-          weeklyRecap={weeklyRecap}
-          onDismissWeeklyRecap={dismissWeeklyRecap}
-          theme={theme}
-          visibleCards={visibleCards}
-          searchQuery={searchQuery}
-          apiStatus={apiStatus}
-          activeDismissedPostIds={activeDismissedPostIds}
-          focusedIndex={focusedIndex}
-          onDwell={handleDwell}
-          onImpression={handleImpression}
-          onOpenCard={handleOpenCard}
-          onRestorePost={restoreDismissedPost}
-          onReviewComplete={handleReviewComplete}
-          onSkip={handleSkip}
-          quoteByCard={quoteByCard}
-          interactionSignals={interactionSignals}
-          boundary={boundary}
-          selectedLocalGraph={selectedLocalGraph}
-          graph={graph}
-          learningGoals={learningGoals}
-          onOpenGraph={() => {
-            setGraphRequestedTab("graph");
-            setActiveView("graph");
-          }}
-          onOpenSkillTree={() => {
-            setGraphRequestedTab("skillTree");
-            setActiveView("graph");
-          }}
-          onSearchChange={setSearchQuery}
-          reviewQueue={reviewQueue}
-        />
+        timelineViewElement
       ) : (
         <main className="x-main">
         <header className="x-colhead">
@@ -2945,11 +3128,7 @@ export function App() {
         ) : null}
 
         {activeView === "review" ? (
-          <ReviewView
-            cardsById={reviewCardsById}
-            onReviewed={completeReview}
-            queue={reviewQueue}
-          />
+          reviewViewElement
         ) : null}
 
         {activeView === "notifications" ? (
@@ -2968,66 +3147,7 @@ export function App() {
         ) : null}
 
         {activeView === "agent" ? (
-          <AgentView
-            apiMessage={apiMessage}
-            apiStatus={apiStatus}
-            autoScoutEnabled={autoScoutEnabled}
-            candidateConcept={candidateConcept}
-            candidateMessage={candidateMessage}
-            candidateUrl={candidateUrl}
-            cardCount={importedCards.length}
-            curationMessage={workerStatusMessage}
-            hasQueuedScoutWork={hasQueuedScoutWork}
-            importError={importError}
-            isImporting={isImporting}
-            isRunningCuration={isRunningCuration}
-            isSavingCandidate={isSavingCandidate}
-            isSavingSubscription={isSavingSubscription}
-            lastScoutAt={null}
-            memoryMessage={memoryMessage}
-            onAutoScoutChange={(enabled) => {
-              void handleAutoScoutChange(enabled);
-            }}
-            onCandidateConceptChange={setCandidateConcept}
-            onCandidateUrlChange={setCandidateUrl}
-            backlogBusyIds={backlogBusyIds}
-            backlogViews={backlogViews}
-            expandedBacklogIds={expandedBacklogIds}
-            onCatalogBacklog={(id) => {
-              void handleCatalogBacklog(id);
-            }}
-            onDeleteSubscription={(id) => {
-              void handleDeleteSubscription(id);
-            }}
-            onDigestBacklog={(id) => {
-              void handleDigestBacklog(id);
-            }}
-            onPrioritizeBacklogEntry={(subscriptionId, candidateId) => {
-              void handlePrioritizeBacklogEntry(subscriptionId, candidateId);
-            }}
-            onToggleBacklog={handleToggleBacklog}
-            onImportSubmit={handleImport}
-            onRunCuration={handleRunCuration}
-            onSaveCandidate={handleSaveCandidate}
-            onSourceUrlChange={setSourceUrl}
-            onSubscriptionFilterChange={(id, filterMode) => {
-              void handleSubscriptionFilterChange(id, filterMode);
-            }}
-            onSubscriptionSubmit={handleAddSubscription}
-            onSubscriptionUrlChange={setSubscriptionUrl}
-            agentTurnCount={agentTurnCount}
-            deletingSubscriptionIds={deletingSubscriptionIds}
-            queuedJobCount={queuedJobCount}
-            sourceCandidates={sourceCandidates}
-            sourceImports={sourceImports}
-            sourceUrl={sourceUrl}
-            subscriptionMessage={subscriptionMessage}
-            subscriptionMessageIsError={subscriptionMessageIsError}
-            subscriptions={subscriptions}
-            subscriptionUrl={subscriptionUrl}
-            todayLedgerLine={todayLedgerLine}
-            updatingSubscriptionIds={updatingSubscriptionIds}
-          />
+          agentViewElement
         ) : null}
 
         {activeView === "settings" ? (
@@ -3051,18 +3171,7 @@ export function App() {
         </main>
       )}
 
-      {conceptDigest && conceptDigest.cardCount > 0 ? (
-        <ConceptDigestPanel
-          conceptAliases={conceptAliases}
-          backlinks={conceptBacklinks}
-          brief={selectedConceptBrief}
-          briefQueued={selectedConceptBriefQueued}
-          digest={conceptDigest}
-          onClose={() => setConceptView(null)}
-          onUnmergeAlias={unmergeConceptAlias}
-          onOpenCardId={handleOpenCardFromConcept}
-        />
-      ) : null}
+      {conceptDigestElement}
 
       {shortcutsOpen ? (
         <div

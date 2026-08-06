@@ -117,6 +117,8 @@ export function buildTopicFilterOptions(cards: RankedKnowledgeCard[]): TopicFilt
 export interface TimelineViewProps {
   // Layout and timeline header
   headerActions: ReactNode;
+  /** 嵌进任务客户端中栏时不渲染自带右栏——客户端有自己的右栏,别出两根。 */
+  hideRail?: boolean;
   scoutLedger: ReactNode;
   selectedCard: RankedKnowledgeCard | null;
   feedTab: FeedTab;
@@ -215,6 +217,7 @@ export interface TimelineViewProps {
 
 export function TimelineView({
   headerActions,
+  hideRail,
   scoutLedger,
   selectedCard,
   feedTab,
@@ -536,21 +539,23 @@ export function TimelineView({
         )}
       </main>
 
-      <ContextRail
-        boundary={boundary}
-        detailCard={selectedCard}
-        detailGraph={selectedLocalGraph}
-        graph={graph}
-        learningGoals={learningGoals}
-        onOpenCardId={onOpenCardId}
-        onOpenConcept={onOpenConcept}
-        onOpenGraph={onOpenGraph}
-        onOpenSkillTree={onOpenSkillTree}
-        onOpenReview={onOpenReview}
-        onSearchChange={onSearchChange}
-        reviewQueue={reviewQueue}
-        searchQuery={searchQuery}
-      />
+      {hideRail ? null : (
+        <ContextRail
+          boundary={boundary}
+          detailCard={selectedCard}
+          detailGraph={selectedLocalGraph}
+          graph={graph}
+          learningGoals={learningGoals}
+          onOpenCardId={onOpenCardId}
+          onOpenConcept={onOpenConcept}
+          onOpenGraph={onOpenGraph}
+          onOpenSkillTree={onOpenSkillTree}
+          onOpenReview={onOpenReview}
+          onSearchChange={onSearchChange}
+          reviewQueue={reviewQueue}
+          searchQuery={searchQuery}
+        />
+      )}
     </>
   );
 }
