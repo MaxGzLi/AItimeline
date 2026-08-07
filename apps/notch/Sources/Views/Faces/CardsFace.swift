@@ -10,6 +10,15 @@ struct SectionOffsetKey: PreferenceKey {
     }
 }
 
+/// 阅读栏往上卷了多少。顶边那道渐隐靠它决定要不要出现。
+struct ScrollTopKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
 /// 知识面:完整一张卡。
 ///
 /// **为什么要分两栏**:一段文字横穿 836 点,眼睛读到行尾就找不回行首了。
@@ -20,6 +29,7 @@ struct CardsFace: View {
     @ObservedObject private var store = CardStore.shared
 
     @State private var sectionOffsets: [Int: CGFloat] = [:]
+    @State private var scrolled: CGFloat = 0
     @State private var marked = false
 
     private var sidePadding: CGFloat { appState.contentSidePadding }
@@ -82,6 +92,15 @@ struct CardsFace: View {
     private func readingColumn(_ card: Card) -> some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 0) {
+                // 卷了多少的探针。零高,不占版面。
+                GeometryReader { geometry in
+                    Color.clear.preference(
+                        key: ScrollTopKey.self,
+                        value: -geometry.frame(in: .named(readingSpace)).minY
+                    )
+                }
+                .frame(height: 0)
+
                 // 封顶三行:接口给的标题偶尔是一整句话,不封的话光标题就吃掉半个面板。
                 Text(card.displayTitle)
                     .font(.system(size: 22, weight: .semibold))
@@ -126,21 +145,32 @@ struct CardsFace: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .coordinateSpace(name: readingSpace)
-        // 底边渐隐:比硬切边缘更像成品。上短下长,因为下面才是「还有更多」的方向。
+        // 边缘渐隐:比硬切边缘更像成品。
+        //
+        // 顶边那道**只在真的卷起来之后才出现**。之前它是常驻的,结果没滚动的时候
+        // 它咬的就是大标题的上半截 —— 用户的原话是「文章标题会被渐变效果吞掉一点」。
+        // 这道渐隐是给「有东西从上面滑出去了」用的,上面没东西的时候它无事可做。
+        //
+        // 高度用绝对像素,不用百分比:原来写的是全高的 3% 和 10%,换一台屏、
+        // 换一档面板高度,咬掉的字数就跟着变 —— 这种数必须钉死。
         .mask(
-            LinearGradient(
-                stops: [
-                    .init(color: .clear, location: 0),
-                    .init(color: .black, location: 0.03),
-                    .init(color: .black, location: 0.90),
-                    .init(color: .clear, location: 1.0)
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
+            VStack(spacing: 0) {
+                LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
+                    .frame(height: scrolled > 1 ? 14 : 0)
+
+                Rectangle().fill(.black)
+
+                // 下面比上面长:那是「还有更多」的方向,渐得慢一点才像话没说完。
+                LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
+                    .frame(height: 44)
+            }
         )
+        .animation(.easeOut(duration: 0.12), value: scrolled > 1)
         .onPreferenceChange(SectionOffsetKey.self) { offsets in
             sectionOffsets = offsets
+        }
+        .onPreferenceChange(ScrollTopKey.self) { value in
+            scrolled = value
         }
     }
 
